@@ -1,14 +1,15 @@
 import ts from "typescript";
 import type { UiPage } from "../store/schemas.js";
 import { fileRoute, lineOf, normalizePath, stringValue, walk } from "./ast.js";
-import type { AdapterContext, ParsedFile } from "./types.js";
+import { type AdapterContext, packageRelative, type ParsedFile } from "./types.js";
 
 export function detectPages(file: ParsedFile, ctx: AdapterContext): UiPage[] {
   const out: UiPage[] = [];
-  if (ctx.deps.has("next")) {
-    const app = file.rel.match(/(?:^|\/)app\/(?:(.*)\/)?page\.(?:tsx|jsx|ts|js)$/);
+  const inPkg = packageRelative(file.rel, ctx);
+  if (ctx.deps.has("next") && inPkg !== undefined) {
+    const app = inPkg.match(/^(?:src\/)?app\/(?:(.*)\/)?page\.(?:tsx|jsx|ts|js)$/);
     if (app) out.push({ route: fileRoute(app[1] ? app[1].split("/") : []), file: file.rel, line: 1, framework: "next-app" });
-    const pages = file.rel.match(/(?:^|\/)pages\/(.+)\.(?:tsx|jsx|ts|js)$/);
+    const pages = inPkg.match(/^(?:src\/)?pages\/(.+)\.(?:tsx|jsx|ts|js)$/);
     if (pages && !/^(api\/|_app$|_document$|_error$)/.test(pages[1]!)) {
       const segs = pages[1]!.split("/");
       if (segs[segs.length - 1] === "index") segs.pop();

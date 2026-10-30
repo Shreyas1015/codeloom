@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { detectPages } from "../src/adapters/pages.js";
-import { ctxWith, parsed } from "./adapter-helpers.js";
+import { ctxIn, ctxWith, parsed } from "./adapter-helpers.js";
 
 const next = ctxWith("next", "react");
 const routes = (rel: string, code = "", ctx = next) => detectPages(parsed(rel, code), ctx).map((p) => p.route);
@@ -74,5 +74,17 @@ describe("detectPages", () => {
     const ctx = ctxWith("react-router-dom");
     const code = `export const appRoutes = [{ path: "/a", element: <A /> }];`;
     expect(routes("src/routes.tsx", code, ctx)).toEqual(["/a"]);
+  });
+
+  it("matches Next.js folders only directly under the file's package root", () => {
+    const pkg = ctxIn("packages/app", "next", "react");
+    expect(routes("packages/app/src/app/dashboard/page.tsx", "", pkg)).toEqual(["/dashboard"]);
+    expect(routes("packages/app/pages/orders/[id].tsx", "", pkg)).toEqual(["/orders/:id"]);
+    expect(routes("packages/app/src/features/app/page.tsx", "", pkg)).toEqual([]);
+    expect(routes("src/features/pages/list.tsx")).toEqual([]);
+  });
+
+  it("does not treat src/pages in a non-Next package as Next pages", () => {
+    expect(routes("apps/spa/src/pages/Dashboard.tsx", "", ctxIn("apps/spa", "react"))).toEqual([]);
   });
 });

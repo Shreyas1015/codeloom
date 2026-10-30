@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { adonisStringHandler, detectRoutes } from "../src/adapters/routes.js";
-import { ctxWith, parsed } from "./adapter-helpers.js";
+import { ctxIn, ctxWith, parsed } from "./adapter-helpers.js";
 
 const show = (rel: string, code: string, ...deps: string[]) =>
   detectRoutes(parsed(rel, code), ctxWith(...deps)).map((r) => `${r.method} ${r.path} -> ${r.handler}${r.inline ? " (inline)" : ""} [${r.framework}]`);
@@ -61,6 +61,12 @@ describe("detectRoutes", () => {
       .toEqual(["GET /api/customers/:id -> GET [next-api]", "DELETE /api/customers/:id -> DELETE [next-api]"]);
     expect(show("pages/api/health.ts", `export default function handler() {}`, "next"))
       .toEqual(["ANY /api/health -> default [next-api]"]);
+  });
+
+  it("reads Next.js API routes only directly under the package root", () => {
+    const at = (rel: string, ctx = ctxIn("apps/web", "next")) => detectRoutes(parsed(rel, "export async function GET() {}"), ctx).map((r) => r.path);
+    expect(at("apps/web/src/app/api/orders/route.ts")).toEqual(["/api/orders"]);
+    expect(at("apps/web/lib/app/api/route.ts")).toEqual([]);
   });
 
   it("finds nothing in repos without a backend framework", () => {

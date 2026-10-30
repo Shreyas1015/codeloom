@@ -1,22 +1,48 @@
 import { describe, expect, it } from "vitest";
 import { finalizeEndpoints, loadContext, runAdapters } from "../src/adapters/run.js";
 import { emptyPart } from "../src/adapters/types.js";
+import { ctxWith } from "./adapter-helpers.js";
 import { makeRepo } from "./helpers.js";
 
 describe("loadContext", () => {
-  it("unions dependencies from every package.json", () => {
+  it("gives each file the deps of its nearest package.json, plus the repo root's", () => {
     const repo = makeRepo({
-      "package.json": JSON.stringify({ dependencies: { express: "^4" } }),
-      "apps/web/package.json": JSON.stringify({ devDependencies: { next: "^15" } }),
+      "package.json": JSON.stringify({ devDependencies: { typescript: "^5" } }),
+      "apps/web/package.json": JSON.stringify({ dependencies: { next: "^15" } }),
+      "apps/api/package.json": JSON.stringify({ dependencies: { express: "^4" } }),
     });
-    const ctx = loadContext(repo, ["package.json", "apps/web/package.json"]);
-    expect([...ctx.deps].sort()).toEqual(["express", "next"]);
+    const ctx = loadContext(repo, ["package.json", "apps/web/package.json", "apps/api/package.json"]);
+    const web = ctx.contextFor("apps/web/app/page.tsx");
+    expect([...web.deps].sort()).toEqual(["next", "typescript"]);
+    expect(web.packageRoot).toBe("apps/web");
+    const api = ctx.contextFor("apps/api/src/server.ts");
+    expect([...api.deps].sort()).toEqual(["express", "typescript"]);
+    expect(api.packageRoot).toBe("apps/api");
+    const root = ctx.contextFor("scripts/x.ts");
+    expect([...root.deps]).toEqual(["typescript"]);
+    expect(root.packageRoot).toBe("");
+  });
+
+  it("uses an empty set when no package.json is above a file", () => {
+    const repo = makeRepo({ "lib/package.json": JSON.stringify({ dependencies: { pg: "^8" } }) });
+    const ctx = loadContext(repo, ["lib/package.json"]);
+    expect([...ctx.contextFor("tools/x.ts").deps]).toEqual([]);
+    expect([...ctx.contextFor("lib/db.ts").deps]).toEqual(["pg"]);
+  });
+
+  it("has a key that changes when any package's deps change", () => {
+    const a = makeRepo({ "apps/web/package.json": JSON.stringify({ dependencies: { next: "^15" } }) });
+    const b = makeRepo({ "apps/web/package.json": JSON.stringify({ dependencies: { next: "^15", axios: "^1" } }) });
+    const c = makeRepo({ "apps/other/package.json": JSON.stringify({ dependencies: { next: "^15" } }) });
+    const key = (repo: string, f: string) => loadContext(repo, [f]).key;
+    expect(key(a, "apps/web/package.json")).not.toBe(key(b, "apps/web/package.json"));
+    expect(key(a, "apps/web/package.json")).not.toBe(key(c, "apps/other/package.json"));
   });
 });
 
 describe("runAdapters + finalizeEndpoints", () => {
   it("resolves models to tables across files", () => {
-    const ctx = { deps: new Set(["@adonisjs/core", "@adonisjs/lucid"]) };
+    const ctx = ctxWith("@adonisjs/core", "@adonisjs/lucid");
     const parts = [
       runAdapters("app/models/customer.ts", `export default class Customer extends BaseModel {}`, ctx),
       runAdapters("app/services/s.ts", `import Customer from "#models/customer"; export const f = () => Customer.create({});`, ctx),
@@ -31,7 +57,7 @@ describe("runAdapters + finalizeEndpoints", () => {
   });
 
   it("keeps unresolved models without a table", () => {
-    const ctx = { deps: new Set(["@prisma/client"]) };
+    const ctx = ctxWith("@prisma/client");
     const ep = finalizeEndpoints("x", [runAdapters("a.ts", `export const f = () => prisma.ghost.findMany();`, ctx)]);
     expect(ep.dbAccess[0]).toMatchObject({ model: "ghost" });
     expect(ep.dbAccess[0]!.table).toBeUndefined();

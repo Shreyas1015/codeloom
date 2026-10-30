@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpMethod, Route } from "../store/schemas.js";
 import { enclosingSymbol, fileRoute, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
-import type { AdapterContext, ParsedFile } from "./types.js";
+import { type AdapterContext, packageRelative, type ParsedFile } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE", any: "ANY", all: "ANY",
@@ -177,8 +177,10 @@ function nestRoutes(cls: ts.ClassDeclaration, file: ParsedFile): Route[] {
   return out;
 }
 
-function nextApiRoutes(file: ParsedFile): Route[] | undefined {
-  const app = file.rel.match(/(?:^|\/)app\/(?:(.*)\/)?route\.(?:ts|js)$/);
+function nextApiRoutes(file: ParsedFile, ctx: AdapterContext): Route[] | undefined {
+  const inPkg = packageRelative(file.rel, ctx);
+  if (inPkg === undefined) return undefined;
+  const app = inPkg.match(/^(?:src\/)?app\/(?:(.*)\/)?route\.(?:ts|js)$/);
   if (app && file.sf) {
     const path = fileRoute(app[1] ? app[1].split("/") : []);
     const out: Route[] = [];
@@ -198,7 +200,7 @@ function nextApiRoutes(file: ParsedFile): Route[] | undefined {
     }
     return out;
   }
-  const pages = file.rel.match(/(?:^|\/)pages\/api\/(.+)\.(?:ts|js)$/);
+  const pages = inPkg.match(/^(?:src\/)?pages\/api\/(.+)\.(?:ts|js)$/);
   if (pages) {
     const segs = pages[1]!.split("/");
     if (segs[segs.length - 1] === "index") segs.pop();
@@ -210,7 +212,7 @@ function nextApiRoutes(file: ParsedFile): Route[] | undefined {
 export function detectRoutes(file: ParsedFile, ctx: AdapterContext): Route[] {
   if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
   if (ctx.deps.has("next")) {
-    const next = nextApiRoutes(file);
+    const next = nextApiRoutes(file, ctx);
     if (next) return next;
   }
   if (!file.sf) return [];

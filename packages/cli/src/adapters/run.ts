@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import type { EndpointsFile, TableDef } from "../store/schemas.js";
 import { JS_EXT, parseSource } from "./ast.js";
 import { detectDb } from "./db.js";
@@ -7,22 +7,49 @@ import { detectHttpCalls } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectRoutes } from "./routes.js";
-import { type AdapterContext, type EndpointsPart, emptyPart, type ParsedFile } from "./types.js";
+import { type AdapterContext, type EndpointsPart, emptyPart, type ParsedFile, type RepoContext } from "./types.js";
 
-export function loadContext(repoAbs: string, files: string[]): AdapterContext {
+function readDeps(abs: string): Set<string> {
   const deps = new Set<string>();
+  try {
+    const pkg = JSON.parse(readFileSync(abs, "utf8")) as Record<string, Record<string, string> | undefined>;
+    for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
+      for (const name of Object.keys(pkg[key] ?? {})) deps.add(name);
+    }
+  } catch {
+    // A broken package.json only means fewer adapters apply.
+  }
+  return deps;
+}
+
+/** Each file gets the deps of its nearest package.json at or above it (unioned with the repo
+ * root's, for hoisted monorepo deps) and that package's folder; no package.json above → empty set. */
+export function loadContext(repoAbs: string, files: string[]): RepoContext {
+  const byDir = new Map<string, Set<string>>();
   for (const rel of files) {
     if (rel !== "package.json" && !rel.endsWith("/package.json")) continue;
-    try {
-      const pkg = JSON.parse(readFileSync(join(repoAbs, rel), "utf8")) as Record<string, Record<string, string> | undefined>;
-      for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
-        for (const name of Object.keys(pkg[key] ?? {})) deps.add(name);
-      }
-    } catch {
-      // A broken package.json only means fewer adapters apply.
-    }
+    byDir.set(posix.dirname(rel) === "." ? "" : posix.dirname(rel), readDeps(join(repoAbs, rel)));
   }
-  return { deps };
+  const rootDeps = byDir.get("") ?? new Set<string>();
+  const contexts = new Map<string, AdapterContext>();
+  const forDir = (dir: string): AdapterContext => {
+    const cached = contexts.get(dir);
+    if (cached) return cached;
+    let ctx: AdapterContext;
+    if (byDir.has(dir)) ctx = { deps: new Set([...rootDeps, ...byDir.get(dir)!]), packageRoot: dir };
+    else if (dir === "") ctx = { deps: new Set(), packageRoot: "" };
+    else ctx = forDir(posix.dirname(dir) === "." ? "" : posix.dirname(dir));
+    contexts.set(dir, ctx);
+    return ctx;
+  };
+  const key = [...byDir.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([dir, deps]) => `${dir || "."}:${[...deps].sort().join("|")}`)
+    .join(";");
+  return {
+    key,
+    contextFor: (rel) => forDir(posix.dirname(rel) === "." ? "" : posix.dirname(rel)),
+  };
 }
 
 export function runAdapters(rel: string, content: string, ctx: AdapterContext): EndpointsPart {

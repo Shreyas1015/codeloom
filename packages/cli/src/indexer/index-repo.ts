@@ -85,7 +85,7 @@ export async function indexRepo(
   const ctx = loadContext(repoAbs, files);
   const codeloomVersion = opts?.codeloomVersion ?? readCodeloomVersion();
   const contextKey = contentHash(
-    [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, ...[...ctx.deps].sort()].join(","),
+    [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, `deps:${ctx.key}`].join(","),
   );
   const cachePath = join(dir, FILES.fingerprints);
   const old = readCache(cachePath);
@@ -120,7 +120,7 @@ export async function indexRepo(
         record = hit;
         stats.reused++;
       } else {
-        record = { hash, ...analyzeStructure(plugin, rel, content), endpoints: runAdapters(rel, content, ctx) };
+        record = { hash, ...analyzeStructure(plugin, rel, content), endpoints: runAdapters(rel, content, ctx.contextFor(rel)) };
         stats.parsed++;
       }
     } catch (err) {

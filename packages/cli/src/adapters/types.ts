@@ -8,9 +8,25 @@ export interface ParsedFile {
   sf?: ts.SourceFile;
 }
 
+/** What adapters know about the package a file belongs to. */
 export interface AdapterContext {
-  /** Every dependency named in any package.json in the repo. */
+  /** Dependencies of the file's nearest package.json at or above it, plus the repo root's. */
   deps: Set<string>;
+  /** Repo-relative folder of that package.json ("" for the repo root, or when there is none). */
+  packageRoot: string;
+}
+
+/** Per-file adapter contexts for a whole repo. */
+export interface RepoContext {
+  contextFor(rel: string): AdapterContext;
+  /** Changes whenever any package's dependencies change (part of the cache key). */
+  key: string;
+}
+
+/** `rel` with its package root removed, so framework folders (app/, pages/) match package-relative. */
+export function packageRelative(rel: string, ctx: AdapterContext): string | undefined {
+  if (!ctx.packageRoot) return rel;
+  return rel.startsWith(`${ctx.packageRoot}/`) ? rel.slice(ctx.packageRoot.length + 1) : undefined;
 }
 
 export interface EndpointsPart {

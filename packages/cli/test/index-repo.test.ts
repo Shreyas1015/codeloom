@@ -110,3 +110,35 @@ describe("indexRepo determinism (committed files depend only on code)", () => {
     }
   });
 });
+
+describe("indexRepo in a monorepo", () => {
+  const mono = {
+    "package.json": JSON.stringify({ private: true, devDependencies: { typescript: "^5" } }),
+    "apps/web/package.json": JSON.stringify({ dependencies: { next: "^15", react: "^19" } }),
+    "apps/web/app/orders/page.tsx": "export default function Page() { return null; }",
+    "apps/api/package.json": JSON.stringify({ dependencies: { express: "^4" } }),
+    "apps/api/src/server.ts": `import express from "express";\nconst app = express();\napp.get("/orders", (_q, r) => r.json([]));`,
+    "apps/spa/package.json": JSON.stringify({ dependencies: { react: "^19", vite: "^5" } }),
+    "apps/spa/src/pages/Dashboard.tsx": "export default function Dashboard() { return null; }",
+    "packages/app/package.json": JSON.stringify({ dependencies: { next: "^15" } }),
+    "packages/app/src/app/dashboard/page.tsx": "export default function Page() { return null; }",
+  };
+
+  it("applies each package's own frameworks and package-relative paths", async () => {
+    const res = await indexRepo(makeRepo(mono), "mono");
+    expect(res.endpoints.routes.map((r) => `${r.method} ${r.path} [${r.framework}]`)).toEqual(["GET /orders [express]"]);
+    expect(res.endpoints.pages.map((p) => `${p.route} ${p.file}`)).toEqual([
+      "/dashboard packages/app/src/app/dashboard/page.tsx",
+      "/orders apps/web/app/orders/page.tsx",
+    ]);
+  });
+
+  it("re-parses when a nested package's deps change", async () => {
+    const repo = makeRepo(mono);
+    await indexRepo(repo, "mono");
+    writeFileSync(join(repo, "apps/spa/package.json"), JSON.stringify({ dependencies: { react: "^19", next: "^15" } }));
+    const res = await indexRepo(repo, "mono");
+    expect(res.stats.reused).toBe(0);
+    expect(res.endpoints.pages.map((p) => p.route)).toContain("/Dashboard");
+  });
+});

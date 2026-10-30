@@ -6,5 +6,10 @@ export function parsed(rel: string, code = ""): ParsedFile {
 }
 
 export function ctxWith(...deps: string[]): AdapterContext {
-  return { deps: new Set(deps) };
+  return { deps: new Set(deps), packageRoot: "" };
+}
+
+/** Context for a file inside the package at `packageRoot` (e.g. "apps/web"). */
+export function ctxIn(packageRoot: string, ...deps: string[]): AdapterContext {
+  return { deps: new Set(deps), packageRoot };
 }
