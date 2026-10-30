@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { finalizeEndpoints, loadContext, runAdapters } from "../src/adapters/run.js";
+import { emptyPart } from "../src/adapters/types.js";
 import { makeRepo } from "./helpers.js";
 
 describe("loadContext", () => {
@@ -34,5 +35,18 @@ describe("runAdapters + finalizeEndpoints", () => {
     const ep = finalizeEndpoints("x", [runAdapters("a.ts", `export const f = () => prisma.ghost.findMany();`, ctx)]);
     expect(ep.dbAccess[0]).toMatchObject({ model: "ghost" });
     expect(ep.dbAccess[0]!.table).toBeUndefined();
+  });
+
+  it("resolves model collisions with first-wins rule (matching tables dedup)", () => {
+    const part1 = emptyPart();
+    part1.models.push({ model: "User", table: "users", file: "a/models/user.ts", line: 1, source: "lucid" });
+    part1.dbAccess.push({ model: "User", op: "read", via: "lucid", at: { file: "x.ts", line: 1, symbol: "f" } });
+
+    const part2 = emptyPart();
+    part2.models.push({ model: "User", table: "accounts", file: "b/models/user.ts", line: 1, source: "lucid" });
+
+    const ep = finalizeEndpoints("test", [part1, part2]);
+    // First User definition (users) should win for collision resolution
+    expect(ep.dbAccess[0]).toMatchObject({ model: "User", table: "users", op: "read" });
   });
 });

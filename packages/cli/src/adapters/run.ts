@@ -51,8 +51,14 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[]): Endpoin
       (all[key] as unknown[]).push(...(p[key] as unknown[]));
     }
   }
-  const exact = new Map(all.models.map((m) => [m.model, m.table]));
-  const lower = new Map(all.models.map((m) => [m.model.toLowerCase(), m.table]));
+  // First-wins collision rule: only set a key if not already present (matches tables dedup behavior)
+  const exact = new Map<string, string>();
+  for (const m of all.models) if (!exact.has(m.model)) exact.set(m.model, m.table);
+  const lower = new Map<string, string>();
+  for (const m of all.models) {
+    const lower_key = m.model.toLowerCase();
+    if (!lower.has(lower_key)) lower.set(lower_key, m.table);
+  }
   const dbAccess = all.dbAccess.map((a) => {
     if (a.table || !a.model) return a;
     const table = exact.get(a.model) ?? lower.get(a.model.toLowerCase());
