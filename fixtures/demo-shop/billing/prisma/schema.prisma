@@ -1,0 +1,10 @@
+model Invoice {
+  id      Int @id @default(autoincrement())
+  customerId Int
+
+  @@map("invoices")
+}
+
+model Payment {
+  id Int @id @default(autoincrement())
+}

@@ -1,0 +1,11 @@
+{
+  "name": "demo-api",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#controllers/*": "./app/controllers/*.js",
+    "#services/*": "./app/services/*.js",
+    "#models/*": "./app/models/*.js"
+  },
+  "dependencies": { "@adonisjs/core": "^6.0.0", "@adonisjs/lucid": "^21.0.0" }
+}
