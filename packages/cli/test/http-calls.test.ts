@@ -36,4 +36,25 @@ describe("detectHttpCalls", () => {
   it("does not mistake route registrations for HTTP calls", () => {
     expect(calls(`app.get("/health", handler); router.post("/x", h);`)).toEqual([]);
   });
+
+  it("does not mistake an in-file router/request object for a client call", () => {
+    expect(
+      calls(`
+      import express from "express"; const api = express.Router(); api.get("/customers", list);
+      export function h(request: any) { return request.get("Content-Type"); }
+    `),
+    ).toEqual([]);
+  });
+
+  it("finds client.request(config) like axios(config)", () => {
+    expect(calls(`export const ping = () => axios.request({ url: "/api/ping", method: "PATCH" });`)).toEqual([
+      "PATCH /api/ping ok @ping",
+    ]);
+  });
+
+  it("still finds a real client variable named api", () => {
+    expect(
+      calls(`export const api = axios.create(); export const load = () => api.get("/api/customers");`),
+    ).toEqual(["GET /api/customers ok @load"]);
+  });
 });
