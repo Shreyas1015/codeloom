@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CodeloomError } from "../src/errors.js";
 import { indexRepo } from "../src/indexer/index-repo.js";
 import { readJson } from "../src/store/json.js";
 import { EndpointsFileSchema } from "../src/store/schemas.js";
@@ -54,6 +56,13 @@ describe("indexRepo", () => {
     expect(second.stats.reused).toBe(0);
     expect(second.stats.parsed).toBe(first.stats.parsed);
   });
+
+  it("gives a clear error naming the repo for a broken .git file, instead of a stack trace", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "codeloom-brokengit-"));
+    writeFileSync(join(repo, ".git"), "gitdir: /nonexistent\n");
+    await expect(indexRepo(repo, "svc")).rejects.toThrow(CodeloomError);
+    await expect(indexRepo(repo, "svc")).rejects.toThrow(/svc/);
+  });
 });
 
 describe("indexRepo determinism (committed files depend only on code)", () => {
@@ -85,6 +94,17 @@ describe("indexRepo determinism (committed files depend only on code)", () => {
     expect(Number.isNaN(Date.parse(fp.indexedAt))).toBe(false);
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
     expect(fp.gitCommitHash).toBe(head);
+  });
+
+  it("is deterministic across a cold cache (fingerprints.json deleted between runs)", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    const graph1 = readFileSync(join(repo, ".codeloom/graph.json"), "utf8");
+    const ep1 = readFileSync(join(repo, ".codeloom/endpoints.json"), "utf8");
+    rmSync(join(repo, ".codeloom/fingerprints.json"));
+    await indexRepo(repo, "svc");
+    expect(readFileSync(join(repo, ".codeloom/graph.json"), "utf8")).toBe(graph1);
+    expect(readFileSync(join(repo, ".codeloom/endpoints.json"), "utf8")).toBe(ep1);
   });
 
   it("prunes a deleted file from the cache", async () => {

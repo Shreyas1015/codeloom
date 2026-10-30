@@ -11,6 +11,7 @@ import {
 } from "../store/schemas.js";
 import { VERSION } from "../version.js";
 import { listFiles } from "../workspace/files.js";
+import { git } from "../workspace/git.js";
 import { gitHead } from "../workspace/repos.js";
 import { buildGraph } from "./build-graph.js";
 import { loadAliases, resolveImport } from "./resolve-imports.js";
@@ -37,7 +38,16 @@ function checkRepo(repoAbs: string, repoId: string): void {
       `Repo "${repoId}" was not found at ${repoAbs}. Fix its path in codeloom.workspace.json, or run "codeloom init" again.`,
     );
   }
-  if (!existsSync(join(repoAbs, ".git"))) {
+  // A ".git" entry (folder or worktree file) can exist yet point nowhere (e.g. a worktree whose
+  // main checkout was removed), so ask git itself rather than trust the entry's presence.
+  let inWorkTree = false;
+  try {
+    inWorkTree = git(repoAbs, ["rev-parse", "--is-inside-work-tree"]).trim() === "true";
+  } catch (err) {
+    if (err instanceof CodeloomError) throw err; // git missing from PATH: a different, clearer error
+    inWorkTree = false;
+  }
+  if (!inWorkTree) {
     throw new CodeloomError(
       `Repo "${repoId}" at ${repoAbs} is not a git repo. Run "git init" there, or run "codeloom init" in the right folder.`,
     );
