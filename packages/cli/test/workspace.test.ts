@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { discoverRepos, gitHead, loadWorkspace } from "../src/workspace/repos.js";
 import { listFiles } from "../src/workspace/files.js";
-import { makeRepo } from "./helpers.js";
+import { commitAll, makeRepo } from "./helpers.js";
 
 describe("discoverRepos", () => {
   it("treats a repo as a single-repo workspace", () => {
@@ -44,6 +44,14 @@ describe("loadWorkspace", () => {
 });
 
 describe("listFiles", () => {
+  it("skips symlinks, keeping only regular files", () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;" });
+    symlinkSync("a.ts", join(repo, "src/link.ts"));
+    symlinkSync("src", join(repo, "srclink"));
+    commitAll(repo);
+    expect(listFiles(repo)).toEqual(["src/a.ts"]);
+  });
+
   it("respects .gitignore, default ignores and .codeloom", () => {
     const repo = makeRepo({
       ".gitignore": "secret.txt\n",

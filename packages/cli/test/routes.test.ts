@@ -107,6 +107,30 @@ router.get("/legacy", "LegacyController.index");`), ctxWith("@adonisjs/core"));
     ]);
   });
 
+  it("judges a router name by its nearest declaration, not a same-named variable elsewhere", () => {
+    expect(show("src/server.ts", `
+      import express from "express";
+      function mount() { const billing = express.Router(); billing.get("/a", h); }
+      function call(billing) { billing.get("/b", h2); }
+    `, "express")).toEqual(["GET /a -> h [express]"]);
+  });
+
+  it("does not treat a koa import as proof of a router (koa-router is not supported)", () => {
+    expect(show("src/server.ts", `import Koa from "koa";\nrouter.get("/x", h);`, "express")).toEqual([]);
+  });
+
+  it("records the line of each route call", () => {
+    const routes = detectRoutes(parsed("src/server.ts", `import express from "express";
+const app = express();
+
+app.get("/a", h);
+app.post(
+  "/b",
+  h,
+);`), ctxWith("express"));
+    expect(routes.map((r) => [r.path, r.at.line])).toEqual([["/a", 4], ["/b", 5]]);
+  });
+
   it("finds nothing in repos without a backend framework", () => {
     expect(show("src/x.ts", `router.get("/a", h);`, "react")).toEqual([]);
   });

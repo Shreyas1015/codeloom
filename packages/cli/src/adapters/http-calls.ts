@@ -1,80 +1,14 @@
 import ts from "typescript";
 import type { HttpCall, HttpMethod } from "../store/schemas.js";
-import { enclosingSymbol, lastName, lineOf, pathPattern, prop, stringValue, walk } from "./ast.js";
+import { enclosingSymbol, isRouterName, lastName, lineOf, pathPattern, prop, stringValue, walk } from "./ast.js";
 import type { ParsedFile } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
 const CLIENT_RE = /^(axios|ky|got|superagent)$|(api|client|http|request|instance|fetcher)$/i;
-/** Identifiers initialized with one of these are routers/servers, not HTTP clients. */
-const ROUTER_INIT_RE = /^(express|express\.Router|Router|fastify|Fastify)$/;
 
 function methodOf(value: string | undefined): HttpMethod | undefined {
   return value ? METHODS[value.toLowerCase()] : undefined;
-}
-
-function isRouterFactoryCall(expr: ts.Expression | undefined): boolean {
-  return !!expr && ts.isCallExpression(expr) && ROUTER_INIT_RE.test(expr.expression.getText());
-}
-
-/** Parameters of a function-like node, or undefined when `node` isn't one. */
-function functionParams(node: ts.Node): ts.NodeArray<ts.ParameterDeclaration> | undefined {
-  if (
-    ts.isFunctionDeclaration(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isArrowFunction(node) ||
-    ts.isMethodDeclaration(node) ||
-    ts.isConstructorDeclaration(node) ||
-    ts.isGetAccessor(node) ||
-    ts.isSetAccessor(node)
-  ) {
-    return node.parameters;
-  }
-  return undefined;
-}
-
-/** Does this binding name (plain identifier, or an object/array pattern, possibly nested/renamed) bind `name`? */
-function bindingBinds(name: ts.BindingName, target: string): boolean {
-  if (ts.isIdentifier(name)) return name.text === target;
-  return name.elements.some((el) => !ts.isOmittedExpression(el) && bindingBinds(el.name, target));
-}
-
-/** A declaration of `name` directly inside this block/source file's own statements (not nested functions). */
-type DeclMatch = { destructured: false; decl: ts.VariableDeclaration } | { destructured: true };
-
-function findVarDecl(statements: ts.NodeArray<ts.Statement>, name: string): DeclMatch | undefined {
-  for (const stmt of statements) {
-    if (!ts.isVariableStatement(stmt)) continue;
-    for (const decl of stmt.declarationList.declarations) {
-      if (ts.isIdentifier(decl.name)) {
-        if (decl.name.text === name) return { destructured: false, decl };
-      } else if (bindingBinds(decl.name, name)) {
-        // Destructured out of some call's result; such a binding is never a router-factory call here.
-        return { destructured: true };
-      }
-    }
-  }
-  return undefined;
-}
-
-/**
- * Is `name`, as referenced at `node`, a router/server rather than an HTTP client? Walks up through
- * enclosing blocks/functions/the source file to find the *nearest* declaration (variable or
- * parameter) with that name, and judges only that declaration — not any same-named variable
- * elsewhere in the file. No type checker; purely name- and shape-based.
- */
-function isRouterName(node: ts.Node, name: string): boolean {
-  let cur: ts.Node | undefined = node;
-  while (cur) {
-    const params = functionParams(cur);
-    if (params?.some((p) => ts.isIdentifier(p.name) && p.name.text === name)) return false;
-    if (ts.isBlock(cur) || ts.isSourceFile(cur)) {
-      const match = findVarDecl(cur.statements, name);
-      if (match) return match.destructured ? false : isRouterFactoryCall(match.decl.initializer);
-    }
-    cur = cur.parent;
-  }
-  return false;
 }
 
 function isClientReceiver(receiver: string, node: ts.Node): boolean {

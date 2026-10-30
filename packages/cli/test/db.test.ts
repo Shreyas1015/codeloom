@@ -36,6 +36,13 @@ describe("detectDb", () => {
     ]);
   });
 
+  it("records a raw-SQL call once, not again as a model call", () => {
+    expect(access("app/x.ts", `
+      import Customer from "#models/customer";
+      export const f = () => Customer.query("select * from customers");
+    `, "@adonisjs/lucid")).toEqual(["read customers via sql @f"]);
+  });
+
   it("reads Prisma client calls", () => {
     expect(access("src/invoices.ts", `
       const prisma = new PrismaClient();

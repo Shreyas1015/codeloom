@@ -1,13 +1,12 @@
 import ts from "typescript";
 import type { HttpMethod, Route } from "../store/schemas.js";
-import { enclosingSymbol, fileRoute, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
+import { enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
 import { type AdapterContext, packageRelative, type ParsedFile, type RouteDraft } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE", any: "ANY", all: "ANY",
 };
 const ROUTER_NAMES = ["router", "route", "routes", "Route", "app", "server", "fastify", "r"];
-const ROUTER_FACTORIES = /^(express|express\.Router|Router|fastify|Fastify)$/;
 const BACKEND_DEPS = ["@adonisjs/core", "express", "fastify", "@nestjs/core", "next"];
 type Framework = Route["framework"];
 
@@ -15,7 +14,6 @@ function isBackendModule(spec: string): boolean {
   return (
     spec === "express" ||
     spec === "fastify" ||
-    spec === "koa" ||
     spec.startsWith("@adonisjs/") ||
     spec.startsWith("@ioc:Adonis/") ||
     spec.startsWith("@nestjs/")
@@ -170,13 +168,17 @@ function groupPrefix(node: ts.Node): string {
   return prefixes.join("/");
 }
 
-function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedFile, framework: Framework): RouteDraft | undefined {
+/** Is `name` a router where it is used at `node`? Either its nearest declaration is a router-factory
+ * call (scope-aware), or it is a generic router name in a file that imports a backend framework. */
+type IsRouter = (node: ts.Node, name: string) => boolean;
+
+function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFile, framework: Framework): RouteDraft | undefined {
   if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
   const name = node.expression.name.text;
   const recv = node.expression.expression;
   const at = { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) };
 
-  if (name === "route" && ts.isIdentifier(recv) && routers.has(recv.text) && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+  if (name === "route" && ts.isIdentifier(recv) && isRouter(node, recv.text) && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
     const o = node.arguments[0];
     const m = stringValue(prop(o, "method"));
     const url = prop(o, "url") ?? prop(o, "path");
@@ -189,7 +191,7 @@ function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedF
   const method = ROUTE_METHODS[name];
   if (!method) return undefined;
   let path: string | undefined;
-  if (ts.isIdentifier(recv) && routers.has(recv.text)) {
+  if (ts.isIdentifier(recv) && isRouter(node, recv.text)) {
     if (node.arguments.length < 2) return undefined;
     path = pathPattern(node.arguments[0]!)?.path;
   } else if (
@@ -197,7 +199,7 @@ function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedF
     ts.isPropertyAccessExpression(recv.expression) &&
     recv.expression.name.text === "route" &&
     ts.isIdentifier(recv.expression.expression) &&
-    routers.has(recv.expression.expression.text)
+    isRouter(node, recv.expression.expression.text)
   ) {
     const s = stringValue(recv.arguments[0]);
     path = s === undefined ? undefined : normalizePath(s);
@@ -291,17 +293,13 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[
     if (next) return next;
   }
   if (!file.sf) return [];
-  const routers = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
-  walk(file.sf, (n) => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer) && ROUTER_FACTORIES.test(n.initializer.expression.getText())) {
-      routers.add(n.name.text);
-    }
-  });
+  const generic = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
+  const isRouter: IsRouter = (node, name) => generic.has(name) || isRouterName(node, name);
   const framework = frameworkOf(ctx);
   const out: RouteDraft[] = [];
   walk(file.sf, (node) => {
     if (ts.isCallExpression(node)) {
-      const route = routerCall(node, routers, file, framework);
+      const route = routerCall(node, isRouter, file, framework);
       if (route) out.push(route);
     }
     if (ts.isClassDeclaration(node) && ctx.deps.has("@nestjs/core")) out.push(...nestRoutes(node, file));

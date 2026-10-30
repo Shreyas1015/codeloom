@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import ignore from "ignore";
 import { createIgnoreFilter } from "@codeloom/core";
@@ -11,7 +11,7 @@ export function listFiles(repoAbs: string, extraIgnore: string[] = []): string[]
   const extra = ignore().add([`${CODELOOM_DIR}/`, ...extraIgnore]);
   const isFile = (rel: string) => {
     try {
-      return statSync(join(repoAbs, rel)).isFile();
+      return lstatSync(join(repoAbs, rel)).isFile();
     } catch {
       return false;
     }

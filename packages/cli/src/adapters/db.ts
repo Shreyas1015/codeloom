@@ -159,7 +159,9 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
 
     if (arg0 && (ts.isStringLiteral(arg0) || ts.isNoSubstitutionTemplateLiteral(arg0) || ts.isTemplateExpression(arg0)) && SQL_CALL_RE.test(lastName(e))) {
       const text = ts.isTemplateExpression(arg0) ? arg0.getText().slice(1, -1) : arg0.text;
-      for (const t of sqlTables(text)) push({ table: t.table, op: t.op, via: "sql", at: at(node) });
+      const found = sqlTables(text);
+      for (const t of found) push({ table: t.table, op: t.op, via: "sql", at: at(node) });
+      if (found.length) return;
     }
 
     if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && modelImports.has(e.expression.text) && MODEL_STATIC[e.name.text]) {

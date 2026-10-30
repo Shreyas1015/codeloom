@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -43,5 +43,15 @@ describe("writeJsonIfChanged", () => {
     expect(writeJsonIfChanged(file, { version: 1, a: 1 })).toBe(false);
     expect(writeJsonIfChanged(file, { version: 1, a: 2 })).toBe(true);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, a: 2 });
+  });
+});
+
+describe("writeJsonAtomic failure", () => {
+  it("removes its temp file when the rename fails", () => {
+    const dir = tmp();
+    const target = join(dir, "busy.json");
+    mkdirSync(join(target, "inside"), { recursive: true });
+    expect(() => writeJsonAtomic(target, { version: 1 })).toThrow();
+    expect(readdirSync(dir)).toEqual(["busy.json"]);
   });
 });

@@ -1,8 +1,9 @@
 import { Command } from "commander";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
+import { VERSION } from "./version.js";
 
-export const VERSION = "0.0.0";
+export { VERSION };
 
 export function buildProgram(): Command {
   const program = new Command();

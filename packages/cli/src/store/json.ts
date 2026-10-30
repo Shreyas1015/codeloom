@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { z } from "zod";
 import { CodeloomError } from "../errors.js";
@@ -34,8 +34,12 @@ function serialize(data: unknown): string {
 export function writeJsonAtomic(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, serialize(data));
-  renameSync(tmp, path);
+  try {
+    writeFileSync(tmp, serialize(data));
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 /** Like writeJsonAtomic, but leaves the file untouched when its content would not change. Returns whether it wrote. */

@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
 import { CodeloomError } from "../errors.js";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
@@ -10,6 +9,7 @@ import { CODELOOM_DIR, FILES } from "../store/paths.js";
 import {
   defaultRepoConfig, type EndpointsFile, type Fingerprints, FingerprintsSchema, RepoConfigSchema,
 } from "../store/schemas.js";
+import { VERSION } from "../version.js";
 import { listFiles } from "../workspace/files.js";
 import { gitHead } from "../workspace/repos.js";
 import { buildGraph } from "./build-graph.js";
@@ -21,20 +21,6 @@ const MAX_BYTES = 1_000_000;
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
 export const CACHE_FORMAT = 3;
-
-let cachedCodeloomVersion: string | undefined;
-
-function readCodeloomVersion(): string {
-  if (cachedCodeloomVersion !== undefined) return cachedCodeloomVersion;
-  try {
-    const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
-    cachedCodeloomVersion = pkg.version ?? "unknown";
-  } catch {
-    cachedCodeloomVersion = "unknown";
-  }
-  return cachedCodeloomVersion;
-}
 
 /** The cache is disposable: a corrupt, wrong-shape or old-format file is discarded and rebuilt. */
 function readCache(path: string): Fingerprints | null {
@@ -83,7 +69,7 @@ export async function indexRepo(
   const config = readJson(join(dir, FILES.config), RepoConfigSchema) ?? defaultRepoConfig();
   const files = listFiles(repoAbs, config.ignore);
   const ctx = loadContext(repoAbs, files);
-  const codeloomVersion = opts?.codeloomVersion ?? readCodeloomVersion();
+  const codeloomVersion = opts?.codeloomVersion ?? VERSION;
   const contextKey = contentHash(
     [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, `deps:${ctx.key}`].join(","),
   );
