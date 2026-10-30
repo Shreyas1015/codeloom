@@ -72,7 +72,6 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[]): Endpoin
   return {
     version: 1,
     repo,
-    generatedAt: new Date().toISOString(),
     pages: all.pages.sort((a, b) => a.route.localeCompare(b.route) || a.file.localeCompare(b.file)),
     httpCalls: all.httpCalls.sort(byLoc),
     routes: all.routes.sort(byLoc),

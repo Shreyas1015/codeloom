@@ -26,10 +26,26 @@ export function readJson<T>(path: string, schema: z.ZodType<T>): T | null {
   return result.data;
 }
 
+function serialize(data: unknown): string {
+  return JSON.stringify(data, null, 2) + "\n";
+}
+
 /** Write JSON so readers never see a half-written file: write a temp file, then rename. */
 export function writeJsonAtomic(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n");
+  writeFileSync(tmp, serialize(data));
   renameSync(tmp, path);
+}
+
+/** Like writeJsonAtomic, but leaves the file untouched when its content would not change. Returns whether it wrote. */
+export function writeJsonIfChanged(path: string, data: unknown): boolean {
+  const text = serialize(data);
+  try {
+    if (readFileSync(path, "utf8") === text) return false;
+  } catch {
+    // Missing or unreadable: write it.
+  }
+  writeJsonAtomic(path, data);
+  return true;
 }

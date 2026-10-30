@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
 import type { EndpointsPart } from "../adapters/types.js";
-import { readJson, writeJsonAtomic } from "../store/json.js";
+import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
 import {
   defaultRepoConfig, type EndpointsFile, type Fingerprints, FingerprintsSchema, RepoConfigSchema,
@@ -19,7 +19,7 @@ const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 1;
+export const CACHE_FORMAT = 2;
 
 let cachedCodeloomVersion: string | undefined;
 
@@ -33,6 +33,15 @@ function readCodeloomVersion(): string {
     cachedCodeloomVersion = "unknown";
   }
   return cachedCodeloomVersion;
+}
+
+/** The cache is disposable: a corrupt, wrong-shape or old-format file is discarded and rebuilt. */
+function readCache(path: string): Fingerprints | null {
+  try {
+    return readJson(path, FingerprintsSchema);
+  } catch {
+    return null;
+  }
 }
 
 export interface IndexStats {
@@ -64,7 +73,7 @@ export async function indexRepo(
     [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, ...[...ctx.deps].sort()].join(","),
   );
   const cachePath = join(dir, FILES.fingerprints);
-  const old = readJson(cachePath, FingerprintsSchema);
+  const old = readCache(cachePath);
   const oldFiles = old && old.contextKey === contextKey ? old.files : {};
 
   const plugin = await getPlugin();
@@ -108,10 +117,21 @@ export async function indexRepo(
     parts.push(record.endpoints);
   }
 
-  const graph = buildGraph(repoId, gitHead(repoAbs), entries, loadAliases(repoAbs, files));
+  const head = gitHead(repoAbs);
+  const graph = buildGraph(repoId, head, entries, loadAliases(repoAbs, files));
+  // graph.json and endpoints.json are committed: keep them a pure function of the code, so
+  // re-indexing unchanged code leaves git clean. Time and commit go to the git-ignored cache.
+  graph.project.analyzedAt = "";
+  graph.project.gitCommitHash = "";
   const endpoints = finalizeEndpoints(repoId, parts);
-  writeJsonAtomic(join(dir, FILES.graph), graph);
-  writeJsonAtomic(join(dir, FILES.endpoints), endpoints);
-  writeJsonAtomic(cachePath, { version: 1, contextKey, files: next } satisfies Fingerprints);
+  writeJsonIfChanged(join(dir, FILES.graph), graph);
+  writeJsonIfChanged(join(dir, FILES.endpoints), endpoints);
+  writeJsonAtomic(cachePath, {
+    version: 2,
+    contextKey,
+    indexedAt: new Date().toISOString(),
+    gitCommitHash: head,
+    files: next,
+  } satisfies Fingerprints);
   return { graph, endpoints, stats };
 }

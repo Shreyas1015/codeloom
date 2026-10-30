@@ -77,7 +77,6 @@ export type QueueOp = z.infer<typeof QueueOpSchema>;
 export const EndpointsFileSchema = z.object({
   version: z.literal(1),
   repo: z.string(),
-  generatedAt: z.string(),
   pages: z.array(UiPageSchema),
   httpCalls: z.array(HttpCallSchema),
   routes: z.array(RouteSchema),
@@ -110,10 +109,14 @@ export const WorkspaceFileSchema = z.object({
 });
 export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 
-/** Local cache for incremental indexing. structure/calls/endpoints are codeloom's own outputs. */
+/** Local, git-ignored cache for incremental indexing. structure/calls/endpoints are codeloom's own
+ * outputs. It also holds the run's time and commit, which are kept out of the committed files so
+ * those depend only on code. */
 export const FingerprintsSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   contextKey: z.string(),
+  indexedAt: z.string(),
+  gitCommitHash: z.string(),
   files: z.record(
     z.string(),
     z.object({ hash: z.string(), structure: z.any(), calls: z.any(), endpoints: z.any() }),

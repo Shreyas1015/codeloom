@@ -1,10 +1,11 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { indexRepo } from "../src/indexer/index-repo.js";
 import { readJson } from "../src/store/json.js";
 import { EndpointsFileSchema } from "../src/store/schemas.js";
-import { makeRepo } from "./helpers.js";
+import { commitAll, makeRepo } from "./helpers.js";
 
 const files = {
   "package.json": JSON.stringify({ dependencies: { express: "^4" } }),
@@ -52,5 +53,60 @@ describe("indexRepo", () => {
     const second = await indexRepo(repo, "svc", { codeloomVersion: "1.0.1" });
     expect(second.stats.reused).toBe(0);
     expect(second.stats.parsed).toBe(first.stats.parsed);
+  });
+});
+
+describe("indexRepo determinism (committed files depend only on code)", () => {
+  it("writes byte-identical graph.json and endpoints.json on a second run, leaving git clean", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    writeFileSync(join(repo, ".gitignore"), ".codeloom/fingerprints.json\n");
+    commitAll(repo);
+    const graph1 = readFileSync(join(repo, ".codeloom/graph.json"), "utf8");
+    const ep1 = readFileSync(join(repo, ".codeloom/endpoints.json"), "utf8");
+    await new Promise((r) => setTimeout(r, 20));
+    await indexRepo(repo, "svc");
+    expect(readFileSync(join(repo, ".codeloom/graph.json"), "utf8")).toBe(graph1);
+    expect(readFileSync(join(repo, ".codeloom/endpoints.json"), "utf8")).toBe(ep1);
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" });
+    expect(status).toBe("");
+  });
+
+  it("keeps time and commit out of committed files and stores them in the cache", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    const ep = JSON.parse(readFileSync(join(repo, ".codeloom/endpoints.json"), "utf8"));
+    expect(ep).not.toHaveProperty("generatedAt");
+    const graph = JSON.parse(readFileSync(join(repo, ".codeloom/graph.json"), "utf8"));
+    expect(graph.project.analyzedAt).toBe("");
+    expect(graph.project.gitCommitHash).toBe("");
+    const fp = JSON.parse(readFileSync(join(repo, ".codeloom/fingerprints.json"), "utf8"));
+    expect(fp.version).toBe(2);
+    expect(Number.isNaN(Date.parse(fp.indexedAt))).toBe(false);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    expect(fp.gitCommitHash).toBe(head);
+  });
+
+  it("prunes a deleted file from the cache", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    rmSync(join(repo, "src/util.ts"));
+    await indexRepo(repo, "svc");
+    const fp = JSON.parse(readFileSync(join(repo, ".codeloom/fingerprints.json"), "utf8"));
+    expect(Object.keys(fp.files)).not.toContain("src/util.ts");
+    expect(Object.keys(fp.files)).toContain("src/server.ts");
+  });
+
+  it("silently rebuilds a cache that is corrupt, wrong-shape or from an older format", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    const cache = join(repo, ".codeloom/fingerprints.json");
+    for (const bad of ["{ nope", JSON.stringify({ version: 1, contextKey: "x", files: {} }), JSON.stringify({ version: 2 })]) {
+      writeFileSync(cache, bad);
+      const res = await indexRepo(repo, "svc");
+      expect(res.stats.reused).toBe(0);
+      expect(res.stats.parsed).toBe(3);
+      expect(JSON.parse(readFileSync(cache, "utf8")).version).toBe(2);
+    }
   });
 });

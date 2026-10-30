@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readJson, writeJsonAtomic } from "../src/store/json.js";
+import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../src/store/json.js";
 import { RepoConfigSchema, defaultRepoConfig } from "../src/store/schemas.js";
 import { CodeloomError } from "../src/errors.js";
 
@@ -33,5 +33,15 @@ describe("store", () => {
     const file = join(tmp(), "config.json");
     writeFileSync(file, "{ nope");
     expect(() => readJson(file, RepoConfigSchema)).toThrow(/not valid JSON/);
+  });
+});
+
+describe("writeJsonIfChanged", () => {
+  it("writes a new file, then skips an identical write", () => {
+    const file = join(tmp(), "x.json");
+    expect(writeJsonIfChanged(file, { version: 1, a: 1 })).toBe(true);
+    expect(writeJsonIfChanged(file, { version: 1, a: 1 })).toBe(false);
+    expect(writeJsonIfChanged(file, { version: 1, a: 2 })).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, a: 2 });
   });
 });
