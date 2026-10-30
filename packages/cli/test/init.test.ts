@@ -209,4 +209,67 @@ describe("hook placement", () => {
     expect(readFileSync(resolve(wt, hooksDir, "post-commit"), "utf8")).toContain(HOOK_MARK);
     expect(res!.skipped).toEqual([]);
   });
+
+  it("installs into .husky/post-commit, not the generated .husky/_ wrapper, for husky v9", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    mkdirSync(join(repo, ".husky/_"), { recursive: true });
+    const wrapper = "#!/usr/bin/env sh\n. \"$(dirname \"$0\")/h\"\n";
+    writeFileSync(join(repo, ".husky/_/post-commit"), wrapper);
+    writeFileSync(join(repo, ".husky/_/h"), "c=0\n");
+    git(repo, "config", "core.hooksPath", ".husky/_");
+
+    const res = runInit(repo);
+
+    expect(readFileSync(join(repo, ".husky/post-commit"), "utf8")).toContain(HOOK_MARK);
+    expect(readFileSync(join(repo, ".husky/_/post-commit"), "utf8")).toBe(wrapper);
+    expect(res.created).toContain(".husky/post-commit");
+    expect(res.skipped).toEqual([]);
+  });
+
+  it("appends to an existing .husky/post-commit for husky v9 without requiring a shebang", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    mkdirSync(join(repo, ".husky/_"), { recursive: true });
+    writeFileSync(join(repo, ".husky/_/post-commit"), "#!/usr/bin/env sh\n. \"$(dirname \"$0\")/h\"\n");
+    writeFileSync(join(repo, ".husky/post-commit"), "echo custom\n");
+    git(repo, "config", "core.hooksPath", ".husky/_");
+
+    const res = runInit(repo);
+
+    const body = readFileSync(join(repo, ".husky/post-commit"), "utf8");
+    expect(body).toContain("echo custom");
+    expect(body.split(HOOK_MARK).length - 1).toBe(1);
+    expect(res.skipped).toEqual([]);
+  });
+
+  it("skips and reports a hooks folder that is shared outside this repo", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    const outside = mkdtempSync(join(tmpdir(), "codeloom-outsidehooks-"));
+    git(repo, "config", "core.hooksPath", outside);
+
+    const res = runInit(repo);
+
+    expect(res.skipped).toEqual([
+      { repo: expect.any(String), reason: expect.stringContaining("hooks folder is shared outside this repo") },
+    ]);
+    expect(existsSync(join(outside, "post-commit"))).toBe(false);
+    const text = formatInit(res);
+    expect(text).toContain("codeloom index --quiet");
+  });
+});
+
+describe("formatInit on an already-initialized workspace", () => {
+  it("mentions every repo, including ones whose hook is already installed", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init2-"));
+    makeRepo({ "a.ts": "" }, join(root, "api"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    runInit(root);
+
+    const second = runInit(root);
+
+    expect(second.created).toEqual([]);
+    const text = formatInit(second);
+    expect(text).toContain("api");
+    expect(text).toContain("web");
+    expect(text).toContain("hook already installed");
+  });
 });
