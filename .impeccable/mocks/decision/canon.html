@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>codeloom — standard</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--side:#0F1115;--ground:#F7F7F8;--panel:#fff;--ink:#16181D;--muted:#6B7079;--rule:#E4E5E8;--accent:#5B6CFF}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;display:flex;background:var(--ground);color:var(--ink);font:14px/1.45 Geist,sans-serif}
+.side{width:224px;background:var(--side);color:#A9AEB8;padding:22px 14px;display:flex;flex-direction:column;gap:4px}
+.side b{color:#fff;font-size:17px;padding:0 10px 18px}
+.side a{padding:8px 10px;border-radius:6px}
+.side a.on{background:#1C1F26;color:#fff}
+.main{flex:1;padding:28px 36px;display:flex;flex-direction:column;gap:22px}
+h1{font-size:24px;font-weight:600}
+.sub{color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.stat{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.stat span{color:var(--muted);font-size:12.5px}
+.stat b{display:block;font-size:22px;font-weight:600;margin-top:4px}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--rule)}
+th{font-weight:500;color:var(--muted);font-size:12.5px;background:#FBFBFC}
+.pill{font-size:12px;padding:2px 8px;border-radius:999px;background:#EEF0FF;color:#3B47C9}
+.pill.g{background:#E8F5EE;color:#1E7A4C}.pill.r{background:#FDECEC;color:#B42318}
+.bar{height:6px;background:#ECEDF0;border-radius:3px;width:120px}.bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+</style></head><body>
+<aside class="side"><b>codeloom</b><a class="on">Overview</a><a>Journeys</a><a>Tours</a><a>Graph</a><a>Progress</a><a>Views</a><a>Settings</a></aside>
+<main class="main">
+<div><h1>Shopfront</h1><div class="sub">4 repositories · last indexed 2 minutes ago</div></div>
+<div class="stats"><div class="stat"><span>Files</span><b>2,318</b></div><div class="stat"><span>API routes</span><b>186</b></div><div class="stat"><span>UI pages</span><b>64</b></div><div class="stat"><span>DB tables</span><b>52</b></div><div class="stat"><span>Journeys</span><b>41</b></div><div class="stat"><span>Understood</span><b>34%</b></div></div>
+<table><tr><th>Journey</th><th>Area</th><th>Repos</th><th>Steps</th><th>Spec</th><th>Progress</th></tr>
+<tr><td>Customer creates a profile</td><td>Customers</td><td>UI, API, DB</td><td>7</td><td><span class="pill g">Spec</span></td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+<tr><td>Sales rep builds a quote</td><td>Quotes</td><td>UI, API, DB</td><td>14</td><td><span class="pill">Ticket</span></td><td><div class="bar"><i style="width:66%"></i></div></td></tr>
+<tr><td>Lead syncs to Zoho CRM</td><td>Integrations</td><td>API, DB</td><td>7</td><td><span class="pill r">None</span></td><td><div class="bar"><i style="width:33%"></i></div></td></tr>
+<tr><td>Admin approves a site survey</td><td>Surveys</td><td>UI, API, DB</td><td>11</td><td><span class="pill g">Spec</span></td><td><div class="bar"><i style="width:0%"></i></div></td></tr>
+<tr><td>Installer uploads site photos</td><td>Installs</td><td>UI, API, DB</td><td>9</td><td><span class="pill r">None</span></td><td><div class="bar"><i style="width:0%"></i></div></td></tr>
+</table></main></body></html>

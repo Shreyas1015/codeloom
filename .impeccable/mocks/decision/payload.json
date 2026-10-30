@@ -1,0 +1,102 @@
+{
+  "title": "Choose codeloom's visual world",
+  "question": "The roll assigned Gallery Guide. Keep it, take an alternate, or re-roll. Sketches show the Home screen.",
+  "options": [
+    {
+      "id": "assigned",
+      "kind": "assigned",
+      "label": "Gallery Guide",
+      "kicker": "THE ROLL",
+      "lineage": "museum exhibitions: painted gallery walls, wall labels, audio-guide stop numbers",
+      "thesis": "Learn a codebase like walking a museum: each user journey is an exhibit with numbered stops.",
+      "palette": ["#1F4D45", "#F3F4F1", "#1A1D1C", "#E3A72F", "#B5483D"],
+      "materials": ["painted gallery wall", "wall-label type", "audio-guide roundels"],
+      "viewport": "Viridian rail on the left; Home shows the workspace counts in a tight ruled strip, then the journey list as wall labels, each with its numbered stop roundels.",
+      "risk": "If the roundels are timid it collapses into a generic green dashboard.",
+      "raised": [
+        {"from": "challenger-goods", "raise": "Every journey carries the same fixed nameplate: name, area, owner, one-line note, spec state."},
+        {"from": "challenger-density", "raise": "Home counts sit in a strict hairline module grid with no padded hero tiles."},
+        {"from": "challenger-folio", "raise": "Seen → toured → understood is one fixed-scale strip on a shared baseline in every row."},
+        {"from": "challenger-flap", "raise": "Table columns never move; only their values change."}
+      ],
+      "html": ".impeccable/mocks/decision/assigned.html"
+    },
+    {
+      "id": "challenger-transit",
+      "kind": "challenger",
+      "catalogId": "wayfinding-cartography-signage-midnight-transit-diagram",
+      "label": "Line Diagram",
+      "verdict": "competitive",
+      "lineage": "metro line diagrams on midnight enamel",
+      "thesis": "Every user journey is a coloured line; files are stations; FE/BE/DB are fare zones.",
+      "palette": ["#14213D", "#F2F4F7", "#E63946", "#2F6FDE", "#F2A541", "#2A9D6F"],
+      "materials": ["enamel ground", "45° line geometry", "interchange rings"],
+      "viewport": "Navy rail; Home lists journeys as line badges, the selected one drawn as a straight line strip through UI → API → DB stations.",
+      "case": "Fuses cleanly and wins on product clarity (a journey literally is a line); this was also my own top-ranked idea.",
+      "risk": "Transit maps are a familiar dev-tool metaphor; dense workspaces need many line colours.",
+      "html": ".impeccable/mocks/decision/challenger-transit.html",
+      "hero": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-midnight-transit-diagram-hero.webp"
+    },
+    {
+      "id": "challenger-gate",
+      "kind": "challenger",
+      "catalogId": "vernacular-ephemera-boarding-pass-and-gate-board",
+      "label": "Gate Board",
+      "verdict": "competitive",
+      "lineage": "airport gate boards and boarding passes",
+      "thesis": "When code under a journey you understood changes, its row lights up and stays lit until you re-walk it.",
+      "palette": ["#F5F5F2", "#121417", "#5E6670", "#FF7A1A"],
+      "materials": ["segmented pass", "tabular figures", "one alert colour"],
+      "viewport": "Home is a board ranked by what needs you: changed journeys lit in orange on top, then unexplored, then understood.",
+      "case": "Holds product clarity: honest progress needs 'understanding goes stale'; weaker on the fun of learning.",
+      "risk": "Feels like an ops monitor rather than a place to learn.",
+      "html": ".impeccable/mocks/decision/challenger-gate.html",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-boarding-pass-and-gate-board-hero.webp"
+    },
+    {
+      "id": "challenger-goods", "kind": "challenger", "catalogId": "pop-culture-shelf-character-goods-catalog",
+      "label": "Character Catalog", "verdict": "declined", "lineage": "character goods catalogs",
+      "thesis": "Journeys as a ranked roster of characters.", "palette": ["#FCE4EC", "#E3F2FD", "#FFF8E1", "#333333"],
+      "materials": ["pastel grid", "name plates"], "viewport": "A roster grid of journey mascots.",
+      "case": "Developers don't see their code as mascots; hides files and SQL.", "risk": "Toy-like.",
+      "kept": "Fixed nameplate furniture on every journey."
+    },
+    {
+      "id": "challenger-density", "kind": "challenger", "catalogId": "japanese-high-density-web",
+      "label": "High-Density Grid", "verdict": "declined", "lineage": "Japanese high-density portals",
+      "thesis": "Pack every number on one screen.", "palette": ["#FFFFFF", "#111111", "#D7262E", "#E5E7EB"],
+      "materials": ["hairline modules", "small gothic type"], "viewport": "A mosaic of ruled modules.",
+      "case": "Too dense for long learning sessions.", "risk": "Overwhelming.",
+      "kept": "Hairline module grid for counts."
+    },
+    {
+      "id": "challenger-folio", "kind": "challenger", "catalogId": "editorial-sequence-montage-botanical-folio-season",
+      "label": "Botanical Folio", "verdict": "declined", "lineage": "botanical plates",
+      "thesis": "Understanding grows in stages like a plant.", "palette": ["#F4EEDF", "#2F5D3A", "#A3292B", "#6B6B6B"],
+      "materials": ["plates", "engraved labels"], "viewport": "Stage plates per journey.",
+      "case": "Poetic but weak fit for code structure.", "risk": "Precious.",
+      "kept": "Progress stages at fixed scale on a shared baseline."
+    },
+    {
+      "id": "challenger-flap", "kind": "challenger", "catalogId": "signals-instruments-split-flap-concourse",
+      "label": "Split-Flap Board", "verdict": "declined", "lineage": "rail concourse boards",
+      "thesis": "Journeys flip like departures.", "palette": ["#111111", "#FFFFFF", "#F2A900", "#8B1E1E"],
+      "materials": ["flap cells", "steel frame"], "viewport": "A black flap board of journeys.",
+      "case": "Novelty animation; little product meaning.", "risk": "Gimmick.",
+      "kept": "Columns fixed; only values change."
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "buildPath": {"value": "code"},
+  "canon": true,
+  "canonCard": {
+    "kind": "canon", "label": "The category standard",
+    "thesis": "A clean dev-tool dashboard like Linear or Sourcegraph, done well.",
+    "palette": ["#0F1115", "#F7F7F8", "#5B6CFF", "#8A8F98"],
+    "materials": ["dark sidebar", "neutral greys", "one blue accent"],
+    "viewport": "Dark sidebar, stat cards, a sortable journey table.",
+    "risk": "Looks like every other dev tool by design.",
+    "html": ".impeccable/mocks/decision/canon.html"
+  },
+  "steer": true
+}

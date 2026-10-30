@@ -1,0 +1,69 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>codeloom — Line Diagram</title>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#14213D;--navy-2:#1E2E52;--porcelain:#F2F4F7;--paper:#FFFFFF;--ink:#101828;--muted:#5A6478;--rule:#DCE1E8;--red:#E63946;--blue:#2F6FDE;--amber:#F2A541;--green:#2A9D6F}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;display:flex;background:var(--porcelain);color:var(--ink);font:14px/1.45 Overpass,sans-serif}
+.rail{width:220px;background:var(--navy);color:#C9D3E6;padding:26px 18px;display:flex;flex-direction:column;gap:26px}
+.brand{font-weight:800;font-size:21px;color:#fff;letter-spacing:-.01em}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav a{padding:9px 12px;border-radius:6px;font-weight:600}
+.nav a.on{background:var(--navy-2);color:#fff}
+.zones{margin-top:auto;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.zones div{display:flex;gap:8px;align-items:center}
+.zones i{width:14px;height:4px;border-radius:2px}
+.main{flex:1;padding:30px 36px;display:grid;grid-template-columns:1fr 520px;grid-template-rows:auto auto 1fr;gap:22px 28px;min-width:0}
+.head{grid-column:1/-1;display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:32px;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--muted)}
+.counts{grid-column:1/-1;display:flex;gap:0;background:var(--paper);border:1px solid var(--rule);border-radius:10px}
+.counts div{flex:1;padding:12px 18px;border-right:1px solid var(--rule)}
+.counts div:last-child{border:0}
+.counts b{display:block;font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
+.counts span{font-size:12.5px;color:var(--muted)}
+.list{background:var(--paper);border:1px solid var(--rule);border-radius:10px;overflow:hidden;align-self:start}
+.lh{display:flex;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--rule)}
+.lh b{font-size:17px}
+.lh span{color:var(--muted);font-size:13px}
+.j{display:grid;grid-template-columns:34px 1fr 90px 92px;gap:12px;align-items:center;padding:13px 18px;border-bottom:1px solid var(--rule)}
+.j.sel{background:#EEF3FC}
+.badge{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px}
+.j b{display:block;font-size:15px}
+.j small{color:var(--muted);font-size:12.5px}
+.spec{font-size:12px;font-weight:700}
+.ok{color:var(--green)}.tk{color:#B7791F}.no{color:var(--red)}
+.lvl{display:flex;gap:3px}.lvl i{width:22px;height:6px;border-radius:3px;background:var(--rule)}.lvl i.on{background:var(--ink)}
+.diagram{background:var(--navy);border-radius:14px;color:#fff;padding:22px 24px;display:flex;flex-direction:column;gap:14px;align-self:start}
+.diagram h3{font-size:19px;font-weight:800}
+.diagram p{color:#AEBBD3;font-size:13px}
+svg text{font-family:Overpass,sans-serif}
+.legend{display:flex;gap:16px;font-size:12px;color:#AEBBD3}
+.cta{display:flex;gap:10px}
+.btn{padding:9px 16px;border-radius:7px;font-weight:700;background:var(--red);color:#fff}
+.btn.ghost{background:transparent;border:1px solid #3A4C74;color:#fff}
+</style></head><body>
+<aside class="rail"><div class="brand">codeloom</div>
+<nav class="nav"><a class="on">Home</a><a>Journeys</a><a>Tours</a><a>Network map</a><a>Progress</a><a>Views</a></nav>
+<div class="zones"><div><i style="background:#7FA8F0"></i>Zone UI · 3 repos</div><div><i style="background:#fff"></i>Zone API · core-service</div><div><i style="background:#9AD8BE"></i>Zone DB · Postgres</div></div></aside>
+<main class="main">
+<div class="head"><div><h1>Shopfront network</h1><div class="sub">41 lines across 4 repos · you have ridden 14 end to end</div></div><div class="sub">Indexed 9f2c1ab · 2 min ago</div></div>
+<div class="counts"><div><b>2,318</b><span>Files</span></div><div><b>186</b><span>API routes</span></div><div><b>64</b><span>UI pages</span></div><div><b>52</b><span>DB tables</span></div><div><b>41</b><span>Journeys</span></div><div><b>27/41</b><span>With spec</span></div><div><b>34%</b><span>Understood</span></div></div>
+<section class="list"><div class="lh"><b>Journeys</b><span>sorted by area</span></div>
+<div class="j sel"><span class="badge" style="background:var(--red)">B1</span><div><b>Customer creates a profile</b><small>7 stations · UI → API → DB</small></div><span class="spec ok">Spec found</span><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+<div class="j"><span class="badge" style="background:var(--blue)">P2</span><div><b>Sales rep builds a quote</b><small>14 stations · UI → API → DB</small></div><span class="spec tk">Ticket only</span><span class="lvl"><i class="on"></i><i class="on"></i><i></i></span></div>
+<div class="j"><span class="badge" style="background:var(--amber)">Z1</span><div><b>Lead syncs to Zoho CRM</b><small>7 stations · API → queue → DB</small></div><span class="spec no">No spec</span><span class="lvl"><i class="on"></i><i></i><i></i></span></div>
+<div class="j"><span class="badge" style="background:var(--green)">S3</span><div><b>Admin approves a site survey</b><small>11 stations · UI → API → DB</small></div><span class="spec ok">Spec found</span><span class="lvl"><i></i><i></i><i></i></span></div>
+<div class="j"><span class="badge" style="background:#8E5CC7">I4</span><div><b>Installer uploads site photos</b><small>9 stations · UI → API → S3 → DB</small></div><span class="spec no">No spec</span><span class="lvl"><i></i><i></i><i></i></span></div>
+</section>
+<section class="diagram"><h3>B1 · Customer creates a profile</h3><p>Ride the line: each station is a real function. Interchanges are where a call crosses repos.</p>
+<svg viewBox="0 0 470 330" width="470" height="330">
+<rect x="0" y="0" width="150" height="330" fill="#1C2C50"/><rect x="150" y="0" width="170" height="330" fill="#182749"/><rect x="320" y="0" width="150" height="330" fill="#173A44"/>
+<text x="12" y="20" fill="#7FA8F0" font-size="11" font-weight="700">UI · shop-ui</text><text x="162" y="20" fill="#fff" font-size="11" font-weight="700">API · core-service</text><text x="332" y="20" fill="#9AD8BE" font-size="11" font-weight="700">DB · Postgres</text>
+<path d="M40 60 V130 L95 185 H210 V250 L255 295 H400 V200" fill="none" stroke="#E63946" stroke-width="8" stroke-linejoin="round"/>
+<g fill="#fff" stroke="#14213D" stroke-width="3"><circle cx="40" cy="60" r="7"/><circle cx="40" cy="130" r="7"/><circle cx="150" cy="185" r="11" stroke="#fff" stroke-width="4" fill="#14213D"/><circle cx="210" cy="215" r="7"/><circle cx="230" cy="275" r="7"/><circle cx="320" cy="295" r="11" stroke="#fff" stroke-width="4" fill="#14213D"/><circle cx="400" cy="250" r="7"/><circle cx="400" cy="200" r="7"/></g>
+<g fill="#E6ECF5" font-size="11.5"><text x="54" y="64">CustomerProfilePage</text><text x="54" y="134">useCreateCustomer()</text><text x="160" y="175">POST /api/customers</text><text x="222" y="219">CustomersController.store</text><text x="242" y="270">CustomerService.create</text><text x="330" y="318">INSERT customers</text><text x="356" y="190">customer_contacts</text></g>
+</svg>
+<div class="legend"><span>● station = function</span><span>◎ interchange = crosses repo</span><span>7 stations · 2 interchanges</span></div>
+<div class="cta"><a class="btn">Ride this line (tour)</a><a class="btn ghost">Data journey</a></div></section>
+</main></body></html>

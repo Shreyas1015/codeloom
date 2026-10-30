@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>codeloom screens — Gallery Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --wall:#1F4D45;--wall-2:#2A5F55;--wall-3:#174039;--wall-ink:#D5E5DF;--wall-dim:#BCD5CC;
+  --ground:#F3F4F1;--paper:#FFFFFF;--ink:#1A1D1C;--muted:#5C6661;--rule:#D9DDD8;--rule-2:#E8EBE6;
+  --ochre:#E3A72F;--ochre-ink:#3A2A06;--ochre-soft:#FBF0D6;
+  --oxblood:#B5483D;--oxblood-soft:#F7E3E0;--sage:#3E8A6E;--sage-soft:#DDEEE6;
+  --ui:#2F5E9E;--ui-soft:#E3ECF8;--api:#1F4D45;--api-soft:#E0ECE8;--db:#8A5A2B;--db-soft:#F3E9DE;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--ochre);color:var(--ochre-ink)}
+body{background:#C9CFCB;color:var(--ink);font:14px/1.45 "Schibsted Grotesk",system-ui,sans-serif;padding:32px 0 80px}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--ochre);outline-offset:2px}
+.jump{position:sticky;top:0;z-index:10;display:flex;gap:6px;justify-content:center;padding:10px;background:#C9CFCB}
+.jump a{padding:6px 12px;border-radius:7px;background:var(--paper);font-weight:600;font-size:13px}
+.label{width:1440px;margin:36px auto 10px;font-weight:700;font-size:15px;display:flex;gap:12px;align-items:baseline}
+.label span{font-weight:400;color:#38403C}
+.frame{width:1440px;height:900px;margin:0 auto;display:flex;background:var(--ground);overflow:hidden;border-radius:10px;box-shadow:0 18px 50px -20px rgba(15,35,30,.45)}
+svg.i{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* rail */
+.rail{width:232px;flex:none;background:var(--wall);color:var(--wall-ink);padding:24px 16px 18px;display:flex;flex-direction:column;gap:24px}
+.brand{display:flex;align-items:center;gap:10px;padding:0 6px}
+.brand b{font-weight:800;font-size:21px;letter-spacing:-.02em;color:#fff}
+.wsw{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid #3A6E63;border-radius:9px;font-weight:600;color:#fff}
+.wsw small{display:block;font-weight:400;color:var(--wall-dim);font-size:12px}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-weight:500}
+.nav a span{margin-left:auto;font:500 12px var(--mono);color:var(--wall-dim)}
+.nav a.on{background:var(--wall-2);color:#fff}
+.nav a.on span{color:#fff}
+.rh{font-size:12px;font-weight:600;color:var(--wall-dim);padding:0 10px 6px}
+.repos{display:flex;flex-direction:column;gap:1px}
+.repos div{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:13px}
+.repos i{width:8px;height:8px;border-radius:2px}
+.repos span{margin-left:auto;font:12px var(--mono);color:var(--wall-dim)}
+.agent{margin-top:auto;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:9px;background:var(--wall-3);font-size:12.5px}
+.agent i{width:8px;height:8px;border-radius:50%;background:#7FD3A8;box-shadow:0 0 0 3px rgba(127,211,168,.2)}
+.agent small{color:var(--wall-dim);display:block}
+
+/* shared */
+.main{flex:1;min-width:0;padding:28px 36px;display:flex;flex-direction:column;gap:22px}
+h1{font-size:32px;font-weight:800;letter-spacing:-.03em;line-height:1.1;text-wrap:balance}
+h2{font-size:18px;font-weight:700;letter-spacing:-.01em}
+.sub{color:var(--muted);margin-top:4px}
+.mono{font-family:var(--mono);font-size:12.5px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:8px;font-weight:700;font-size:13.5px;border:1px solid transparent}
+.btn.pri{background:var(--ochre);color:var(--ochre-ink)}
+.btn.dark{background:var(--wall);color:#fff}
+.btn.sec{background:var(--paper);border-color:var(--rule);color:var(--ink)}
+.tab{padding:6px 12px;border:1px solid var(--rule);border-radius:7px;background:var(--paper);font-size:13px;font-weight:500}
+.tab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.tab b{font:600 11.5px var(--mono);margin-left:4px;opacity:.7}
+.panel{background:var(--paper);border:1px solid var(--rule);border-radius:12px}
+.spec{font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;white-space:nowrap;justify-self:start}
+.spec.ok{background:var(--sage-soft);color:#1F5E46}.spec.tk{background:var(--ochre-soft);color:#7A5410}.spec.no{background:var(--oxblood-soft);color:#8E3329}
+.stop{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;font:600 11px var(--mono);border:1.5px solid var(--ink);background:var(--paper);flex:none}
+.stop.ui{border-color:var(--ui)}.stop.api{border-color:var(--api)}.stop.db{border-color:var(--db)}
+.stop.done{background:var(--ochre);border-color:var(--ochre);color:var(--ochre-ink)}
+.stop.cur{box-shadow:0 0 0 4px rgba(227,167,47,.35);background:var(--ochre);border-color:var(--ochre-ink);color:var(--ochre-ink)}
+.stop.more{border-style:dashed;color:var(--muted);border-color:var(--muted)}
+.stops{display:flex;align-items:center}
+.stops .ln{width:9px;height:1.5px;background:var(--rule)}
+.prog{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;width:120px}
+.prog i{height:8px;border-radius:2px;background:var(--rule-2);border:1px solid var(--rule)}
+.prog i.on{background:var(--sage);border-color:var(--sage)}
+.prog small{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.prog.stale i.on{background:var(--ochre);border-color:var(--ochre)}
+.lane-chip{font:600 12px var(--mono);padding:2px 6px;border-radius:4px}
+.lane-chip.ui{background:var(--ui-soft);color:var(--ui)}.lane-chip.api{background:var(--api-soft);color:var(--api)}.lane-chip.db{background:var(--db-soft);color:var(--db)}
+
+/* 1 home */
+.hhead{display:flex;justify-content:space-between;align-items:flex-end}
+.under{display:flex;align-items:center;gap:14px}
+.under b{font-size:44px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.under small{color:var(--muted);line-height:1.3;max-width:160px}
+.counts{display:grid;grid-template-columns:repeat(6,1fr);border-top:2px solid var(--ink);border-bottom:1px solid var(--rule)}
+.counts div{padding:11px 16px;border-right:1px solid var(--rule)}
+.counts div:last-child{border-right:0}
+.counts b{display:block;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.counts span{font-size:12.5px;color:var(--muted)}
+.cont{display:flex;gap:18px;align-items:center;background:var(--wall);color:#fff;border-radius:12px;padding:14px 18px}
+.cont .stops .ln{background:#4D8277}
+.cont p{color:var(--wall-ink);font-size:13px}
+.cont .btn{margin-left:auto}
+.bar{display:flex;gap:8px;align-items:center}
+.bar h2{margin-right:auto}
+.search{display:flex;align-items:center;gap:8px;width:230px;padding:6px 10px;border:1px solid var(--rule);border-radius:7px;background:var(--paper);color:var(--muted);font-size:13px}
+.jt{overflow:hidden}
+.jr{display:grid;grid-template-columns:2.3fr .9fr 2.5fr .9fr 130px;gap:18px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--rule-2)}
+.jr:last-child{border:0}
+.jr.th{padding:9px 20px;font-size:12px;color:var(--muted);font-weight:600;background:#FAFBF9;border-bottom:1px solid var(--rule)}
+.jr.th span{display:flex;align-items:center;gap:4px}
+.nm b{display:block;font-size:15px;font-weight:700}
+.nm small{color:var(--muted);font-size:12.5px}
+.flag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:#7A5410;background:var(--ochre-soft);padding:1px 7px;border-radius:4px;margin-left:6px;vertical-align:2px}
+
+/* 2 journey */
+.plate{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.plate .meta{display:flex;gap:18px;margin-top:8px;color:var(--muted);font-size:13px;flex-wrap:wrap}
+.plate .meta b{color:var(--ink);font-weight:600}
+.tabs{display:flex;gap:22px;border-bottom:1px solid var(--rule)}
+.tabs a{padding:0 0 10px;font-weight:600;color:var(--muted)}
+.tabs a.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--ink)}
+.jbody{flex:1;display:grid;grid-template-columns:1fr 360px;gap:20px;min-height:0}
+.lanes{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:14px}
+.lane{border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:14px}
+.lane.ui{background:var(--ui-soft)}.lane.api{background:var(--api-soft)}.lane.db{background:var(--db-soft)}
+.lane h3{font-size:12.5px;font-weight:700;display:flex;justify-content:space-between}
+.lane.ui h3{color:var(--ui)}.lane.api h3{color:var(--api)}.lane.db h3{color:var(--db)}
+.lane h3 span{font:500 12px var(--mono);opacity:.85}
+.node{position:relative;z-index:1;display:flex;gap:10px;align-items:flex-start;background:var(--paper);border:1px solid var(--rule);border-radius:9px;padding:10px 12px;box-shadow:0 1px 2px rgba(20,40,35,.06)}
+.node.sel{border-color:var(--ochre-ink);box-shadow:0 0 0 3px rgba(227,167,47,.4)}
+.node b{display:block;font-size:13.5px}
+.node small{display:block;font:12px var(--mono);color:var(--muted)}
+.node em{display:block;font-style:normal;font-size:12px;color:var(--muted);margin-top:2px}
+.wires{position:absolute;inset:0;z-index:0;pointer-events:none}
+.insp{display:flex;flex-direction:column;overflow:hidden}
+.insp header{padding:16px 18px;border-bottom:1px solid var(--rule-2);display:flex;gap:12px;align-items:center}
+.insp header b{display:block;font-size:15px}
+.insp section{padding:14px 18px;border-bottom:1px solid var(--rule-2);display:flex;flex-direction:column;gap:6px}
+.insp h4{font-size:12px;color:var(--muted);font-weight:600}
+pre.code{font:12px/1.65 var(--mono);background:#F7F8F5;border:1px solid var(--rule-2);border-radius:8px;padding:10px 0;overflow:hidden}
+pre.code span{display:block;padding:0 12px}
+pre.code span.hl{background:var(--ochre-soft);box-shadow:inset 3px 0 0 var(--ochre)}
+pre.code i{font-style:normal;color:#5C6661;display:inline-block;width:26px}
+.kv{display:flex;justify-content:space-between;font-size:13px}
+.kv span{color:var(--muted)}
+.insp footer{margin-top:auto;padding:14px 18px;display:flex;gap:8px}
+
+/* 3 tour */
+.rail.slim{width:68px;padding:24px 10px;align-items:center}
+.rail.slim .nav a{padding:10px;justify-content:center}
+.tour{flex:1;display:flex;flex-direction:column;min-width:0}
+.ttop{display:flex;align-items:center;gap:18px;padding:16px 32px;background:var(--paper);border-bottom:1px solid var(--rule)}
+.ttop b{font-size:15px}
+.phases{display:flex;gap:0;margin-left:24px}
+.phase{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:13px;font-weight:600;color:var(--muted);border:1px solid var(--rule);margin-left:-1px}
+.phase:first-child{border-radius:8px 0 0 8px}.phase:last-child{border-radius:0 8px 8px 0}
+.phase.done{color:#1F5E46;background:var(--sage-soft)}
+.phase.cur{background:var(--ink);color:#fff;border-color:var(--ink)}
+.ttop .x{margin-left:auto;color:var(--muted);font-size:13px}
+.tgrid{flex:1;display:grid;grid-template-columns:1fr 470px;gap:26px;padding:26px 32px;min-height:0}
+.tleft{display:flex;flex-direction:column;gap:18px}
+.bigstop{display:flex;align-items:center;gap:16px}
+.bigstop .r{width:58px;height:58px;border-radius:50%;background:var(--ochre);color:var(--ochre-ink);display:grid;place-items:center;font:700 22px var(--mono)}
+.bigstop small{display:block;color:var(--muted);font-size:13px}
+.prose{max-width:64ch;font-size:15.5px;line-height:1.6}
+.prose code{font:13px var(--mono);background:var(--rule-2);padding:1px 5px;border-radius:4px}
+.dj{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dj .panel{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.dj h4{font-size:12px;color:var(--muted);font-weight:600}
+.dj pre{font:12px/1.6 var(--mono);white-space:pre-wrap}
+.trap{display:flex;gap:12px;padding:12px 14px;border-radius:10px;background:var(--ochre-soft);color:#5A3E0A;font-size:13.5px}
+.tnav{display:flex;align-items:center;gap:14px;padding:14px 32px;background:var(--paper);border-top:1px solid var(--rule)}
+.tnav .stops .ln{width:14px}
+.tnav .btn.sec{margin-left:auto}
+
+/* 4 map */
+.mapwrap{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
+.canvas{position:relative;background-color:#EEF0EC;background-image:radial-gradient(#C9CFCA 1px,transparent 1px);background-size:22px 22px;overflow:hidden}
+.mtool{position:absolute;top:16px;left:16px;right:16px;display:flex;gap:8px;align-items:center;z-index:2}
+.mtool .sep{width:1px;height:22px;background:var(--rule);margin:0 4px}
+.grp{position:absolute;border-radius:12px;border:1.5px solid;background:rgba(255,255,255,.7);padding:10px 12px}
+.grp h5{font-size:12.5px;font-weight:700;display:flex;justify-content:space-between;gap:10px}
+.grp h5 span{font:500 12px var(--mono);opacity:.8}
+.grp.ui{border-color:var(--ui)}.grp.ui h5{color:var(--ui)}
+.grp.api{border-color:var(--api)}.grp.api h5{color:var(--api)}
+.grp.db{border-color:var(--db)}.grp.db h5{color:var(--db)}
+.grp.debt{border-color:var(--oxblood);border-style:dashed}.grp.debt h5{color:var(--oxblood)}
+.fnode{margin-top:8px;display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--rule);border-radius:7px;padding:6px 9px;font:12px var(--mono)}
+.fnode.sel{border-color:var(--ochre-ink);box-shadow:0 0 0 3px rgba(227,167,47,.4)}
+.fnode .stop{width:20px;height:20px;font-size:9.5px}
+.legend{position:absolute;left:16px;bottom:16px;display:flex;gap:14px;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px}
+.zoom{position:absolute;right:16px;bottom:16px;display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--rule);border-radius:8px}
+.zoom a{width:34px;height:32px;display:grid;place-items:center;border-bottom:1px solid var(--rule-2)}
+.zoom a:last-child{border:0}
+.side{background:var(--paper);border-left:1px solid var(--rule);display:flex;flex-direction:column}
+.side header{padding:18px;border-bottom:1px solid var(--rule-2)}
+.side section{padding:14px 18px;border-bottom:1px solid var(--rule-2);display:flex;flex-direction:column;gap:7px}
+.side h4{font-size:12px;color:var(--muted);font-weight:600}
+.fnrow{display:flex;justify-content:space-between;font:12.5px var(--mono)}
+.fnrow span{color:var(--muted)}
+.note{font-size:13px;background:#FAFBF9;border:1px solid var(--rule-2);border-radius:8px;padding:9px 11px}
+.note small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+
+/* 5 progress */
+.pgrid{display:grid;grid-template-columns:1fr 380px;gap:20px;flex:1;min-height:0}
+.ptable .pr{display:grid;grid-template-columns:170px 1fr 90px 90px 110px;gap:16px;align-items:center;padding:13px 20px;border-bottom:1px solid var(--rule-2)}
+.ptable .pr.th{font-size:12px;color:var(--muted);font-weight:600;padding:9px 20px;background:#FAFBF9;border-bottom:1px solid var(--rule)}
+.ptable .pr:last-child{border:0}
+.stack{display:flex;height:14px;border-radius:3px;overflow:hidden;background:var(--rule-2)}
+.stack i{display:block;height:100%}
+.stack .u{background:var(--sage)}.stack .t{background:#8FC1AC}.stack .s{background:#C9DED4}
+.num{font-variant-numeric:tabular-nums;font-weight:600}
+.areas{display:grid;grid-template-columns:repeat(4,1fr);border-top:2px solid var(--ink)}
+.areas div{padding:12px 14px;border-right:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.areas div:nth-child(4n){border-right:0}
+.areas b{display:block;font-size:14px}
+.areas span{font-size:12.5px;color:var(--muted)}
+.mini{display:flex;gap:2px;margin-top:6px}
+.mini i{flex:1;height:6px;border-radius:1px;background:var(--rule-2)}
+.mini i.u{background:var(--sage)}.mini i.t{background:#8FC1AC}
+.stale{display:flex;flex-direction:column;gap:10px;padding:16px 18px}
+.srow{display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid #EBCB86;background:var(--ochre-soft);border-radius:9px}
+.srow b{display:block;font-size:14px}
+.srow small{color:#7A5410;font-size:12.5px}
+.srow .btn{margin-left:auto;padding:6px 11px;font-size:12.5px}
+.checks{padding:4px 18px 14px;display:flex;flex-direction:column}
+.crow{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--rule-2);font-size:13px}
+.crow:last-child{border:0}
+.crow span{color:var(--muted)}
+
+/* 6 views */
+.vgrid{flex:1;display:grid;grid-template-columns:230px 1fr 360px;min-height:0;border-top:1px solid var(--rule)}
+.vlist{padding:18px 14px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--rule);background:#F7F8F5}
+.vlist a{padding:10px 12px;border-radius:8px;display:flex;flex-direction:column}
+.vlist a small{color:var(--muted);font-size:12px}
+.vlist a.on{background:var(--paper);border:1px solid var(--rule)}
+.vlist .add{margin-top:6px;border:1px dashed var(--rule);color:var(--muted);flex-direction:row;gap:8px;align-items:center}
+.vprev{padding:22px 26px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.wbox{position:relative;border:1px dashed #AEB8B2;border-radius:12px;padding:12px}
+.wtag{position:absolute;top:-10px;left:12px;background:var(--ground);padding:0 6px;font:500 12px var(--mono);color:var(--muted)}
+.vside{background:var(--paper);border-left:1px solid var(--rule);display:flex;flex-direction:column}
+.vside section{padding:16px 18px;border-bottom:1px solid var(--rule-2);display:flex;flex-direction:column;gap:8px}
+.vside h4{font-size:12px;color:var(--muted);font-weight:600}
+.ask{background:#FAFBF9;border:1px solid var(--rule-2);border-radius:9px;padding:10px 12px;font-size:13.5px;line-height:1.5}
+.ask small{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+pre.json{font:11.8px/1.6 var(--mono);background:#F7F8F5;border:1px solid var(--rule-2);border-radius:8px;padding:10px 12px;white-space:pre;overflow:hidden}
+pre.json .k{color:var(--wall)}pre.json .s{color:var(--db)}
+.wl{display:flex;flex-direction:column;gap:6px}
+.wl div{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;font-size:13px}
+.wl div span{margin-left:auto;font:12px var(--mono);color:var(--muted)}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+ <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></symbol>
+ <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M8.2 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.8"/></symbol>
+ <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.8v6.4l5-3.2z"/></symbol>
+ <symbol id="i-map" viewBox="0 0 24 24"><rect x="3.5" y="4" width="7" height="6" rx="1.5"/><rect x="13.5" y="14" width="7" height="6" rx="1.5"/><rect x="13.5" y="4" width="7" height="6" rx="1.5"/><path d="M10.5 7h3M17 10v4"/></symbol>
+ <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16v-4M12 16V8M17 16v-7"/></symbol>
+ <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M10 9.5V20"/></symbol>
+ <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></symbol>
+ <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></symbol>
+ <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+ <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+ <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+ <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10.5a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5zM14 3.5V8h4"/></symbol>
+ <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3zM12 10v4M12 17v.5"/></symbol>
+ <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+ <symbol id="i-chev" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></symbol>
+ <symbol id="i-loom" viewBox="0 0 24 24"><path d="M6 3v18M12 3v18M18 3v18" /><path d="M3 8h6M9 12h6M15 16h6" stroke-width="2.4"/></symbol>
+ <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></symbol>
+</svg>
+
+<nav class="jump"><a href="#s1">1 Home</a><a href="#s2">2 Journey</a><a href="#s3">3 Tour</a><a href="#s4">4 Map</a><a href="#s5">5 Progress</a><a href="#s6">6 Views</a></nav>
+
+<!-- ============ 1 HOME ============ -->
+<div class="label" id="s1">1 · Home <span>The main index: how big the product is, every user journey, and where you stand.</span></div>
+<div class="frame">
+ <aside class="rail">
+  <div class="brand"><svg class="i" style="width:22px;height:22px;color:var(--ochre)"><use href="#i-loom"/></svg><b>codeloom</b></div>
+  <div class="wsw"><div>Shopfront<small>workspace · 4 repos</small></div><svg class="i"><use href="#i-chev"/></svg></div>
+  <nav class="nav">
+   <a class="on"><svg class="i"><use href="#i-home"/></svg>Home</a>
+   <a><svg class="i"><use href="#i-route"/></svg>Journeys<span>41</span></a>
+   <a><svg class="i"><use href="#i-play"/></svg>Tours<span>12</span></a>
+   <a><svg class="i"><use href="#i-map"/></svg>Map</a>
+   <a><svg class="i"><use href="#i-chart"/></svg>Progress<span>34%</span></a>
+   <a><svg class="i"><use href="#i-layout"/></svg>Views<span>3</span></a>
+  </nav>
+  <div><div class="rh">Repos</div><div class="repos">
+   <div><i style="background:#7FA0D6"></i>shop-ui<span>612</span></div>
+   <div><i style="background:#7FD3A8"></i>core-service<span>1,204</span></div>
+   <div><i style="background:#7FA0D6"></i>admin-ui<span>341</span></div>
+   <div><i style="background:#7FA0D6"></i>partner-ui<span>161</span></div></div></div>
+  <div class="agent"><i></i><div>Claude Code connected<small>MCP · 9 tools</small></div></div>
+ </aside>
+ <main class="main">
+  <div class="hhead">
+   <div><h1>Shopfront</h1><div class="sub">4 repos · indexed at <span class="mono">9f2c1ab</span>, 2 minutes ago</div></div>
+   <div class="under"><b>34%</b><small>14 of 41 journeys understood</small></div>
+  </div>
+  <div class="counts">
+   <div><b>2,318</b><span>Files</span></div><div><b>186</b><span>API routes</span></div><div><b>64</b><span>UI pages</span></div>
+   <div><b>52</b><span>DB tables</span></div><div><b>41</b><span>User journeys</span></div><div><b>27 / 41</b><span>Journeys with a spec</span></div>
+  </div>
+  <div class="cont">
+   <div class="stops"><span class="stop done">1</span><i class="ln"></i><span class="stop done">2</span><i class="ln"></i><span class="stop done">3</span><i class="ln"></i><span class="stop cur">4</span><i class="ln"></i><span class="stop" style="background:transparent;border-color:#6E9A90;color:#fff">5</span></div>
+   <div><b>Continue: Sales rep builds a quote</b><p>Stop 4 of 14 · QuotesController.store · you stopped yesterday</p></div>
+   <a class="btn pri">Resume tour<svg class="i"><use href="#i-arrow"/></svg></a>
+  </div>
+  <div class="bar"><h2>User journeys</h2>
+   <span class="search"><svg class="i"><use href="#i-search"/></svg>Search journeys, files, routes</span>
+   <a class="tab on">All<b>41</b></a><a class="tab">Changed<b>2</b></a><a class="tab">No spec<b>14</b></a><a class="tab">Not started<b>19</b></a>
+  </div>
+  <div class="panel jt">
+   <div class="jr th"><span>Journey<svg class="i" style="width:13px;height:13px"><use href="#i-sort"/></svg></span><span>Area</span><span>Stops · UI → API → DB</span><span>Spec</span><span>Your progress</span></div>
+   <div class="jr"><div class="nm"><b>Sales rep builds a quote<span class="flag"><svg class="i" style="width:12px;height:12px"><use href="#i-alert"/></svg>3 files changed</span></b><small>quotes · PDF and HTML preview paths</small></div><span>Quotes</span>
+    <div class="stops"><span class="stop ui done">1</span><i class="ln"></i><span class="stop ui done">2</span><i class="ln"></i><span class="stop ui done">3</span><i class="ln"></i><span class="stop api done">4</span><i class="ln"></i><span class="stop api">5</span><i class="ln"></i><span class="stop db">6</span><i class="ln"></i><span class="stop more">+8</span></div>
+    <span class="spec tk">Ticket only</span><div class="prog stale"><i class="on"></i><i class="on"></i><i></i><small>Toured · re-walk 3 stops</small></div></div>
+   <div class="jr"><div class="nm"><b>Customer creates a profile</b><small>customers · validates VAT before insert</small></div><span>Customers</span>
+    <div class="stops"><span class="stop ui done">1</span><i class="ln"></i><span class="stop ui done">2</span><i class="ln"></i><span class="stop api done">3</span><i class="ln"></i><span class="stop api done">4</span><i class="ln"></i><span class="stop api done">5</span><i class="ln"></i><span class="stop db done">6</span><i class="ln"></i><span class="stop db done">7</span></div>
+    <span class="spec ok">Spec found</span><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><small>Understood</small></div></div>
+   <div class="jr"><div class="nm"><b>Lead syncs to Zoho CRM</b><small>integrations · RabbitMQ consumer, retries</small></div><span>Integrations</span>
+    <div class="stops"><span class="stop api done">1</span><i class="ln"></i><span class="stop api">2</span><i class="ln"></i><span class="stop api">3</span><i class="ln"></i><span class="stop api">4</span><i class="ln"></i><span class="stop db">5</span><i class="ln"></i><span class="stop db">6</span><i class="ln"></i><span class="stop db">7</span></div>
+    <span class="spec no">No spec</span><div class="prog"><i class="on"></i><i></i><i></i><small>Seen</small></div></div>
+   <div class="jr"><div class="nm"><b>Admin approves a site survey</b><small>surveys · status machine with 4 states</small></div><span>Surveys</span>
+    <div class="stops"><span class="stop ui">1</span><i class="ln"></i><span class="stop ui">2</span><i class="ln"></i><span class="stop api">3</span><i class="ln"></i><span class="stop api">4</span><i class="ln"></i><span class="stop api">5</span><i class="ln"></i><span class="stop db">6</span><i class="ln"></i><span class="stop more">+5</span></div>
+    <span class="spec ok">Spec found</span><div class="prog"><i></i><i></i><i></i><small>Not started</small></div></div>
+   <div class="jr"><div class="nm"><b>Installer uploads site photos</b><small>installs · S3 presigned upload</small></div><span>Installs</span>
+    <div class="stops"><span class="stop ui done">1</span><i class="ln"></i><span class="stop ui done">2</span><i class="ln"></i><span class="stop api done">3</span><i class="ln"></i><span class="stop api done">4</span><i class="ln"></i><span class="stop api done">5</span><i class="ln"></i><span class="stop db done">6</span><i class="ln"></i><span class="stop more">+3</span></div>
+    <span class="spec no">No spec</span><div class="prog"><i class="on"></i><i class="on"></i><i></i><small>Toured · check due</small></div></div>
+  </div>
+ </main>
+</div>
+
+<!-- ============ 2 JOURNEY ============ -->
+<div class="label" id="s2">2 · One user journey <span>Frontend, backend and database connected; click any stop to see its code.</span></div>
+<div class="frame">
+ <aside class="rail">
+  <div class="brand"><svg class="i" style="width:22px;height:22px;color:var(--ochre)"><use href="#i-loom"/></svg><b>codeloom</b></div>
+  <div class="wsw"><div>Shopfront<small>workspace · 4 repos</small></div><svg class="i"><use href="#i-chev"/></svg></div>
+  <nav class="nav"><a><svg class="i"><use href="#i-home"/></svg>Home</a><a class="on"><svg class="i"><use href="#i-route"/></svg>Journeys<span>41</span></a><a><svg class="i"><use href="#i-play"/></svg>Tours<span>12</span></a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-chart"/></svg>Progress<span>34%</span></a><a><svg class="i"><use href="#i-layout"/></svg>Views<span>3</span></a></nav>
+  <div class="agent"><i></i><div>Claude Code connected<small>MCP · 9 tools</small></div></div>
+ </aside>
+ <main class="main" style="gap:16px">
+  <div class="plate">
+   <div><h1>Customer creates a profile</h1>
+    <div class="meta"><span>Area <b>Customers</b></span><span>Owner <b>customers team</b></span><span>Spec <b style="color:#1F5E46">docs/specs/customer-profiling.md</b></span><span>Tickets <b>PROJ-1780, 1812</b></span><span>7 stops · 2 repos · 2 tables</span></div></div>
+   <div style="display:flex;gap:10px;align-items:center"><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><small>Understood on 22 Oct</small></div><a class="btn pri"><svg class="i"><use href="#i-play"/></svg>Walk the tour</a></div>
+  </div>
+  <div class="tabs"><a class="on">Flow</a><a>Data journey</a><a>Files 14</a><a>Notes 2</a><a>Check yourself</a></div>
+  <div class="jbody">
+   <div class="panel lanes">
+    <svg class="wires" viewBox="0 0 760 560" preserveAspectRatio="none">
+     <g fill="none" stroke="#B9A06A" stroke-width="2"><path d="M140 112 V150"/><path d="M240 206 C290 206 290 112 300 112"/><path d="M400 140 V178"/><path d="M400 244 V282"/><path d="M500 312 C540 312 540 112 556 112"/><path d="M500 320 C540 320 540 250 556 250"/></g>
+    </svg>
+    <div class="lane ui"><h3>UI <span>shop-ui</span></h3>
+     <div class="node"><span class="stop ui done">1</span><div><b>CustomerProfilePage</b><small>app/customers/new/page.tsx:18</small><em>Form with VAT, city, contacts</em></div></div>
+     <div class="node"><span class="stop ui done">2</span><div><b>useCreateCustomer()</b><small>hooks/useCreateCustomer.ts:12</small><em>POSTs the form as JSON</em></div></div>
+    </div>
+    <div class="lane api"><h3>API <span>core-service</span></h3>
+     <div class="node"><span class="stop api done">3</span><div><b>POST /api/customers</b><small>start/routes.ts:88</small><em>auth + role: sales</em></div></div>
+     <div class="node sel"><span class="stop cur">4</span><div><b>CustomersController.store</b><small>app/controllers/customers.ts:41</small><em>Validates VAT, calls service</em></div></div>
+     <div class="node"><span class="stop api done">5</span><div><b>CustomerService.create</b><small>app/services/customer.ts:17</small><em>One transaction, two inserts</em></div></div>
+    </div>
+    <div class="lane db"><h3>DB <span>Postgres</span></h3>
+     <div class="node"><span class="stop db done">6</span><div><b>customers</b><small>INSERT · 1 row</small><em>name, vat_no, city</em></div></div>
+     <div class="node"><span class="stop db done">7</span><div><b>customer_contacts</b><small>INSERT · n rows</small><em>FK customer_id</em></div></div>
+    </div>
+   </div>
+   <aside class="panel insp">
+    <header><span class="stop cur">4</span><div><b>CustomersController.store</b><span class="mono" style="color:var(--muted)">app/controllers/customers.ts:41–58</span></div></header>
+    <section><h4>What happens here</h4><p style="font-size:13.5px">Checks the VAT number format, then hands the clean payload to CustomerService. Returns 201 with the new customer.</p></section>
+    <section style="padding-top:10px"><pre class="code"><span><i>41</i>async store({ request, response }) {</span><span class="hl"><i>42</i>  const data = await request.validateUsing(</span><span class="hl"><i>43</i>    createCustomerValidator)</span><span><i>44</i>  const customer = await this.customers.create(data)</span><span><i>45</i>  return response.created(customer)</span><span><i>46</i>}</span></pre></section>
+    <section><div class="kv"><span>Called by</span><b class="mono">POST /api/customers</b></div><div class="kv"><span>Calls</span><b class="mono">CustomerService.create</b></div><div class="kv"><span>Also in journeys</span><b>Customer edits profile</b></div></section>
+    <footer><a class="btn sec">Open in editor</a><a class="btn sec">Ask Claude</a></footer>
+   </aside>
+  </div>
+ </main>
+</div>
+
+<!-- ============ 3 TOUR ============ -->
+<div class="label" id="s3">3 · Tour mode <span>Four phases per journey; each stop shows the code, the data at that point, and the SQL.</span></div>
+<div class="frame">
+ <aside class="rail slim">
+  <svg class="i" style="width:24px;height:24px;color:var(--ochre)"><use href="#i-loom"/></svg>
+  <nav class="nav"><a><svg class="i"><use href="#i-home"/></svg></a><a><svg class="i"><use href="#i-route"/></svg></a><a class="on"><svg class="i"><use href="#i-play"/></svg></a><a><svg class="i"><use href="#i-map"/></svg></a><a><svg class="i"><use href="#i-chart"/></svg></a></nav>
+ </aside>
+ <div class="tour">
+  <div class="ttop"><b>Customer creates a profile</b>
+   <div class="phases"><span class="phase done"><svg class="i" style="width:14px;height:14px"><use href="#i-check"/></svg>Flow</span><span class="phase cur">Data journey</span><span class="phase">File notes</span><span class="phase">Check yourself</span></div>
+   <span class="x">Exit tour</span></div>
+  <div class="tgrid">
+   <div class="tleft">
+    <div class="bigstop"><span class="r">5</span><div><small>Stop 5 of 7 · core-service</small><h1 style="font-size:28px">CustomerService.create turns the payload into rows</h1></div></div>
+    <p class="prose">This is where the request stops being JSON. Both inserts run inside one transaction, so a customer is never saved without its contacts. VAT was already checked at stop 4, so <code>create()</code> trusts its input.</p>
+    <pre class="code"><span><i>17</i>async create(payload: CreateCustomerDTO) {</span><span class="hl"><i>18</i>  return db.transaction(async (trx) =&gt; {</span><span class="hl"><i>19</i>    const customer = await Customer.create(payload.customer, { client: trx })</span><span><i>20</i>    await customer.related('contacts').createMany(payload.contacts)</span><span><i>21</i>    return customer.serialize()</span><span><i>22</i>  })</span><span><i>23</i>}</span></pre>
+    <div class="trap"><svg class="i" style="width:18px;height:18px;margin-top:1px"><use href="#i-alert"/></svg><div><b>Remember this:</b> VAT is validated in the controller, not here. Calling this service from a job skips validation.</div></div>
+   </div>
+   <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px"><h4 style="font-size:12px;color:var(--muted)">Data arriving at this stop · sample</h4>
+<pre class="mono" style="font-size:12px;line-height:1.6">{ customer: { name: "Asha Solar Pvt Ltd",
+           gstNo: "27AABCA1234F1Z5",
+           city: "Lisbon" },
+  contacts: [{ name: "Ravi K", phone: "98xxxxxx10" }] }</pre></div>
+    <div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px"><h4 style="font-size:12px;color:var(--muted)">SQL that runs</h4>
+<pre class="mono" style="font-size:12px;line-height:1.6">BEGIN;
+INSERT INTO customers (name, vat_no, city)
+  VALUES ($1, $2, $3) RETURNING id;
+INSERT INTO customer_contacts (customer_id, name, phone)
+  VALUES ($1, $2, $3);
+COMMIT;</pre></div>
+    <div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px"><h4 style="font-size:12px;color:var(--muted)">Data leaving this stop</h4>
+<pre class="mono" style="font-size:12px;line-height:1.6">{ id: 3812, name: "Asha Solar Pvt Ltd", city: "Lisbon" }</pre></div>
+   </div>
+  </div>
+  <div class="tnav">
+   <a class="btn sec" style="margin-left:0"><svg class="i"><use href="#i-back"/></svg>Stop 4</a>
+   <div class="stops"><span class="stop ui done">1</span><i class="ln"></i><span class="stop ui done">2</span><i class="ln"></i><span class="stop api done">3</span><i class="ln"></i><span class="stop api done">4</span><i class="ln"></i><span class="stop cur">5</span><i class="ln"></i><span class="stop db">6</span><i class="ln"></i><span class="stop db">7</span></div>
+   <span style="color:var(--muted);font-size:13px">About 4 minutes left in this phase</span>
+   <a class="btn sec" style="margin-left:auto">Ask Claude about this stop</a>
+   <a class="btn dark">Stop 6 · customers table<svg class="i"><use href="#i-arrow"/></svg></a>
+  </div>
+ </div>
+</div>
+
+<!-- ============ 4 MAP ============ -->
+<div class="label" id="s4">4 · Map <span>Knowledge graph per repo or for the whole workspace; folders open into files and functions.</span></div>
+<div class="frame">
+ <aside class="rail">
+  <div class="brand"><svg class="i" style="width:22px;height:22px;color:var(--ochre)"><use href="#i-loom"/></svg><b>codeloom</b></div>
+  <div class="wsw"><div>Shopfront<small>workspace · 4 repos</small></div><svg class="i"><use href="#i-chev"/></svg></div>
+  <nav class="nav"><a><svg class="i"><use href="#i-home"/></svg>Home</a><a><svg class="i"><use href="#i-route"/></svg>Journeys<span>41</span></a><a><svg class="i"><use href="#i-play"/></svg>Tours<span>12</span></a><a class="on"><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-chart"/></svg>Progress<span>34%</span></a><a><svg class="i"><use href="#i-layout"/></svg>Views<span>3</span></a></nav>
+  <div class="agent"><i></i><div>Claude Code connected<small>MCP · 9 tools</small></div></div>
+ </aside>
+ <div class="mapwrap">
+  <div class="canvas">
+   <div class="mtool"><a class="tab">All repos</a><a class="tab">shop-ui</a><a class="tab on">core-service</a><a class="tab">admin-ui</a><span class="sep"></span><a class="tab on">Layers</a><a class="tab">Owners</a><a class="tab">Tech debt</a><span class="sep"></span><a class="tab" style="display:flex;gap:6px;align-items:center;background:var(--ochre-soft);border-color:#EBCB86">Journey: Customer creates a profile<svg class="i" style="width:13px;height:13px"><use href="#i-chev"/></svg></a></div>
+   <svg style="position:absolute;inset:0" width="880" height="900" viewBox="0 0 880 900">
+    <g fill="none" stroke="#9BA6A0" stroke-width="1.5"><path d="M250 200 C320 200 320 330 380 330"/><path d="M250 470 C320 470 320 360 380 360"/><path d="M620 380 C680 380 680 560 720 560"/></g>
+    <g fill="none" stroke="#C99A2E" stroke-width="3"><path d="M250 215 C330 215 330 345 380 345"/><path d="M620 395 C690 395 680 250 700 250"/><path d="M620 410 C690 410 690 300 700 300"/></g>
+   </svg>
+   <div class="grp api" style="left:40px;top:150px;width:210px"><h5>start/ <span>routes · 186</span></h5><div class="fnode"><span class="stop done">3</span>routes.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>kernel.ts</div></div>
+   <div class="grp api" style="left:40px;top:420px;width:210px"><h5>app/controllers/ <span>38 files</span></h5><div class="fnode"><span class="stop done">4</span>customers.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>quotes.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>surveys.ts</div></div>
+   <div class="grp api" style="left:380px;top:290px;width:240px"><h5>app/services/ <span>61 files · service layer</span></h5><div class="fnode sel"><span class="stop cur">5</span>customer.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>quote_pdf.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>survey_state.ts</div></div>
+   <div class="grp db" style="left:700px;top:200px;width:160px"><h5>tables <span>52</span></h5><div class="fnode"><span class="stop done">6</span>customers</div><div class="fnode"><span class="stop done">7</span>customer_contacts</div></div>
+   <div class="grp debt" style="left:700px;top:520px;width:160px"><h5>services/Zoho/ <span>tech debt</span></h5><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>lead_sync.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>retry.ts</div></div>
+   <div class="legend"><span><i style="background:var(--ui)"></i>UI</span><span><i style="background:var(--api)"></i>API / service</span><span><i style="background:var(--db)"></i>Database</span><span><i style="border:1.5px dashed var(--oxblood)"></i>Tech debt</span><span><i style="background:var(--ochre)"></i>Journey path</span></div>
+   <div class="zoom"><a><svg class="i"><use href="#i-plus"/></svg></a><a><svg class="i"><path d="M5 12h14"/></svg></a><a><svg class="i"><use href="#i-map"/></svg></a></div>
+  </div>
+  <aside class="side">
+   <header><b style="font-size:16px">customer.ts</b><div class="mono" style="color:var(--muted)">core-service/app/services/customer.ts</div><div style="display:flex;gap:6px;margin-top:10px"><span class="lane-chip api">service layer</span><span class="lane-chip db">writes 2 tables</span></div></header>
+   <section><h4>Summary · written by Claude</h4><p style="font-size:13.5px">Creates and updates customers. Owns the transaction that writes a customer with its contacts.</p></section>
+   <section><h4>Functions</h4><div class="fnrow">create()<span>:17</span></div><div class="fnrow">update()<span>:36</span></div><div class="fnrow">findByGst()<span>:58</span></div></section>
+   <section><h4>In 4 journeys</h4><div class="fnrow" style="font-family:inherit">Customer creates a profile<span class="spec ok" style="font-size:11px">understood</span></div><div class="fnrow" style="font-family:inherit">Customer edits profile<span class="spec tk" style="font-size:11px">toured</span></div><div class="fnrow" style="font-family:inherit">Quote picks a customer<span style="font-size:12px">not started</span></div></section>
+   <section><h4>Notes</h4><div class="note">findByGst ignores case; VAT numbers are stored upper-case.<small>Shreyas · 21 Oct</small></div></section>
+  </aside>
+ </div>
+</div>
+
+<!-- ============ 5 PROGRESS ============ -->
+<div class="label" id="s5">5 · Progress <span>How much you understand, per repo and area, and what has gone stale.</span></div>
+<div class="frame">
+ <aside class="rail">
+  <div class="brand"><svg class="i" style="width:22px;height:22px;color:var(--ochre)"><use href="#i-loom"/></svg><b>codeloom</b></div>
+  <div class="wsw"><div>Shopfront<small>workspace · 4 repos</small></div><svg class="i"><use href="#i-chev"/></svg></div>
+  <nav class="nav"><a><svg class="i"><use href="#i-home"/></svg>Home</a><a><svg class="i"><use href="#i-route"/></svg>Journeys<span>41</span></a><a><svg class="i"><use href="#i-play"/></svg>Tours<span>12</span></a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a class="on"><svg class="i"><use href="#i-chart"/></svg>Progress<span>34%</span></a><a><svg class="i"><use href="#i-layout"/></svg>Views<span>3</span></a></nav>
+  <div class="agent"><i></i><div>Claude Code connected<small>MCP · 9 tools</small></div></div>
+ </aside>
+ <main class="main">
+  <div class="hhead"><div><h1>You understand 14 of 41 journeys</h1><div class="sub">Understood means you walked every stop and passed its check. 27 journeys left across 4 repos.</div></div>
+   <div style="display:flex;gap:16px;font-size:12.5px;color:var(--muted)"><span style="display:flex;gap:6px;align-items:center"><i style="width:10px;height:10px;background:var(--sage);border-radius:2px"></i>Understood</span><span style="display:flex;gap:6px;align-items:center"><i style="width:10px;height:10px;background:#8FC1AC;border-radius:2px"></i>Toured</span><span style="display:flex;gap:6px;align-items:center"><i style="width:10px;height:10px;background:#C9DED4;border-radius:2px"></i>Seen</span></div></div>
+  <div class="pgrid">
+   <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="panel ptable">
+     <div class="pr th"><span>Repo</span><span>Journeys, at the same scale</span><span>Understood</span><span>Tours</span><span>Left</span></div>
+     <div class="pr"><b>core-service</b><div class="stack" style="width:100%"><i class="u" style="width:29%"></i><i class="t" style="width:16%"></i><i class="s" style="width:19%"></i></div><span class="num">9 / 31</span><span class="num">4 / 7</span><span>22 journeys</span></div>
+     <div class="pr"><b>shop-ui</b><div class="stack" style="width:61%"><i class="u" style="width:37%"></i><i class="t" style="width:16%"></i><i class="s" style="width:21%"></i></div><span class="num">7 / 19</span><span class="num">1 / 3</span><span>12 journeys</span></div>
+     <div class="pr"><b>admin-ui</b><div class="stack" style="width:35%"><i class="u" style="width:18%"></i><i class="t" style="width:9%"></i><i class="s" style="width:27%"></i></div><span class="num">2 / 11</span><span class="num">0 / 2</span><span>9 journeys</span></div>
+     <div class="pr"><b>partner-ui</b><div class="stack" style="width:16%"><i class="s" style="width:20%"></i></div><span class="num">0 / 5</span><span class="num">0 / 0</span><span>5 journeys</span></div>
+    </div>
+    <div><h2 style="margin-bottom:10px">By area</h2>
+     <div class="areas">
+      <div><b>Customers</b><span>3 of 3 understood</span><div class="mini"><i class="u"></i><i class="u"></i><i class="u"></i></div></div>
+      <div><b>Quotes</b><span>1 of 6</span><div class="mini"><i class="u"></i><i class="t"></i><i class="t"></i><i></i><i></i><i></i></div></div>
+      <div><b>Surveys</b><span>2 of 5</span><div class="mini"><i class="u"></i><i class="u"></i><i class="t"></i><i></i><i></i></div></div>
+      <div><b>Installs</b><span>1 of 4</span><div class="mini"><i class="u"></i><i class="t"></i><i></i><i></i></div></div>
+      <div><b>Payments</b><span>3 of 4</span><div class="mini"><i class="u"></i><i class="u"></i><i class="u"></i><i></i></div></div>
+      <div><b>Integrations</b><span>0 of 6</span><div class="mini"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div><b>Auth</b><span>3 of 3</span><div class="mini"><i class="u"></i><i class="u"></i><i class="u"></i></div></div>
+      <div><b>Admin</b><span>1 of 10</span><div class="mini"><i class="u"></i><i class="t"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+     </div></div>
+   </div>
+   <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="panel"><div class="stale"><h2>Needs a re-walk</h2><p style="font-size:13px;color:var(--muted)">Code changed under journeys you understood. They count again once you re-walk the changed stops.</p>
+     <div class="srow"><div><b>Sales rep builds a quote</b><small>3 stops changed in 4e1d0aa</small></div><a class="btn pri">Re-walk</a></div>
+     <div class="srow"><div><b>Finance records a payment</b><small>1 stop changed in 77ab210</small></div><a class="btn pri">Re-walk</a></div></div></div>
+    <div class="panel"><div style="padding:16px 18px 6px"><h2>Recent checks</h2></div><div class="checks">
+     <div class="crow"><b>Customer creates a profile</b><span>3 / 3 · 22 Oct</span></div>
+     <div class="crow"><b>User signs in with OTP</b><span>3 / 3 · 18 Oct</span></div>
+     <div class="crow"><b>Installer uploads site photos</b><span style="color:var(--oxblood)">2 / 3 · retry</span></div>
+     <div class="crow"><b>Finance records a payment</b><span>3 / 3 · 21 Oct</span></div></div></div>
+    <a class="btn dark" style="justify-content:center">Next suggested: Lead syncs to Zoho CRM<svg class="i"><use href="#i-arrow"/></svg></a>
+   </div>
+  </div>
+ </main>
+</div>
+
+<!-- ============ 6 VIEWS ============ -->
+<div class="label" id="s6">6 · Views <span>Screens built from widgets; ask Claude to make or change one.</span></div>
+<div class="frame">
+ <aside class="rail">
+  <div class="brand"><svg class="i" style="width:22px;height:22px;color:var(--ochre)"><use href="#i-loom"/></svg><b>codeloom</b></div>
+  <div class="wsw"><div>Shopfront<small>workspace · 4 repos</small></div><svg class="i"><use href="#i-chev"/></svg></div>
+  <nav class="nav"><a><svg class="i"><use href="#i-home"/></svg>Home</a><a><svg class="i"><use href="#i-route"/></svg>Journeys<span>41</span></a><a><svg class="i"><use href="#i-play"/></svg>Tours<span>12</span></a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-chart"/></svg>Progress<span>34%</span></a><a class="on"><svg class="i"><use href="#i-layout"/></svg>Views<span>3</span></a></nav>
+  <div class="agent"><i></i><div>Claude Code connected<small>MCP · 9 tools</small></div></div>
+ </aside>
+ <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+  <div style="padding:24px 28px 18px;display:flex;justify-content:space-between;align-items:flex-end"><div><h1 style="font-size:28px">No-spec audit</h1><div class="sub">Made by Claude on 29 Oct · <span class="mono">.codeloom/views/no-spec-audit.json</span></div></div><div style="display:flex;gap:8px"><a class="btn sec">Set as Home</a><a class="btn dark">Open view</a></div></div>
+  <div class="vgrid">
+   <nav class="vlist">
+    <a><b>Home</b><small>Default · your layout</small></a>
+    <a class="on"><b>No-spec audit</b><small>3 widgets · by Claude</small></a>
+    <a><b>Quote deep-dive</b><small>2 widgets · by Claude</small></a>
+    <a class="add"><svg class="i"><use href="#i-plus"/></svg>Ask Claude for a view</a>
+   </nav>
+   <div class="vprev">
+    <div class="wbox"><span class="wtag">stats · routes, journeys, specs</span><div class="counts" style="grid-template-columns:repeat(3,1fr);border-top-width:1px"><div><b>186</b><span>API routes</span></div><div><b>41</b><span>Journeys</span></div><div><b style="color:var(--oxblood)">14</b><span>Without a spec</span></div></div></div>
+    <div class="wbox"><span class="wtag">journeys · spec = none, sort by stops</span>
+     <div class="jt">
+      <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Sales rep builds a quote</b><small>14 stops · ticket PROJ-1702</small></div><span>Quotes</span><span class="num">14</span><span class="spec tk">Ticket only</span></div>
+      <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Installer uploads site photos</b><small>9 stops</small></div><span>Installs</span><span class="num">9</span><span class="spec no">No spec</span></div>
+      <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Lead syncs to Zoho CRM</b><small>7 stops</small></div><span>Integrations</span><span class="num">7</span><span class="spec no">No spec</span></div>
+     </div></div>
+    <div class="wbox" style="flex:1"><span class="wtag">map · core-service, overlay tech debt</span><div style="height:100%;min-height:120px;border-radius:8px;background-color:#EEF0EC;background-image:radial-gradient(#C9CFCA 1px,transparent 1px);background-size:18px 18px;position:relative">
+     <div class="grp api" style="left:20px;top:20px;width:170px"><h5>app/services/ <span>61</span></h5></div><div class="grp debt" style="left:240px;top:40px;width:170px"><h5>services/Zoho/ <span>debt</span></h5></div><div class="grp db" style="left:460px;top:20px;width:130px"><h5>tables <span>52</span></h5></div></div></div>
+   </div>
+   <aside class="vside">
+    <section><h4>What you asked</h4><div class="ask"><small>You · in Claude Code</small>"Make me a view of journeys with no spec, biggest first, and the core-service map with tech debt."</div><div class="ask"><small>Claude · called save_view</small>Saved "No-spec audit" with 3 widgets. 14 journeys have no spec; the 3 biggest are listed first.</div></section>
+    <section><h4>Widgets, in order</h4><div class="wl"><div>stats<span>3 numbers</span></div><div>journeys<span>spec: none</span></div><div>map<span>tech debt</span></div></div></section>
+    <section style="border:0"><h4>View file</h4><pre class="json">{ <span class="k">"title"</span>: <span class="s">"No-spec audit"</span>,
+  <span class="k">"widgets"</span>: [
+    { <span class="k">"type"</span>: <span class="s">"stats"</span>, <span class="k">"show"</span>: [...] },
+    { <span class="k">"type"</span>: <span class="s">"journeys"</span>,
+      <span class="k">"filter"</span>: { <span class="k">"spec"</span>: <span class="s">"none"</span> } },
+    { <span class="k">"type"</span>: <span class="s">"map"</span>,
+      <span class="k">"overlay"</span>: <span class="s">"tech-debt"</span> } ] }</pre></section>
+   </aside>
+  </div>
+ </div>
+</div>
+</body></html>

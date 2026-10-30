@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>codeloom — Gallery Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--wall:#1F4D45;--wall-2:#2A5F55;--wall-ink:#DCE8E3;--ground:#F3F4F1;--paper:#FFFFFF;--ink:#1A1D1C;--muted:#5E6763;--rule:#D6DAD5;--ochre:#E3A72F;--ochre-ink:#3A2A06;--oxblood:#B5483D;--sage:#3E8A6E}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;display:flex;background:var(--ground);color:var(--ink);font:14px/1.45 "Schibsted Grotesk",sans-serif}
+.rail{width:232px;background:var(--wall);color:var(--wall-ink);padding:28px 20px;display:flex;flex-direction:column;gap:28px}
+.brand{font-weight:800;font-size:22px;letter-spacing:-.02em;color:#fff}
+.ws{font-size:13px;opacity:.8}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav a{padding:9px 12px;border-radius:8px;color:var(--wall-ink);text-decoration:none;font-weight:500;display:flex;justify-content:space-between}
+.nav a.on{background:var(--wall-2);color:#fff}
+.nav a span{font:12px "JetBrains Mono",monospace;opacity:.7}
+.repos{margin-top:auto;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.repos div{display:flex;justify-content:space-between}
+.main{flex:1;padding:32px 40px;display:flex;flex-direction:column;gap:26px;min-width:0}
+.head{display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:34px;font-weight:800;letter-spacing:-.03em}
+.sub{color:var(--muted);margin-top:4px}
+.under{display:flex;align-items:center;gap:14px}
+.under b{font-size:40px;font-weight:800;letter-spacing:-.03em}
+.under small{color:var(--muted);max-width:150px;line-height:1.3}
+.counts{display:grid;grid-template-columns:repeat(6,1fr);border-top:2px solid var(--ink);border-bottom:1px solid var(--rule)}
+.counts div{padding:12px 16px;border-right:1px solid var(--rule)}
+.counts div:last-child{border-right:0}
+.counts b{display:block;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.counts span{font-size:12.5px;color:var(--muted)}
+.bar{display:flex;gap:10px;align-items:center}
+.bar h2{font-size:19px;font-weight:700;margin-right:auto}
+.tab{padding:6px 12px;border:1px solid var(--rule);border-radius:7px;background:var(--paper);font-size:13px}
+.tab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.list{display:flex;flex-direction:column;background:var(--paper);border:1px solid var(--rule);border-radius:12px;overflow:hidden}
+.row{display:grid;grid-template-columns:2.2fr 1fr 2.4fr 1fr 1.2fr;gap:18px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--rule)}
+.row:last-child{border:0}
+.row.th{padding:10px 20px;font-size:12px;color:var(--muted);font-weight:600;background:var(--ground)}
+.name b{display:block;font-size:15.5px;font-weight:700}
+.name small{color:var(--muted);font-size:12.5px}
+.area{font-size:13px}
+.stops{display:flex;align-items:center;gap:0}
+.stop{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font:600 10.5px "JetBrains Mono",monospace;border:1.5px solid var(--ink);background:var(--paper)}
+.stop.fe{border-color:#3C6FB6}.stop.be{border-color:var(--wall)}.stop.db{border-color:#8A5A2B}
+.stop.done{background:var(--ochre);border-color:var(--ochre);color:var(--ochre-ink)}
+.link{width:10px;height:1.5px;background:var(--rule)}
+.spec{font-size:12.5px;font-weight:600;padding:3px 9px;border-radius:999px;justify-self:start}
+.spec.ok{background:#DDEEE6;color:#1F5E46}.spec.tk{background:#FBEFD6;color:#7A5410}.spec.no{background:#F6E1DE;color:#8E3329}
+.prog{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+.prog i{height:8px;border-radius:2px;background:var(--rule)}
+.prog i.on{background:var(--sage)}
+.prog small{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.next{display:flex;gap:16px;align-items:center;background:var(--wall);color:#fff;border-radius:12px;padding:16px 20px}
+.next b{font-size:15px}
+.next span{opacity:.8;font-size:13px}
+.next .go{margin-left:auto;background:var(--ochre);color:var(--ochre-ink);padding:9px 16px;border-radius:8px;font-weight:700}
+</style></head><body>
+<aside class="rail">
+  <div><div class="brand">codeloom</div><div class="ws">Shopfront workspace</div></div>
+  <nav class="nav">
+    <a class="on">Home</a><a>Journeys <span>41</span></a><a>Tours <span>12</span></a><a>Map</a><a>Progress</a><a>Views</a>
+  </nav>
+  <div class="repos"><div><span>core-service</span><span>1,204</span></div><div><span>shop-ui</span><span>612</span></div><div><span>admin-ui</span><span>341</span></div><div><span>partner-ui</span><span>161</span></div></div>
+</aside>
+<main class="main">
+  <div class="head">
+    <div><h1>Shopfront</h1><div class="sub">4 repos · indexed at 9f2c1ab, 2 minutes ago</div></div>
+    <div class="under"><b>34%</b><small>of journeys you have understood</small></div>
+  </div>
+  <div class="counts">
+    <div><b>2,318</b><span>Files</span></div><div><b>186</b><span>API routes</span></div><div><b>64</b><span>UI pages</span></div>
+    <div><b>52</b><span>DB tables</span></div><div><b>41</b><span>User journeys</span></div><div><b>27 / 41</b><span>Journeys with a spec</span></div>
+  </div>
+  <div class="next"><b>Continue: Sales rep builds a quote</b><span>You toured all 14 stops. Answer 3 questions to mark it understood.</span><a class="go">Take the check</a></div>
+  <div class="bar"><h2>User journeys</h2><a class="tab on">All 41</a><a class="tab">No spec 14</a><a class="tab">Not started 19</a><a class="tab">core-service</a></div>
+  <div class="list">
+    <div class="row th"><span>Journey</span><span>Area</span><span>Stops: UI → API → DB</span><span>Spec</span><span>Your progress</span></div>
+    <div class="row"><div class="name"><b>Customer creates a profile</b><small>customers team · validates VAT before insert</small></div><span class="area">Customers</span>
+      <div class="stops"><span class="stop fe done">1</span><i class="link"></i><span class="stop fe done">2</span><i class="link"></i><span class="stop be done">3</span><i class="link"></i><span class="stop be done">4</span><i class="link"></i><span class="stop be done">5</span><i class="link"></i><span class="stop db done">6</span><i class="link"></i><span class="stop db done">7</span></div>
+      <span class="spec ok">Spec found</span><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><small>Understood</small></div></div>
+    <div class="row"><div class="name"><b>Sales rep builds a quote</b><small>quotes · PDF + HTML preview paths</small></div><span class="area">Quotes</span>
+      <div class="stops"><span class="stop fe done">1</span><i class="link"></i><span class="stop fe done">2</span><i class="link"></i><span class="stop fe done">3</span><i class="link"></i><span class="stop be done">4</span><i class="link"></i><span class="stop be done">5</span><i class="link"></i><span class="stop db done">6</span><i class="link"></i><span class="stop">+8</span></div>
+      <span class="spec tk">Ticket only</span><div class="prog"><i class="on"></i><i class="on"></i><i></i><small>Toured</small></div></div>
+    <div class="row"><div class="name"><b>Lead syncs to Zoho CRM</b><small>integrations · RabbitMQ consumer</small></div><span class="area">Integrations</span>
+      <div class="stops"><span class="stop be done">1</span><i class="link"></i><span class="stop be">2</span><i class="link"></i><span class="stop be">3</span><i class="link"></i><span class="stop be">4</span><i class="link"></i><span class="stop db">5</span><i class="link"></i><span class="stop db">6</span><i class="link"></i><span class="stop db">7</span></div>
+      <span class="spec no">No spec</span><div class="prog"><i class="on"></i><i></i><i></i><small>Seen</small></div></div>
+    <div class="row"><div class="name"><b>Admin approves a site survey</b><small>surveys · status machine, 4 states</small></div><span class="area">Surveys</span>
+      <div class="stops"><span class="stop fe">1</span><i class="link"></i><span class="stop fe">2</span><i class="link"></i><span class="stop be">3</span><i class="link"></i><span class="stop be">4</span><i class="link"></i><span class="stop be">5</span><i class="link"></i><span class="stop db">6</span><i class="link"></i><span class="stop">+5</span></div>
+      <span class="spec ok">Spec found</span><div class="prog"><i></i><i></i><i></i><small>Not started</small></div></div>
+  </div>
+</main>
+</body></html>
