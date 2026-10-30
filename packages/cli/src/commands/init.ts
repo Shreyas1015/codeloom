@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, posix, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
@@ -18,23 +19,47 @@ export interface InitResult {
   root: string;
   repos: RepoRef[];
   created: string[];
+  /** Repos whose git hook codeloom could not (or would not) install, and why. */
+  skipped: Array<{ repo: string; reason: string }>;
 }
 
-export function installHook(repoAbs: string, wsRoot: string): boolean {
-  const gitDir = join(repoAbs, ".git");
-  if (!existsSync(gitDir) || !statSync(gitDir).isDirectory()) return false;
-  const hooksDir = join(gitDir, "hooks");
-  mkdirSync(hooksDir, { recursive: true });
-  const hook = join(hooksDir, "post-commit");
-  const existing = existsSync(hook) ? readFileSync(hook, "utf8") : "#!/bin/sh\n";
-  if (existing.includes(HOOK_MARK)) return false;
-  const block = [
-    HOOK_MARK,
-    `if command -v codeloom >/dev/null 2>&1; then (cd ${shellQuote(wsRoot)} && codeloom index --quiet) >/dev/null 2>&1 & fi`,
-  ].join("\n");
-  writeFileSync(hook, `${existing.trimEnd()}\n\n${block}\n`);
+export type HookResult =
+  | { status: "installed"; path: string }
+  | { status: "present"; path: string }
+  | { status: "skipped"; reason: string };
+
+/** The line the post-commit hook runs: re-index the workspace in the background. */
+export function hookLine(wsRoot: string): string {
+  return `if command -v codeloom >/dev/null 2>&1; then (cd ${shellQuote(wsRoot)} && codeloom index --quiet) >/dev/null 2>&1 & fi`;
+}
+
+/** The repo's hooks folder as git sees it (handles worktrees and core.hooksPath, e.g. husky). */
+function hooksDir(repoAbs: string): string {
+  const out = execFileSync("git", ["rev-parse", "--git-path", "hooks"], { cwd: repoAbs, encoding: "utf8", stdio: "pipe" });
+  return resolve(repoAbs, out.trim());
+}
+
+const SHELL_SHEBANG = /^#!\s*(\S*\/)?(env\s+)?(sh|bash|zsh)(\s|$)/;
+
+export function installHook(repoAbs: string, wsRoot: string): HookResult {
+  let dir: string;
+  try {
+    dir = hooksDir(repoAbs);
+  } catch (err) {
+    const msg = err instanceof Error ? (err.message.split("\n").find((l) => /fatal|error/i.test(l)) ?? err.message) : String(err);
+    return { status: "skipped", reason: `could not find the git hooks folder (${msg.trim()})` };
+  }
+  const hook = join(dir, "post-commit");
+  let existing = existsSync(hook) ? readFileSync(hook, "utf8") : "";
+  if (existing.includes(HOOK_MARK)) return { status: "present", path: hook };
+  if (existing.trim() === "") existing = "#!/bin/sh\n";
+  else if (!SHELL_SHEBANG.test(existing.split("\n", 1)[0]!)) {
+    return { status: "skipped", reason: `the existing hook ${hook} is not a shell script, so codeloom left it unchanged` };
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(hook, `${existing.trimEnd()}\n\n${HOOK_MARK}\n${hookLine(wsRoot)}\n`);
   chmodSync(hook, 0o755);
-  return true;
+  return { status: "installed", path: hook };
 }
 
 export function ensureGitignore(repoAbs: string): boolean {
@@ -55,6 +80,7 @@ export function runInit(dir: string): InitResult {
     );
   }
   const created: string[] = [];
+  const skipped: InitResult["skipped"] = [];
   const isWorkspace = !(repos.length === 1 && repos[0]!.path === ".");
   if (isWorkspace && !existsSync(join(root, WORKSPACE_FILE))) {
     const ws: WorkspaceFile = { version: 1, name: basename(root), repos, links: [] };
@@ -68,10 +94,15 @@ export function runInit(dir: string): InitResult {
       writeJsonAtomic(config, defaultRepoConfig());
       created.push(posix.join(repo.path, CODELOOM_DIR, FILES.config));
     }
-    if (installHook(repoAbs, root)) created.push(posix.join(repo.path, ".git/hooks/post-commit"));
+    const hook = installHook(repoAbs, root);
+    if (hook.status === "installed") {
+      const rel = relative(root, hook.path).split(sep).join("/");
+      created.push(rel.startsWith("..") || isAbsolute(rel) ? hook.path : rel);
+    }
+    if (hook.status === "skipped") skipped.push({ repo: repo.id, reason: hook.reason });
     if (ensureGitignore(repoAbs)) created.push(posix.join(repo.path, ".gitignore"));
   }
-  return { root, repos, created };
+  return { root, repos, created, skipped };
 }
 
 export function formatInit(r: InitResult): string {
@@ -79,6 +110,15 @@ export function formatInit(r: InitResult): string {
     `Found ${r.repos.length} repo${r.repos.length === 1 ? "" : "s"} in ${r.root}: ${r.repos.map((x) => x.id).join(", ")}`,
     r.created.length ? "Created or updated:" : "Already set up; nothing changed.",
     ...r.created.map((c) => `  ${c}`),
+    ...(r.skipped.length
+      ? [
+          "",
+          "Git hook not installed (the map won't update after each commit):",
+          ...r.skipped.map((s) => `  ${s.repo}: ${s.reason}`),
+          "  To auto-update, add this line to that repo's post-commit hook (a shell script):",
+          `    ${hookLine(r.root)}`,
+        ]
+      : []),
     "",
     'Next: run "codeloom index" to build the map.',
   ];

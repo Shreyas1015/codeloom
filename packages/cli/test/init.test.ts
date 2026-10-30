@@ -11,9 +11,9 @@ import {
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HOOK_MARK, installHook, runInit, shellQuote } from "../src/commands/init.js";
+import { formatInit, HOOK_MARK, installHook, runInit, shellQuote } from "../src/commands/init.js";
 import { CodeloomError } from "../src/errors.js";
 import { makeRepo } from "./helpers.js";
 
@@ -152,11 +152,61 @@ describe("post-commit hook safety", () => {
     expect(hookBody.split(HOOK_MARK).length - 1).toBe(1);
   });
 
-  it("returns false and does not throw for a worktree-style .git file", () => {
+  it("reports a broken .git file as skipped and does not throw", () => {
     const folder = mkdtempSync(join(tmpdir(), "codeloom-worktree-"));
     writeFileSync(join(folder, ".git"), "gitdir: /nonexistent\n");
 
     expect(() => installHook(folder, folder)).not.toThrow();
-    expect(installHook(folder, folder)).toBe(false);
+    expect(installHook(folder, folder)).toMatchObject({ status: "skipped", reason: expect.any(String) });
+  });
+});
+
+describe("hook placement", () => {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, stdio: "pipe", encoding: "utf8" });
+
+  it("writes the hook into core.hooksPath (e.g. husky)", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    git(repo, "config", "core.hooksPath", ".husky");
+    const res = runInit(repo);
+    expect(readFileSync(join(repo, ".husky/post-commit"), "utf8")).toContain(HOOK_MARK);
+    expect(existsSync(join(repo, ".git/hooks/post-commit"))).toBe(false);
+    expect(res.created).toContain(".husky/post-commit");
+    expect(res.skipped).toEqual([]);
+  });
+
+  it("leaves a non-shell post-commit hook untouched and reports it with the line to add", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    const hook = join(repo, ".git/hooks/post-commit");
+    mkdirSync(join(repo, ".git/hooks"), { recursive: true });
+    const body = "#!/usr/bin/env node\nconsole.log('hi');\n";
+    writeFileSync(hook, body);
+    const res = runInit(repo);
+    expect(readFileSync(hook, "utf8")).toBe(body);
+    expect(res.skipped).toEqual([{ repo: expect.any(String), reason: expect.stringContaining("not a shell script") }]);
+    const text = formatInit(res);
+    expect(text).toContain("codeloom index --quiet");
+    expect(text).toContain(res.skipped[0]!.reason);
+  });
+
+  it("appends to an empty post-commit hook with a shell shebang", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    mkdirSync(join(repo, ".git/hooks"), { recursive: true });
+    writeFileSync(join(repo, ".git/hooks/post-commit"), "");
+    runInit(repo);
+    const body = readFileSync(join(repo, ".git/hooks/post-commit"), "utf8");
+    expect(body.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(body).toContain(HOOK_MARK);
+  });
+
+  it("installs the hook in the shared hooks folder for a git worktree", () => {
+    const main = makeRepo({ "a.ts": "" });
+    const wt = join(mkdtempSync(join(tmpdir(), "codeloom-wt-")), "wt");
+    git(main, "worktree", "add", "-q", "-b", "feature", wt);
+    let res: ReturnType<typeof runInit> | undefined;
+    expect(() => { res = runInit(wt); }).not.toThrow();
+    const hooksDir = git(wt, "rev-parse", "--git-path", "hooks").trim();
+    expect(readFileSync(resolve(wt, hooksDir, "post-commit"), "utf8")).toContain(HOOK_MARK);
+    expect(res!.skipped).toEqual([]);
   });
 });
