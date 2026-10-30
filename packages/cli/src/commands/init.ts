@@ -9,6 +9,11 @@ import { discoverRepos } from "../workspace/repos.js";
 export const HOOK_MARK = "# codeloom: re-index after commit";
 const CACHE_IGNORE = `${CODELOOM_DIR}/${FILES.fingerprints}`;
 
+/** Quote a string as a single POSIX shell word, safe against shell expansion. */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 export interface InitResult {
   root: string;
   repos: RepoRef[];
@@ -25,7 +30,7 @@ export function installHook(repoAbs: string, wsRoot: string): boolean {
   if (existing.includes(HOOK_MARK)) return false;
   const block = [
     HOOK_MARK,
-    `if command -v codeloom >/dev/null 2>&1; then (cd ${JSON.stringify(wsRoot)} && codeloom index --quiet) >/dev/null 2>&1 & fi`,
+    `if command -v codeloom >/dev/null 2>&1; then (cd ${shellQuote(wsRoot)} && codeloom index --quiet) >/dev/null 2>&1 & fi`,
   ].join("\n");
   writeFileSync(hook, `${existing.trimEnd()}\n\n${block}\n`);
   chmodSync(hook, 0o755);

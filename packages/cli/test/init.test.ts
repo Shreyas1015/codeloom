@@ -1,10 +1,34 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HOOK_MARK, runInit } from "../src/commands/init.js";
+import { HOOK_MARK, installHook, runInit, shellQuote } from "../src/commands/init.js";
 import { CodeloomError } from "../src/errors.js";
 import { makeRepo } from "./helpers.js";
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Poll until `predicate()` is true or the timeout elapses. */
+function waitUntil(predicate: () => boolean, timeoutMs = 2000, intervalMs = 50): void {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    sleepSync(intervalMs);
+  }
+}
 
 describe("codeloom init", () => {
   it("sets up a folder of repos as a workspace", () => {
@@ -44,5 +68,95 @@ describe("codeloom init", () => {
     const empty = mkdtempSync(join(tmpdir(), "codeloom-empty-"));
     expect(() => runInit(empty)).toThrow(CodeloomError);
     expect(() => runInit(empty)).toThrow(/No git repos found/);
+  });
+});
+
+describe("shellQuote", () => {
+  it("quotes a path with a space", () => {
+    expect(shellQuote("/tmp/a b")).toBe("'/tmp/a b'");
+  });
+
+  it("escapes an embedded single quote", () => {
+    expect(shellQuote("/x/it's")).toBe("'/x/it'\\''s'");
+  });
+
+  it("keeps a command substitution literal inside single quotes", () => {
+    expect(shellQuote("/x/$(touch pwned)")).toBe("'/x/$(touch pwned)'");
+  });
+});
+
+/** Recursively find any file named `name` under `dir`. */
+function findFileNamed(dir: string, name: string): string[] {
+  const found: string[] = [];
+  const walk = (current: string) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === name) found.push(full);
+    }
+  };
+  walk(dir);
+  return found;
+}
+
+describe("post-commit hook safety", () => {
+  it("does not let a workspace path with shell metacharacters execute commands", () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "codeloom-hooksafety-"));
+    const parent = join(tmpRoot, "ws $(touch PWNED)");
+    mkdirSync(parent, { recursive: true });
+    const repo = makeRepo({ "a.ts": "" }, join(parent, "repo"));
+
+    const res = runInit(parent);
+    expect(res.repos.length).toBeGreaterThan(0);
+
+    const hookPath = join(repo, ".git/hooks/post-commit");
+    const hookBody = readFileSync(hookPath, "utf8");
+    expect(hookBody).toContain(shellQuote(parent));
+
+    const binDir = mkdtempSync(join(tmpdir(), "codeloom-fakebin-"));
+    const fakeCodeloom = join(binDir, "codeloom");
+    writeFileSync(fakeCodeloom, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeCodeloom, 0o755);
+
+    execFileSync("sh", [hookPath], {
+      cwd: repo,
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      stdio: "pipe",
+    });
+
+    // The hook backgrounds a subshell; give it a moment to (not) do damage.
+    waitUntil(() => false, 300);
+
+    expect(findFileNamed(tmpRoot, "PWNED")).toEqual([]);
+    expect(existsSync(join(repo, "PWNED"))).toBe(false);
+  });
+
+  it("preserves an existing post-commit hook's shebang and content", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    const hooksDir = join(repo, ".git/hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    const hookPath = join(hooksDir, "post-commit");
+    writeFileSync(hookPath, "#!/bin/bash\necho custom\n");
+
+    runInit(repo);
+
+    const hookBody = readFileSync(hookPath, "utf8");
+    expect(hookBody.startsWith("#!/bin/bash")).toBe(true);
+    expect(hookBody).toContain("echo custom");
+    expect(hookBody.split(HOOK_MARK).length - 1).toBe(1);
+  });
+
+  it("returns false and does not throw for a worktree-style .git file", () => {
+    const folder = mkdtempSync(join(tmpdir(), "codeloom-worktree-"));
+    writeFileSync(join(folder, ".git"), "gitdir: /nonexistent\n");
+
+    expect(() => installHook(folder, folder)).not.toThrow();
+    expect(installHook(folder, folder)).toBe(false);
   });
 });
