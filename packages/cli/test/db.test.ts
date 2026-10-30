@@ -86,6 +86,37 @@ describe("detectDb", () => {
   it("ignores repos without a DB library", () => {
     expect(access("src/x.ts", `const r = Customer.create({});`)).toEqual([]);
   });
+
+  it("does not scan plain strings as SQL", () => {
+    expect(access("src/labels.ts", `
+      export const label = "Select an option from the list";
+      toast("Delete from favorites to continue");
+    `, "pg")).toEqual([]);
+  });
+
+  it("reads SQL from tagged templates", () => {
+    expect(access("src/q.ts", `export const q = () => sql\`SELECT id FROM orders\`;`, "pg")).toEqual([
+      "read orders via sql @q",
+    ]);
+  });
+
+  it("requires a real Lucid models path, not any /model/ match", () => {
+    expect(access("src/utils.ts", `
+      import helpers from "./modeling-utils";
+      export const f = () => helpers.create({});
+    `, "@adonisjs/lucid")).toEqual([]);
+    expect(access("src/g.ts", `
+      import User from "App/Models/User";
+      export const g = () => User.find(1);
+    `, "@adonisjs/lucid")).toEqual(["read model:User via lucid @g"]);
+  });
+
+  it("requires a DB-like receiver for Drizzle insert/update/delete and from()", () => {
+    expect(access("src/cache.ts", `export const put = (item: any) => cache.insert(item);`, "drizzle-orm")).toEqual([]);
+    expect(access("src/tx.ts", `export const add = () => tx.insert(orders).values({});`, "drizzle-orm")).toEqual([
+      "insert model:orders via drizzle @add",
+    ]);
+  });
 });
 
 describe("sqlTables", () => {

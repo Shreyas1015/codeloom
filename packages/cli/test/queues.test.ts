@@ -22,4 +22,10 @@ describe("detectQueues", () => {
   it("needs a RabbitMQ dependency", () => {
     expect(ops(`channel.sendToQueue("x", b);`, "express")).toEqual([]);
   });
+
+  it("records a fanout publish with an empty routing key as the exchange name", () => {
+    expect(ops(`
+      export function fan(channel: any) { channel.publish("logs", "", Buffer.from("")); }
+    `, "amqplib")).toEqual(["publish logs @fan"]);
+  });
 });

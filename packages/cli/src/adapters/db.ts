@@ -1,12 +1,15 @@
 import ts from "typescript";
 import type { DbAccess, DbOp, ModelDef, TableDef } from "../store/schemas.js";
-import { enclosingSymbol, lineOf, prop, rootName, snakePlural, stringValue, walk } from "./ast.js";
+import { enclosingSymbol, lastName, lineOf, prop, rootName, snakePlural, stringValue, walk } from "./ast.js";
 import type { AdapterContext, EndpointsPart, ParsedFile } from "./types.js";
 
 type DbPart = Pick<EndpointsPart, "dbAccess" | "tables" | "models">;
 
 const DB_DEPS = ["@adonisjs/lucid", "knex", "@prisma/client", "drizzle-orm", "typeorm", "pg", "mysql2", "better-sqlite3", "postgres", "sqlite3"];
 const QB_ROOTS = /^(db|knex|trx|database|Database|connection|query|qb|sql|tx)$/;
+const DRIZZLE_ROOTS = /^(db|tx|trx|database|client|conn|connection)$/;
+const SQL_CALL_RE = /^(query|execute|raw|unsafe|prepare|exec|queryRaw|executeRaw|\$queryRaw|\$executeRaw|\$queryRawUnsafe|\$executeRawUnsafe|rawQuery)$/;
+const SQL_TAG_RE = /^(sql|raw|\$queryRaw|\$executeRaw)$/;
 const MODEL_STATIC: Record<string, DbOp> = {
   create: "insert", createMany: "insert", firstOrCreate: "insert", fetchOrCreateMany: "insert",
   updateOrCreate: "update", updateOrCreateMany: "update",
@@ -55,14 +58,19 @@ function opFromChain(call: ts.CallExpression): DbOp {
   return "read";
 }
 
-function importedFrom(sf: ts.SourceFile, re: RegExp): Set<string> {
+function isLucidModelSpecifier(spec: string): boolean {
+  return spec.startsWith("#models/") || spec.startsWith("App/Models/") || /\/models\//.test(spec);
+}
+
+/** Local names imported from a real Lucid models path (not any path with "model" in it). */
+function lucidModelImports(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !re.test(st.moduleSpecifier.text)) continue;
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !isLucidModelSpecifier(st.moduleSpecifier.text)) continue;
     const clause = st.importClause;
-    if (clause?.name) names.add(clause.name.text);
+    if (clause?.name && /^[A-Z]/.test(clause.name.text)) names.add(clause.name.text);
     if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-      for (const el of clause.namedBindings.elements) names.add(el.name.text);
+      for (const el of clause.namedBindings.elements) if (/^[A-Z]/.test(el.name.text)) names.add(el.name.text);
     }
   }
   return names;
@@ -130,7 +138,7 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
   if (file.rel.endsWith(".sql")) return sqlFile(file);
   const res: DbPart = { dbAccess: [], tables: [], models: [] };
   if (!file.sf || !DB_DEPS.some((d) => ctx.deps.has(d))) return res;
-  const modelImports = importedFrom(file.sf, /model/i);
+  const modelImports = ctx.deps.has("@adonisjs/lucid") ? lucidModelImports(file.sf) : new Set<string>();
   const drizzle = ctx.deps.has("drizzle-orm");
   const at = (n: ts.Node) => ({ file: file.rel, line: lineOf(n), symbol: enclosingSymbol(n) });
   const push = (a: DbAccess) => res.dbAccess.push(a);
@@ -140,13 +148,19 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       const m = modelClass(node, file.rel);
       if (m) res.models.push(m);
     }
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
-      const text = ts.isTemplateExpression(node) ? node.getText().slice(1, -1) : node.text;
+    if (ts.isTaggedTemplateExpression(node) && SQL_TAG_RE.test(lastName(node.tag))) {
+      const tpl = node.template;
+      const text = ts.isTemplateExpression(tpl) ? tpl.getText().slice(1, -1) : tpl.text;
       for (const t of sqlTables(text)) push({ table: t.table, op: t.op, via: "sql", at: at(node) });
     }
     if (!ts.isCallExpression(node)) return;
     const e = node.expression;
     const arg0 = node.arguments[0];
+
+    if (arg0 && (ts.isStringLiteral(arg0) || ts.isNoSubstitutionTemplateLiteral(arg0) || ts.isTemplateExpression(arg0)) && SQL_CALL_RE.test(lastName(e))) {
+      const text = ts.isTemplateExpression(arg0) ? arg0.getText().slice(1, -1) : arg0.text;
+      for (const t of sqlTables(text)) push({ table: t.table, op: t.op, via: "sql", at: at(node) });
+    }
 
     if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && modelImports.has(e.expression.text) && MODEL_STATIC[e.name.text]) {
       const op = e.name.text === "query" ? opFromChain(node) : MODEL_STATIC[e.name.text]!;
@@ -162,7 +176,7 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       if (model && ts.isIdentifier(model)) push({ model: model.text, op: REPO_OPS[e.name.text]!, via: "typeorm", at: at(node) });
       return;
     }
-    if (drizzle && ts.isPropertyAccessExpression(e) && ["insert", "update", "delete"].includes(e.name.text) && arg0 && ts.isIdentifier(arg0)) {
+    if (drizzle && ts.isPropertyAccessExpression(e) && ["insert", "update", "delete"].includes(e.name.text) && arg0 && ts.isIdentifier(arg0) && DRIZZLE_ROOTS.test(rootName(e.expression))) {
       push({ model: arg0.text, op: e.name.text as DbOp, via: "drizzle", at: at(node) });
       return;
     }
@@ -172,7 +186,7 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
         push({ table, op: opFromChain(node), via: "query-builder", at: at(node) });
         return;
       }
-      if (!table && drizzle && ts.isIdentifier(arg0)) {
+      if (!table && drizzle && ts.isIdentifier(arg0) && DRIZZLE_ROOTS.test(rootName(e.expression))) {
         push({ model: arg0.text, op: "read", via: "drizzle", at: at(node) });
         return;
       }

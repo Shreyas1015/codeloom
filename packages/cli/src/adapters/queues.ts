@@ -22,7 +22,10 @@ export function detectQueues(file: ParsedFile, ctx: AdapterContext): QueueOp[] {
       case "publish": {
         const exchange = stringValue(a0);
         const key = stringValue(a1);
-        if (exchange !== undefined && key) out.push({ queue: exchange ? `${exchange}:${key}` : key, op: "publish", at });
+        if (exchange === undefined || key === undefined) break;
+        // Fanout exchanges publish with an empty routing key; fall back to the exchange name.
+        const queue = exchange && key ? `${exchange}:${key}` : exchange || key;
+        if (queue) out.push({ queue, op: "publish", at });
         break;
       }
       case "consume": {
