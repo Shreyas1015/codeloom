@@ -39,7 +39,7 @@ describe("detectRoutes", () => {
   });
 
   it("reads Fastify route objects", () => {
-    expect(show("src/app.ts", `fastify.route({ method: "PATCH", url: "/orders/:id", handler: updateOrder });`, "fastify"))
+    expect(show("src/app.ts", `import Fastify from "fastify";\nfastify.route({ method: "PATCH", url: "/orders/:id", handler: updateOrder });`, "fastify"))
       .toEqual(["PATCH /orders/:id -> updateOrder [fastify]"]);
   });
 
@@ -65,6 +65,28 @@ describe("detectRoutes", () => {
 
   it("finds nothing in repos without a backend framework", () => {
     expect(show("src/x.ts", `router.get("/a", h);`, "react")).toEqual([]);
+  });
+
+  it("ignores generic router names in a frontend file with no backend import, even in a repo with express elsewhere", () => {
+    expect(show("src/components/nav.ts", `
+      const r = useRouter();
+      r.get("/settings", go);
+      app.post("/x", y);
+    `, "express")).toEqual([]);
+  });
+
+  it("treats generic router names as routers in a file that imports express", () => {
+    expect(show("src/routes/users.ts", `
+      import { Router } from "express";
+      export default function mount(router: Router) { router.get("/users", list); }
+    `, "express")).toEqual(["GET /users -> list [express]"]);
+  });
+
+  it("treats Route as a router in an Adonis v5 file importing @ioc:Adonis/Core/Route", () => {
+    expect(show("start/routes.ts", `
+      import Route from "@ioc:Adonis/Core/Route";
+      Route.get("/health", "HealthController.index");
+    `, "@adonisjs/core")).toEqual(["GET /health -> HealthController.index [adonis]"]);
   });
 
   it("turns Adonis string handlers into Class.method", () => {

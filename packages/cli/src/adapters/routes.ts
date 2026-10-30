@@ -11,6 +11,39 @@ const ROUTER_FACTORIES = /^(express|express\.Router|Router|fastify|Fastify)$/;
 const BACKEND_DEPS = ["@adonisjs/core", "express", "fastify", "@nestjs/core", "next"];
 type Framework = Route["framework"];
 
+function isBackendModule(spec: string): boolean {
+  return (
+    spec === "express" ||
+    spec === "fastify" ||
+    spec === "koa" ||
+    spec.startsWith("@adonisjs/") ||
+    spec.startsWith("@ioc:Adonis/") ||
+    spec.startsWith("@nestjs/")
+  );
+}
+
+/** True when the file itself imports/requires a backend framework module, proving ROUTER_NAMES's
+ * generic names (e.g. "router", "app") refer to a real router here rather than an unrelated object. */
+function hasBackendImport(sf: ts.SourceFile): boolean {
+  let found = false;
+  walk(sf, (n) => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+      if (isBackendModule(n.moduleSpecifier.text)) found = true;
+    } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference) && ts.isStringLiteral(n.moduleReference.expression)) {
+      if (isBackendModule(n.moduleReference.expression.text)) found = true;
+    } else if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === "require" &&
+      n.arguments[0] &&
+      ts.isStringLiteral(n.arguments[0])
+    ) {
+      if (isBackendModule(n.arguments[0].text)) found = true;
+    }
+  });
+  return found;
+}
+
 export function adonisStringHandler(s: string): string {
   const last = s.split("/").pop()!;
   const dot = last.lastIndexOf(".");
@@ -181,7 +214,7 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): Route[] {
     if (next) return next;
   }
   if (!file.sf) return [];
-  const routers = new Set(ROUTER_NAMES);
+  const routers = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
   walk(file.sf, (n) => {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer) && ROUTER_FACTORIES.test(n.initializer.expression.getText())) {
       routers.add(n.name.text);
