@@ -1,6 +1,10 @@
 import type ts from "typescript";
 import type { DbAccess, HttpCall, ModelDef, QueueOp, Route, TableDef, UiPage } from "../store/schemas.js";
 
+/** A route as an adapter sees it: `handlerImport` is the raw module specifier of an imported
+ * handler, resolved to `handlerFile` by the indexer (which knows every file and alias) and then dropped. */
+export type RouteDraft = Route & { handlerImport?: string };
+
 export interface ParsedFile {
   rel: string;
   content: string;
@@ -32,7 +36,7 @@ export function packageRelative(rel: string, ctx: AdapterContext): string | unde
 export interface EndpointsPart {
   pages: UiPage[];
   httpCalls: HttpCall[];
-  routes: Route[];
+  routes: RouteDraft[];
   dbAccess: DbAccess[];
   tables: TableDef[];
   models: ModelDef[];

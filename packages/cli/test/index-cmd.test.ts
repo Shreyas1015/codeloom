@@ -56,6 +56,20 @@ describe("codeloom index on demo-shop", () => {
     ]));
   });
 
+  it("locates route handlers in their files", async () => {
+    const result = await runIndex(workspace());
+    const routes = Object.fromEntries(result.repos.map((r) => [r.id, r.endpoints.routes]));
+    const store = routes.api!.find((r) => r.handler === "CustomersController.store")!;
+    expect(store.handlerFile).toBe("app/controllers/customers_controller.ts");
+    expect(routes.api!.find((r) => r.handler === "CustomersController.show")!.handlerFile).toBe("app/controllers/customers_controller.ts");
+    const invoice = routes.billing!.find((r) => r.handler === "createInvoice")!;
+    expect(invoice.handlerFile).toBe("src/invoices.ts");
+    expect(invoice.handlerLines).toBeUndefined();
+    const health = routes.billing!.find((r) => r.path === "/health")!;
+    expect(health).toMatchObject({ inline: true, handlerFile: "src/server.ts", handlerLines: [9, 11] });
+    for (const r of [...routes.api!, ...routes.billing!]) expect(r).not.toHaveProperty("handlerImport");
+  });
+
   it("prints a readable summary", async () => {
     const text = formatIndexSummary(await runIndex(workspace()));
     expect(text).toContain("api");

@@ -69,6 +69,44 @@ describe("detectRoutes", () => {
     expect(at("apps/web/lib/app/api/route.ts")).toEqual([]);
   });
 
+  it("records where handlers live: inline lines, same-file functions, and import specifiers", () => {
+    const routes = detectRoutes(parsed("src/server.ts", `import express from "express";
+import { createInvoice } from "./invoices";
+import * as orders from "./orders";
+const app = express();
+function listInvoices(req, res) {}
+app.post("/invoices", createInvoice);
+app.get("/invoices", listInvoices);
+app.get("/orders/:id", orders.show);
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+app.get("/wrapped", wrap(createInvoice));`), ctxWith("express"));
+    expect(routes.map((r) => [r.path, r.handlerFile, r.handlerLines, r.handlerImport])).toEqual([
+      ["/invoices", undefined, undefined, "./invoices"],
+      ["/invoices", "src/server.ts", undefined, undefined],
+      ["/orders/:id", undefined, undefined, "./orders"],
+      ["/health", "src/server.ts", [9, 11], undefined],
+      ["/wrapped", undefined, undefined, "./invoices"],
+    ]);
+  });
+
+  it("records Adonis controller import specifiers (lazy, static and string handlers)", () => {
+    const routes = detectRoutes(parsed("start/routes.ts", `import router from "@adonisjs/core/services/router";
+import UsersController from "#controllers/users_controller";
+const CustomersController = () => import("#controllers/customers_controller");
+router.post("/customers", [CustomersController, "store"]);
+router.get("/users", [UsersController, "index"]);
+router.get("/health", "#controllers/health_checks_controller.index");
+router.get("/legacy", "LegacyController.index");`), ctxWith("@adonisjs/core"));
+    expect(routes.map((r) => [r.path, r.handlerImport])).toEqual([
+      ["/customers", "#controllers/customers_controller"],
+      ["/users", "#controllers/users_controller"],
+      ["/health", "#controllers/health_checks_controller"],
+      ["/legacy", undefined],
+    ]);
+  });
+
   it("finds nothing in repos without a backend framework", () => {
     expect(show("src/x.ts", `router.get("/a", h);`, "react")).toEqual([]);
   });

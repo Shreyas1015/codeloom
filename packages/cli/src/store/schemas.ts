@@ -36,6 +36,10 @@ export const RouteSchema = z.object({
   inline: z.boolean(),
   framework: z.enum(["adonis", "express", "fastify", "nest", "next-api"]),
   at: LocSchema,
+  /** Repo-relative file holding the handler's code, when codeloom could find it. */
+  handlerFile: z.string().optional(),
+  /** First and last line of the handler function, for inline handlers (and Nest methods). */
+  handlerLines: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
 });
 export type Route = z.infer<typeof RouteSchema>;
 

@@ -33,6 +33,13 @@ function className(cls: ts.ClassLikeDeclaration): string {
   return cls.name?.text ?? "<anonymous>";
 }
 
+/** `const name = { ... }` → "name", for an object literal directly assigned to a variable. */
+function objectVarName(obj: ts.Node): string | undefined {
+  if (!ts.isObjectLiteralExpression(obj)) return undefined;
+  const p = obj.parent;
+  return p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name) ? p.name.text : undefined;
+}
+
 export function enclosingSymbol(node: ts.Node): string {
   let cur: ts.Node | undefined = node.parent;
   while (cur) {
@@ -40,10 +47,14 @@ export function enclosingSymbol(node: ts.Node): string {
     if ((ts.isMethodDeclaration(cur) || ts.isGetAccessor(cur) || ts.isSetAccessor(cur)) && ts.isClassLike(cur.parent)) {
       return `${className(cur.parent)}.${memberName(cur.name)}`;
     }
+    if ((ts.isMethodDeclaration(cur) || ts.isGetAccessor(cur) || ts.isSetAccessor(cur)) && objectVarName(cur.parent)) {
+      return `${objectVarName(cur.parent)}.${memberName(cur.name)}`;
+    }
     if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && cur.parent) {
       const p = cur.parent;
       if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
       if (ts.isPropertyDeclaration(p) && ts.isClassLike(p.parent)) return `${className(p.parent)}.${memberName(p.name)}`;
+      if (ts.isPropertyAssignment(p) && objectVarName(p.parent)) return `${objectVarName(p.parent)}.${memberName(p.name)}`;
       if (ts.isFunctionExpression(cur) && cur.name) return cur.name.text;
     }
     cur = cur.parent;

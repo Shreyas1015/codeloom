@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpMethod, Route } from "../store/schemas.js";
 import { enclosingSymbol, fileRoute, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
-import { type AdapterContext, packageRelative, type ParsedFile } from "./types.js";
+import { type AdapterContext, packageRelative, type ParsedFile, type RouteDraft } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE", any: "ANY", all: "ANY",
@@ -59,17 +59,90 @@ function frameworkOf(ctx: AdapterContext): Framework {
   return "express";
 }
 
-function handlerOf(h: ts.Expression | undefined, label: string): { handler: string; inline: boolean } {
-  if (!h || ts.isArrowFunction(h) || ts.isFunctionExpression(h)) return { handler: label, inline: true };
+type HandlerInfo = Pick<RouteDraft, "handler" | "inline" | "handlerFile" | "handlerLines" | "handlerImport">;
+type HandlerLoc = Pick<RouteDraft, "handlerFile" | "handlerImport">;
+
+function linesOf(node: ts.Node): [number, number] {
+  const sf = node.getSourceFile();
+  return [lineOf(node), sf.getLineAndCharacterOfPosition(node.getEnd()).line + 1];
+}
+
+/** `() => import("x")` (Adonis lazy controller) → "x". */
+function lazyImportSpec(expr: ts.Expression): string | undefined {
+  if (!ts.isArrowFunction(expr) && !ts.isFunctionExpression(expr)) return undefined;
+  let body: ts.Node = expr.body;
+  while (ts.isParenthesizedExpression(body)) body = body.expression;
+  if (ts.isCallExpression(body) && body.expression.kind === ts.SyntaxKind.ImportKeyword) return stringValue(body.arguments[0]);
+  return undefined;
+}
+
+/** Where the top-level binding `name` comes from: an import specifier, or this file. */
+function locateName(sf: ts.SourceFile, name: string): HandlerLoc {
+  for (const st of sf.statements) {
+    if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
+      const c = st.importClause;
+      const b = c?.namedBindings;
+      const named = b && ts.isNamedImports(b) && b.elements.some((el) => el.name.text === name);
+      const ns = b && ts.isNamespaceImport(b) && b.name.text === name;
+      if (c?.name?.text === name || named || ns) return { handlerImport: st.moduleSpecifier.text };
+    }
+    if (ts.isImportEqualsDeclaration(st) && st.name.text === name && ts.isExternalModuleReference(st.moduleReference)) {
+      const spec = stringValue(st.moduleReference.expression);
+      return spec ? { handlerImport: spec } : {};
+    }
+    if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name?.text === name) return { handlerFile: sf.fileName };
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || d.name.text !== name || !d.initializer) continue;
+        const lazy = lazyImportSpec(d.initializer);
+        if (lazy) return { handlerImport: lazy };
+        const init = d.initializer;
+        if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "require") {
+          const spec = stringValue(init.arguments[0]);
+          return spec ? { handlerImport: spec } : {};
+        }
+        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init) || ts.isClassExpression(init)) return { handlerFile: sf.fileName };
+        return {};
+      }
+    }
+  }
+  return {};
+}
+
+/** Leftmost identifier of `a.b.c` (undefined for `this.x` and other shapes). */
+function rootIdentifier(expr: ts.Expression): string | undefined {
+  let cur = expr;
+  while (ts.isPropertyAccessExpression(cur)) cur = cur.expression;
+  return ts.isIdentifier(cur) ? cur.text : undefined;
+}
+
+/** `"#controllers/users_controller.index"` → `"#controllers/users_controller"`; no path → undefined. */
+function stringHandlerSpec(s: string): string | undefined {
+  const slash = s.lastIndexOf("/");
+  if (slash < 0) return undefined;
+  const dot = s.indexOf(".", slash);
+  return dot >= 0 ? s.slice(0, dot) : s;
+}
+
+function handlerOf(h: ts.Expression | undefined, label: string, sf: ts.SourceFile): HandlerInfo {
+  if (!h) return { handler: label, inline: true };
+  if (ts.isArrowFunction(h) || ts.isFunctionExpression(h)) {
+    return { handler: label, inline: true, handlerFile: sf.fileName, handlerLines: linesOf(h) };
+  }
   if (ts.isArrayLiteralExpression(h)) {
     const [cls, method] = h.elements;
     const name = cls ? (ts.isIdentifier(cls) ? cls.text : cls.getText()) : "<unknown>";
-    return { handler: `${name}.${stringValue(method) ?? "handle"}`, inline: false };
+    const loc = cls && ts.isIdentifier(cls) ? locateName(sf, cls.text) : {};
+    return { handler: `${name}.${stringValue(method) ?? "handle"}`, inline: false, ...loc };
   }
   const s = stringValue(h);
-  if (s !== undefined) return { handler: adonisStringHandler(s), inline: false };
-  if (ts.isCallExpression(h)) return handlerOf(h.arguments[h.arguments.length - 1], label);
-  return { handler: h.getText(), inline: false };
+  if (s !== undefined) {
+    const spec = stringHandlerSpec(s);
+    return { handler: adonisStringHandler(s), inline: false, ...(spec ? { handlerImport: spec } : {}) };
+  }
+  if (ts.isCallExpression(h)) return handlerOf(h.arguments[h.arguments.length - 1], label, sf);
+  const root = rootIdentifier(h);
+  return { handler: h.getText(), inline: false, ...(root ? locateName(sf, root) : {}) };
 }
 
 function groupPrefix(node: ts.Node): string {
@@ -97,7 +170,7 @@ function groupPrefix(node: ts.Node): string {
   return prefixes.join("/");
 }
 
-function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedFile, framework: Framework): Route | undefined {
+function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedFile, framework: Framework): RouteDraft | undefined {
   if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
   const name = node.expression.name.text;
   const recv = node.expression.expression;
@@ -110,7 +183,7 @@ function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedF
     const p = url && pathPattern(url);
     if (!m || !p) return undefined;
     const method = ROUTE_METHODS[m.toLowerCase()] ?? "ANY";
-    return { method, path: p.path, ...handlerOf(prop(o, "handler"), `${method} ${p.path}`), framework: "fastify", at };
+    return { method, path: p.path, ...handlerOf(prop(o, "handler"), `${method} ${p.path}`, file.sf!), framework: "fastify", at };
   }
 
   const method = ROUTE_METHODS[name];
@@ -134,7 +207,7 @@ function routerCall(node: ts.CallExpression, routers: Set<string>, file: ParsedF
   return {
     method,
     path: full,
-    ...handlerOf(node.arguments[node.arguments.length - 1], `${method} ${full}`),
+    ...handlerOf(node.arguments[node.arguments.length - 1], `${method} ${full}`, file.sf!),
     framework,
     at,
   };
@@ -172,6 +245,8 @@ function nestRoutes(cls: ts.ClassDeclaration, file: ParsedFile): Route[] {
       inline: false,
       framework: "nest",
       at: { file: file.rel, line: lineOf(member), symbol: handler },
+      handlerFile: file.rel,
+      handlerLines: linesOf(member),
     });
   }
   return out;
@@ -194,7 +269,7 @@ function nextApiRoutes(file: ParsedFile, ctx: AdapterContext): Route[] | undefin
       }
       for (const n of names) {
         if (["GET", "POST", "PUT", "PATCH", "DELETE"].includes(n)) {
-          out.push({ method: n as HttpMethod, path, handler: n, inline: false, framework: "next-api", at: { file: file.rel, line: lineOf(st), symbol: n } });
+          out.push({ method: n as HttpMethod, path, handler: n, inline: false, framework: "next-api", at: { file: file.rel, line: lineOf(st), symbol: n }, handlerFile: file.rel });
         }
       }
     }
@@ -204,12 +279,12 @@ function nextApiRoutes(file: ParsedFile, ctx: AdapterContext): Route[] | undefin
   if (pages) {
     const segs = pages[1]!.split("/");
     if (segs[segs.length - 1] === "index") segs.pop();
-    return [{ method: "ANY", path: fileRoute(["api", ...segs]), handler: "default", inline: false, framework: "next-api", at: { file: file.rel, line: 1, symbol: "default" } }];
+    return [{ method: "ANY", path: fileRoute(["api", ...segs]), handler: "default", inline: false, framework: "next-api", at: { file: file.rel, line: 1, symbol: "default" }, handlerFile: file.rel }];
   }
   return undefined;
 }
 
-export function detectRoutes(file: ParsedFile, ctx: AdapterContext): Route[] {
+export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[] {
   if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
   if (ctx.deps.has("next")) {
     const next = nextApiRoutes(file, ctx);
@@ -223,7 +298,7 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): Route[] {
     }
   });
   const framework = frameworkOf(ctx);
-  const out: Route[] = [];
+  const out: RouteDraft[] = [];
   walk(file.sf, (node) => {
     if (ts.isCallExpression(node)) {
       const route = routerCall(node, routers, file, framework);

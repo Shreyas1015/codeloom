@@ -13,14 +13,14 @@ import {
 import { listFiles } from "../workspace/files.js";
 import { gitHead } from "../workspace/repos.js";
 import { buildGraph } from "./build-graph.js";
-import { loadAliases } from "./resolve-imports.js";
+import { loadAliases, resolveImport } from "./resolve-imports.js";
 import { analyzeStructure, EMPTY_STRUCTURE, type FileEntry, getPlugin, isSourceFile } from "./structure.js";
 
 const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 2;
+export const CACHE_FORMAT = 3;
 
 let cachedCodeloomVersion: string | undefined;
 
@@ -134,12 +134,14 @@ export async function indexRepo(
   }
 
   const head = gitHead(repoAbs);
-  const graph = buildGraph(repoId, head, entries, loadAliases(repoAbs, files));
+  const aliases = loadAliases(repoAbs, files);
+  const fileSet = new Set(files);
+  const graph = buildGraph(repoId, head, entries, aliases);
   // graph.json and endpoints.json are committed: keep them a pure function of the code, so
   // re-indexing unchanged code leaves git clean. Time and commit go to the git-ignored cache.
   graph.project.analyzedAt = "";
   graph.project.gitCommitHash = "";
-  const endpoints = finalizeEndpoints(repoId, parts);
+  const endpoints = finalizeEndpoints(repoId, parts, (from, spec) => resolveImport(from, spec, fileSet, aliases));
   writeJsonIfChanged(join(dir, FILES.graph), graph);
   writeJsonIfChanged(join(dir, FILES.endpoints), endpoints);
   writeJsonAtomic(cachePath, {

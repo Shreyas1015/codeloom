@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import type { EndpointsFile, TableDef } from "../store/schemas.js";
+import type { EndpointsFile, Route, TableDef } from "../store/schemas.js";
 import { JS_EXT, parseSource } from "./ast.js";
 import { detectDb } from "./db.js";
 import { detectHttpCalls } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectRoutes } from "./routes.js";
-import { type AdapterContext, type EndpointsPart, emptyPart, type ParsedFile, type RepoContext } from "./types.js";
+import { type AdapterContext, type EndpointsPart, emptyPart, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
   const deps = new Set<string>();
@@ -68,10 +68,24 @@ export function runAdapters(rel: string, content: string, ctx: AdapterContext): 
   return part;
 }
 
+/** Turn a draft route's handlerImport into handlerFile, and drop the internal field. Never mutates
+ * the draft (drafts are cached and must keep their specifier for later runs). */
+function resolveHandler(draft: RouteDraft, resolve?: ImportResolver): Route {
+  const { handlerImport, ...route } = draft;
+  if (handlerImport && !route.handlerFile && resolve) {
+    const file = resolve(route.at.file, handlerImport);
+    if (file) route.handlerFile = file;
+  }
+  return route;
+}
+
 const byLoc = <T extends { at: { file: string; line: number } }>(a: T, b: T) =>
   a.at.file.localeCompare(b.at.file) || a.at.line - b.at.line;
 
-export function finalizeEndpoints(repo: string, parts: EndpointsPart[]): EndpointsFile {
+/** Resolves a module specifier written in `fromRel` to a repo file (null when it is not in the repo). */
+export type ImportResolver = (fromRel: string, specifier: string) => string | null;
+
+export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveImport?: ImportResolver): EndpointsFile {
   const all = emptyPart();
   for (const p of parts) {
     for (const key of Object.keys(all) as Array<keyof EndpointsPart>) {
@@ -101,7 +115,7 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[]): Endpoin
     repo,
     pages: all.pages.sort((a, b) => a.route.localeCompare(b.route) || a.file.localeCompare(b.file)),
     httpCalls: all.httpCalls.sort(byLoc),
-    routes: all.routes.sort(byLoc),
+    routes: all.routes.map((r) => resolveHandler(r, resolveImport)).sort(byLoc),
     dbAccess: dbAccess.sort(byLoc),
     tables: [...tables.values()].sort((a, b) => a.name.localeCompare(b.name)),
     models: all.models.sort((a, b) => a.model.localeCompare(b.model)),

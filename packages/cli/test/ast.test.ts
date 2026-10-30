@@ -33,6 +33,18 @@ describe("enclosingSymbol", () => {
     walk(sf, (n) => { if (ts.isCallExpression(n) && /fetch|from/.test(n.expression.getText())) symbols.push(enclosingSymbol(n)); });
     expect(symbols).toEqual(["useThing", "CustomerService.create", "getCustomer", "<module>"]);
   });
+
+  it("names methods and arrow properties of an object literal assigned to a variable", () => {
+    const sf = parseSource("x.ts", `
+      export const orderService = {
+        async create(data) { return db.from("orders"); },
+        find: async (id) => db.from("orders"),
+        remove: function (id) { return db.from("orders"); },
+      };`);
+    const symbols: string[] = [];
+    walk(sf, (n) => { if (ts.isCallExpression(n) && /from/.test(n.expression.getText())) symbols.push(enclosingSymbol(n)); });
+    expect(symbols).toEqual(["orderService.create", "orderService.find", "orderService.remove"]);
+  });
 });
 
 describe("helpers", () => {

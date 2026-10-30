@@ -24,6 +24,18 @@ describe("detectDb", () => {
     ]);
   });
 
+  it("names DB access inside an object-literal service by variable.method", () => {
+    expect(access("src/order_service.ts", `
+      export const orderService = {
+        async create(data: any) { return prisma.order.create({ data }); },
+        list: () => prisma.order.findMany(),
+      };
+    `, "@prisma/client")).toEqual([
+      "insert model:order via prisma @orderService.create",
+      "read model:order via prisma @orderService.list",
+    ]);
+  });
+
   it("reads Prisma client calls", () => {
     expect(access("src/invoices.ts", `
       const prisma = new PrismaClient();
