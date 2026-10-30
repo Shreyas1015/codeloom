@@ -1,16 +1,12 @@
-import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import ignore from "ignore";
 import { createIgnoreFilter } from "@codeloom/core";
 import { CODELOOM_DIR } from "../store/paths.js";
+import { git } from "./git.js";
 
 export function listFiles(repoAbs: string, extraIgnore: string[] = []): string[] {
-  const out = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-    cwd: repoAbs,
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-  });
+  const out = git(repoAbs, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { maxBuffer: 256 * 1024 * 1024 });
   const defaults = createIgnoreFilter(repoAbs);
   const extra = ignore().add([`${CODELOOM_DIR}/`, ...extraIgnore]);
   const isFile = (rel: string) => {

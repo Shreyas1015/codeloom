@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { defaultRepoConfig, type RepoRef, type WorkspaceFile } from "../store/schemas.js";
+import { git } from "../workspace/git.js";
 import { discoverRepos } from "../workspace/repos.js";
 
 export const HOOK_MARK = "# codeloom: re-index after commit";
@@ -35,8 +35,7 @@ export function hookLine(wsRoot: string): string {
 
 /** The repo's hooks folder as git sees it (handles worktrees and core.hooksPath, e.g. husky). */
 function hooksDir(repoAbs: string): string {
-  const out = execFileSync("git", ["rev-parse", "--git-path", "hooks"], { cwd: repoAbs, encoding: "utf8", stdio: "pipe" });
-  return resolve(repoAbs, out.trim());
+  return resolve(repoAbs, git(repoAbs, ["rev-parse", "--git-path", "hooks"]).trim());
 }
 
 const SHELL_SHEBANG = /^#!\s*(\S*\/)?(env\s+)?(sh|bash|zsh)(\s|$)/;
@@ -46,6 +45,7 @@ export function installHook(repoAbs: string, wsRoot: string): HookResult {
   try {
     dir = hooksDir(repoAbs);
   } catch (err) {
+    if (err instanceof CodeloomError) throw err;
     const msg = err instanceof Error ? (err.message.split("\n").find((l) => /fatal|error/i.test(l)) ?? err.message) : String(err);
     return { status: "skipped", reason: `could not find the git hooks folder (${msg.trim()})` };
   }
@@ -73,6 +73,7 @@ export function ensureGitignore(repoAbs: string): boolean {
 
 export function runInit(dir: string): InitResult {
   const root = resolve(dir);
+  if (!existsSync(root) || !statSync(root).isDirectory()) throw new CodeloomError(`Folder not found: ${root}`);
   const repos = discoverRepos(root);
   if (repos.length === 0) {
     throw new CodeloomError(

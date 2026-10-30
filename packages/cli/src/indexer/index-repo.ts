@@ -1,7 +1,8 @@
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
+import { CodeloomError } from "../errors.js";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
 import type { EndpointsPart } from "../adapters/types.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
@@ -44,6 +45,19 @@ function readCache(path: string): Fingerprints | null {
   }
 }
 
+function checkRepo(repoAbs: string, repoId: string): void {
+  if (!existsSync(repoAbs) || !statSync(repoAbs).isDirectory()) {
+    throw new CodeloomError(
+      `Repo "${repoId}" was not found at ${repoAbs}. Fix its path in codeloom.workspace.json, or run "codeloom init" again.`,
+    );
+  }
+  if (!existsSync(join(repoAbs, ".git"))) {
+    throw new CodeloomError(
+      `Repo "${repoId}" at ${repoAbs} is not a git repo. Run "git init" there, or run "codeloom init" in the right folder.`,
+    );
+  }
+}
+
 export interface IndexStats {
   files: number;
   parsed: number;
@@ -64,6 +78,7 @@ export async function indexRepo(
   repoId: string,
   opts?: { codeloomVersion?: string },
 ): Promise<IndexResult> {
+  checkRepo(repoAbs, repoId);
   const dir = join(repoAbs, CODELOOM_DIR);
   const config = readJson(join(dir, FILES.config), RepoConfigSchema) ?? defaultRepoConfig();
   const files = listFiles(repoAbs, config.ignore);
@@ -89,28 +104,29 @@ export async function indexRepo(
       continue;
     }
     const abs = join(repoAbs, rel);
-    const size = statSync(abs).size;
-    if (size > MAX_BYTES) {
-      stats.skipped.push({ file: rel, reason: `larger than 1 MB (${size} bytes)` });
-      empty(rel);
-      continue;
-    }
-    const content = readFileSync(abs, "utf8");
-    const hash = contentHash(content);
-    const hit = oldFiles[rel] as FileRecord | undefined;
     let record: FileRecord;
-    if (hit && hit.hash === hash) {
-      record = hit;
-      stats.reused++;
-    } else {
-      try {
-        record = { hash, ...analyzeStructure(plugin, rel, content), endpoints: runAdapters(rel, content, ctx) };
-        stats.parsed++;
-      } catch (err) {
-        stats.skipped.push({ file: rel, reason: err instanceof Error ? err.message : String(err) });
+    try {
+      // Read inside the try: a file deleted or unreadable mid-run is skipped, not fatal.
+      const size = statSync(abs).size;
+      if (size > MAX_BYTES) {
+        stats.skipped.push({ file: rel, reason: `larger than 1 MB (${size} bytes)` });
         empty(rel);
         continue;
       }
+      const content = readFileSync(abs, "utf8");
+      const hash = contentHash(content);
+      const hit = oldFiles[rel] as FileRecord | undefined;
+      if (hit && hit.hash === hash) {
+        record = hit;
+        stats.reused++;
+      } else {
+        record = { hash, ...analyzeStructure(plugin, rel, content), endpoints: runAdapters(rel, content, ctx) };
+        stats.parsed++;
+      }
+    } catch (err) {
+      stats.skipped.push({ file: rel, reason: err instanceof Error ? err.message : String(err) });
+      empty(rel);
+      continue;
     }
     next[rel] = record;
     entries.set(rel, { structure: record.structure, calls: record.calls });

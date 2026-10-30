@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
 import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
+import { git } from "./git.js";
 
 export function discoverRepos(root: string): RepoRef[] {
   const abs = resolve(root);
@@ -27,8 +27,9 @@ export function findWorkspaceRoot(start: string): string | null {
 
 function gitToplevel(start: string): string | null {
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8", stdio: "pipe" }).trim();
-  } catch {
+    return git(start, ["rev-parse", "--show-toplevel"]).trim();
+  } catch (err) {
+    if (err instanceof CodeloomError) throw err;
     return null;
   }
 }
@@ -50,7 +51,7 @@ export function loadWorkspace(start: string): { root: string; name: string; repo
 
 export function gitHead(repoAbs: string): string {
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoAbs, encoding: "utf8", stdio: "pipe" }).trim();
+    return git(repoAbs, ["rev-parse", "HEAD"]).trim();
   } catch {
     return "uncommitted";
   }
