@@ -323,6 +323,58 @@ Unparseable file → skipped and listed · unresolved hop → dashed with reason
 5. `codeloom dashboard` shows Home, Journey and Map matching the approved mockups, with empty, loading
    and not-indexed states.
 6. CI green; tarball installs and runs; UA notice included. **npm publish only after the author approves.**
+7. `codeloom check` prints the chain-health report on the fixture and on the author's workspace (§7a), and
+   the answer-key accuracy tests meet the targets in CI.
+
+---
+
+## 7a. Evaluating the map (added 2026-10-30, author-approved; built in Plan 2)
+
+How we know a chain is right, without AI.
+
+### 1. `codeloom check` — chain-health report (no answer key needed)
+
+| Check | Problem example | Where the chain breaks |
+|---|---|---|
+| Frontend calls matched to a route | `POST /api/customerz` has no backend route | UI → API |
+| Routes whose handler resolves to code | `CustomersController.store` not found in the graph | API → code |
+| Routes that reach a DB table or queue | `GET /reports` touches no table | code → DB |
+| URLs that could not be read | `fetch(url)` built at runtime | unresolved |
+| Routes no UI calls | `DELETE /customers/:id` | backend-only, or a missed call |
+
+- Summary line, e.g. "41 journeys: 33 complete UI → API → DB, 5 missing the DB step, 3 broken at UI → API".
+- Every item lists repo, file and line. `--json` for machines; exit code 0 always (it is a report, not a gate)
+  unless `--fail-under <percent>` is given.
+- MCP tool `check_chains` returns the same report; the dashboard draws the same items as dashed links.
+
+### 2. Accuracy against an answer key (CI)
+
+- Hand-written expected journeys (`fixtures/<name>/expected-journeys.json`) for the demo-shop fixture and
+  2–3 public open-source apps (vendored as fixtures at a pinned commit, licence-compatible).
+- Per hop type (UI→API, route→handler, handler→table/queue): precision and recall.
+- v0.1 targets: **precision ≥ 95%**, **recall ≥ 80%**. Wrong links are worse than missing ones (missing
+  links show honestly as dashed). CI fails when a target is missed.
+
+### 3. Confidence on every hop
+
+`exact` (same literal path), `param` (matched a `:param` template or after base-URL/mount-prefix
+normalisation), `guess` (suffix or fuzzy match). `guess` is drawn dashed and never presented as fact.
+
+### 4. Runtime check with OpenTelemetry — optional, only if available
+
+- If the user configures a trace source (`codeloom.workspace.json` → `traces: { kind: "tempo", url }` or
+  `{ kind: "otlp-file", path }`), `codeloom check --traces` reads recent spans (HTTP server spans with
+  `http.route` / `url.path`, DB spans with `db.sql.table` / `db.statement`, messaging spans) and compares
+  them with the static map: hops **confirmed by traffic**, hops **seen in traffic but missing from the map**
+  (a missed link), and routes **never hit** in the window.
+- If no trace source is configured or reachable, the step is skipped with one line saying so; nothing else
+  changes. This is the only network call codeloom makes, and only to the user's own endpoint.
+- Grafana Tempo first (author's stack); any OTLP JSON export works through the file option.
+
+### 5. Agent spot-check (optional, second opinion)
+
+MCP prompt `/codeloom:verify-journey <journey>` lets the agent read the code of each hop and flag doubts.
+It never changes confidence on its own; it only adds a note.
 
 ---
 
