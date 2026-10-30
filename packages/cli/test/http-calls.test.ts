@@ -75,4 +75,24 @@ describe("detectHttpCalls", () => {
     `),
     ).toEqual(["GET /api/customers ok @useClient"]);
   });
+
+  it("sees a destructured binding and does not skip past it to an outer router", () => {
+    expect(
+      calls(`
+      import express from "express";
+      const api = express.Router();
+      export function load() { const { api } = someClientFactory(); return api.get("/customers"); }
+    `),
+    ).toEqual(["GET /customers ok @load"]);
+  });
+
+  it("sees a renamed destructured binding (const { client: api } = make())", () => {
+    expect(
+      calls(`
+      import express from "express";
+      const api = express.Router();
+      export function load2() { const { client: api } = make(); return api.get("/orders"); }
+    `),
+    ).toEqual(["GET /orders ok @load2"]);
+  });
 });

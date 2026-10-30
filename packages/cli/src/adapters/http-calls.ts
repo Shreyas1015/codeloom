@@ -33,12 +33,25 @@ function functionParams(node: ts.Node): ts.NodeArray<ts.ParameterDeclaration> | 
   return undefined;
 }
 
-/** A variable declaration named `name` directly inside this block/source file's own statements (not nested functions). */
-function findVarDecl(statements: ts.NodeArray<ts.Statement>, name: string): ts.VariableDeclaration | undefined {
+/** Does this binding name (plain identifier, or an object/array pattern, possibly nested/renamed) bind `name`? */
+function bindingBinds(name: ts.BindingName, target: string): boolean {
+  if (ts.isIdentifier(name)) return name.text === target;
+  return name.elements.some((el) => !ts.isOmittedExpression(el) && bindingBinds(el.name, target));
+}
+
+/** A declaration of `name` directly inside this block/source file's own statements (not nested functions). */
+type DeclMatch = { destructured: false; decl: ts.VariableDeclaration } | { destructured: true };
+
+function findVarDecl(statements: ts.NodeArray<ts.Statement>, name: string): DeclMatch | undefined {
   for (const stmt of statements) {
     if (!ts.isVariableStatement(stmt)) continue;
     for (const decl of stmt.declarationList.declarations) {
-      if (ts.isIdentifier(decl.name) && decl.name.text === name) return decl;
+      if (ts.isIdentifier(decl.name)) {
+        if (decl.name.text === name) return { destructured: false, decl };
+      } else if (bindingBinds(decl.name, name)) {
+        // Destructured out of some call's result; such a binding is never a router-factory call here.
+        return { destructured: true };
+      }
     }
   }
   return undefined;
@@ -56,8 +69,8 @@ function isRouterName(node: ts.Node, name: string): boolean {
     const params = functionParams(cur);
     if (params?.some((p) => ts.isIdentifier(p.name) && p.name.text === name)) return false;
     if (ts.isBlock(cur) || ts.isSourceFile(cur)) {
-      const decl = findVarDecl(cur.statements, name);
-      if (decl) return isRouterFactoryCall(decl.initializer);
+      const match = findVarDecl(cur.statements, name);
+      if (match) return match.destructured ? false : isRouterFactoryCall(match.decl.initializer);
     }
     cur = cur.parent;
   }
