@@ -3,7 +3,7 @@ import CustomerService from "#services/customer_service";
 
 export default class CustomersController {
   async store({ request, response }: HttpContext) {
-    const customer = await new CustomerService().create(request.body() as { name: string; gstNo: string; city: string });
+    const customer = await new CustomerService().create(request.body() as { name: string; email: string; city: string });
     return response.created(customer);
   }
 

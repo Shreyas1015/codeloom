@@ -7,7 +7,7 @@ export default function NewCustomerPage() {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void createCustomer({ name: "Asha Solar", gstNo: "27AABCA1234F1Z5", city: "Lisbon" });
+        void createCustomer({ name: "Ada Lovelace", email: "ada@example.com", city: "London" });
       }}
     >
       <button type="submit">Save</button>
