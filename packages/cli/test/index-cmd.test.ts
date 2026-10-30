@@ -41,7 +41,8 @@ describe("codeloom index on demo-shop", () => {
     ]);
     expect(ep.billing!.dbAccess.map((a) => `${a.op} ${a.table} @${a.at.symbol}`)).toEqual(["insert invoices @createInvoice"]);
     expect(ep.billing!.queues.map((q) => `${q.op} ${q.queue}`)).toEqual(["publish invoice.created", "consume invoice.created"]);
-    expect(ep.billing!.tables.map((t) => t.name)).toEqual(["invoices", "Payment"]);
+    // Plain code-point order (not locale order): uppercase ASCII sorts before lowercase.
+    expect(ep.billing!.tables.map((t) => t.name)).toEqual(["Payment", "invoices"]);
   });
 
   it("links files through package.json import aliases", async () => {

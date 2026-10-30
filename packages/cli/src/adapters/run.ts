@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import type { EndpointsFile, Route, TableDef } from "../store/schemas.js";
+import { compare } from "../util.js";
 import { JS_EXT, parseSource } from "./ast.js";
 import { detectDb } from "./db.js";
 import { detectHttpCalls } from "./http-calls.js";
@@ -43,7 +44,7 @@ export function loadContext(repoAbs: string, files: string[]): RepoContext {
     return ctx;
   };
   const key = [...byDir.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => compare(a, b))
     .map(([dir, deps]) => `${dir || "."}:${[...deps].sort().join("|")}`)
     .join(";");
   return {
@@ -80,7 +81,7 @@ function resolveHandler(draft: RouteDraft, resolve?: ImportResolver): Route {
 }
 
 const byLoc = <T extends { at: { file: string; line: number } }>(a: T, b: T) =>
-  a.at.file.localeCompare(b.at.file) || a.at.line - b.at.line;
+  compare(a.at.file, b.at.file) || a.at.line - b.at.line;
 
 /** Resolves a module specifier written in `fromRel` to a repo file (null when it is not in the repo). */
 export type ImportResolver = (fromRel: string, specifier: string) => string | null;
@@ -113,12 +114,12 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
   return {
     version: 1,
     repo,
-    pages: all.pages.sort((a, b) => a.route.localeCompare(b.route) || a.file.localeCompare(b.file)),
+    pages: all.pages.sort((a, b) => compare(a.route, b.route) || compare(a.file, b.file)),
     httpCalls: all.httpCalls.sort(byLoc),
     routes: all.routes.map((r) => resolveHandler(r, resolveImport)).sort(byLoc),
     dbAccess: dbAccess.sort(byLoc),
-    tables: [...tables.values()].sort((a, b) => a.name.localeCompare(b.name)),
-    models: all.models.sort((a, b) => a.model.localeCompare(b.model)),
+    tables: [...tables.values()].sort((a, b) => compare(a.name, b.name)),
+    models: all.models.sort((a, b) => compare(a.model, b.model)),
     queues: all.queues.sort(byLoc),
   };
 }
