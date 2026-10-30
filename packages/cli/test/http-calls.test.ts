@@ -57,4 +57,22 @@ describe("detectHttpCalls", () => {
       calls(`export const api = axios.create(); export const load = () => api.get("/api/customers");`),
     ).toEqual(["GET /api/customers ok @load"]);
   });
+
+  it("does not drop a template URL whose base is an empty head (leading ${BASE})", () => {
+    expect(
+      calls(`
+      export const api = axios.create();
+      export const one = (id: string) => api.get(\`\${API}/customers/\${id}\`);
+    `),
+    ).toEqual(["GET /customers/:id ok @one"]);
+  });
+
+  it("resolves a router receiver name to its nearest in-scope declaration, not file-wide", () => {
+    expect(
+      calls(`
+      function setupRouter() { const api = express.Router(); api.get("/health", h); return api; }
+      export function useClient() { const api = axios.create(); return api.get("/api/customers"); }
+    `),
+    ).toEqual(["GET /api/customers ok @useClient"]);
+  });
 });

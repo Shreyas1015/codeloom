@@ -13,46 +13,82 @@ function methodOf(value: string | undefined): HttpMethod | undefined {
   return value ? METHODS[value.toLowerCase()] : undefined;
 }
 
-/** Variables in this file created as `const x = express.Router()` / `express()` / `fastify()`, etc. */
-function routerNamesIn(sf: ts.SourceFile): Set<string> {
-  const names = new Set<string>();
-  walk(sf, (node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      ts.isCallExpression(node.initializer) &&
-      ROUTER_INIT_RE.test(node.initializer.expression.getText())
-    ) {
-      names.add(node.name.text);
-    }
-  });
-  return names;
+function isRouterFactoryCall(expr: ts.Expression | undefined): boolean {
+  return !!expr && ts.isCallExpression(expr) && ROUTER_INIT_RE.test(expr.expression.getText());
 }
 
-function isClientReceiver(receiver: string, routerNames: Set<string>): boolean {
-  return !!receiver && receiver !== "this" && CLIENT_RE.test(receiver) && !routerNames.has(receiver);
-}
-
-/** The first literal text in a URL expression (string, template head, or `a + b`), ignoring pure variables. */
-function firstLiteralText(expr: ts.Expression): string | undefined {
-  if (ts.isParenthesizedExpression(expr)) return firstLiteralText(expr.expression);
-  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
-  if (ts.isTemplateExpression(expr)) return expr.head.text;
-  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    return firstLiteralText(expr.left) ?? firstLiteralText(expr.right);
+/** Parameters of a function-like node, or undefined when `node` isn't one. */
+function functionParams(node: ts.Node): ts.NodeArray<ts.ParameterDeclaration> | undefined {
+  if (
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessor(node) ||
+    ts.isSetAccessor(node)
+  ) {
+    return node.parameters;
   }
   return undefined;
 }
 
+/** A variable declaration named `name` directly inside this block/source file's own statements (not nested functions). */
+function findVarDecl(statements: ts.NodeArray<ts.Statement>, name: string): ts.VariableDeclaration | undefined {
+  for (const stmt of statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === name) return decl;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Is `name`, as referenced at `node`, a router/server rather than an HTTP client? Walks up through
+ * enclosing blocks/functions/the source file to find the *nearest* declaration (variable or
+ * parameter) with that name, and judges only that declaration — not any same-named variable
+ * elsewhere in the file. No type checker; purely name- and shape-based.
+ */
+function isRouterName(node: ts.Node, name: string): boolean {
+  let cur: ts.Node | undefined = node;
+  while (cur) {
+    const params = functionParams(cur);
+    if (params?.some((p) => ts.isIdentifier(p.name) && p.name.text === name)) return false;
+    if (ts.isBlock(cur) || ts.isSourceFile(cur)) {
+      const decl = findVarDecl(cur.statements, name);
+      if (decl) return isRouterFactoryCall(decl.initializer);
+    }
+    cur = cur.parent;
+  }
+  return false;
+}
+
+function isClientReceiver(receiver: string, node: ts.Node): boolean {
+  return !!receiver && receiver !== "this" && CLIENT_RE.test(receiver) && !isRouterName(node, receiver);
+}
+
+/** Concatenated literal text of a URL expression: string/template literal pieces and both sides of `+`, ignoring variables. */
+function literalText(expr: ts.Expression): string {
+  if (ts.isParenthesizedExpression(expr)) return literalText(expr.expression);
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
+  if (ts.isTemplateExpression(expr)) {
+    return expr.head.text + expr.templateSpans.map((s) => s.literal.text).join("");
+  }
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return literalText(expr.left) + literalText(expr.right);
+  }
+  return "";
+}
+
+/** A URL "looks like a URL" when its literal text has a path separator or an http(s) scheme. */
 function looksLikeUrl(text: string): boolean {
-  return text.startsWith("/") || text.startsWith("http://") || text.startsWith("https://");
+  return /^\s*(https?:\/\/|\/)/.test(text) || text.includes("/");
 }
 
 export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   if (!file.sf) return [];
   const out: HttpCall[] = [];
-  const routerNames = routerNamesIn(file.sf);
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node)) return;
     const callee = node.expression;
@@ -72,15 +108,14 @@ export function detectHttpCalls(file: ParsedFile): HttpCall[] {
       client = "axios";
     } else if (ts.isPropertyAccessExpression(callee) && callee.name.text === "request" && first && ts.isObjectLiteralExpression(first)) {
       const receiver = lastName(callee.expression);
-      if (isClientReceiver(receiver, routerNames)) {
+      if (isClientReceiver(receiver, node)) {
         urlExpr = prop(first, "url");
         method = methodOf(stringValue(prop(first, "method"))) ?? "GET";
         client = receiver;
       }
     } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text] && first) {
       const receiver = lastName(callee.expression);
-      const literal = firstLiteralText(first);
-      if (isClientReceiver(receiver, routerNames) && literal !== undefined && looksLikeUrl(literal)) {
+      if (isClientReceiver(receiver, node) && pathPattern(first) && looksLikeUrl(literalText(first))) {
         method = METHODS[callee.name.text];
         urlExpr = first;
         client = receiver;
