@@ -1,2 +1,4 @@
 .superpowers/
 .serena/
+node_modules/
+dist/
