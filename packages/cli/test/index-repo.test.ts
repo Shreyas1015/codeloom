@@ -45,4 +45,12 @@ describe("indexRepo", () => {
     const res = await indexRepo(repo, "svc");
     expect(res.stats.reused).toBe(0);
   });
+
+  it("re-parses everything when the codeloom version changes", async () => {
+    const repo = makeRepo(files);
+    const first = await indexRepo(repo, "svc", { codeloomVersion: "1.0.0" });
+    const second = await indexRepo(repo, "svc", { codeloomVersion: "1.0.1" });
+    expect(second.stats.reused).toBe(0);
+    expect(second.stats.parsed).toBe(first.stats.parsed);
+  });
 });

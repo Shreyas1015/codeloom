@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
 import type { EndpointsPart } from "../adapters/types.js";
@@ -16,6 +17,24 @@ import { analyzeStructure, EMPTY_STRUCTURE, type FileEntry, getPlugin, isSourceF
 
 const MAX_BYTES = 1_000_000;
 
+// Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
+// a different endpoints/structure format) so stale cache entries get invalidated.
+export const CACHE_FORMAT = 1;
+
+let cachedCodeloomVersion: string | undefined;
+
+function readCodeloomVersion(): string {
+  if (cachedCodeloomVersion !== undefined) return cachedCodeloomVersion;
+  try {
+    const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    cachedCodeloomVersion = pkg.version ?? "unknown";
+  } catch {
+    cachedCodeloomVersion = "unknown";
+  }
+  return cachedCodeloomVersion;
+}
+
 export interface IndexStats {
   files: number;
   parsed: number;
@@ -31,12 +50,19 @@ export interface IndexResult {
 
 type FileRecord = Fingerprints["files"][string] & FileEntry & { endpoints: EndpointsPart };
 
-export async function indexRepo(repoAbs: string, repoId: string): Promise<IndexResult> {
+export async function indexRepo(
+  repoAbs: string,
+  repoId: string,
+  opts?: { codeloomVersion?: string },
+): Promise<IndexResult> {
   const dir = join(repoAbs, CODELOOM_DIR);
   const config = readJson(join(dir, FILES.config), RepoConfigSchema) ?? defaultRepoConfig();
   const files = listFiles(repoAbs, config.ignore);
   const ctx = loadContext(repoAbs, files);
-  const contextKey = contentHash([...ctx.deps].sort().join(","));
+  const codeloomVersion = opts?.codeloomVersion ?? readCodeloomVersion();
+  const contextKey = contentHash(
+    [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, ...[...ctx.deps].sort()].join(","),
+  );
   const cachePath = join(dir, FILES.fingerprints);
   const old = readJson(cachePath, FingerprintsSchema);
   const oldFiles = old && old.contextKey === contextKey ? old.files : {};
