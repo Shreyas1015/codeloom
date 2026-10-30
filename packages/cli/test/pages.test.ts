@@ -40,4 +40,39 @@ describe("detectPages", () => {
       ]);`;
     expect(routes("src/router.tsx", objects, ctx)).toEqual(["/", "/settings"]);
   });
+
+  it("treats a JSX index route as a page at its parent's path", () => {
+    const ctx = ctxWith("react-router-dom");
+    const jsx = `
+      export const App = () => (
+        <Route path="/orders" element={<L />}>
+          <Route index element={<List />} />
+          <Route path=":id" element={<O />} />
+        </Route>
+      );`;
+    expect(routes("src/App.tsx", jsx, ctx)).toEqual(["/orders", "/orders", "/orders/:id"]);
+  });
+
+  it("treats an object index route as a page at its parent's path", () => {
+    const ctx = ctxWith("react-router-dom");
+    const objects = `
+      const router = createBrowserRouter([
+        { path: "/", element: <Root />, children: [{ index: true, element: <Home /> }, { path: "about", element: <About /> }] },
+      ]);`;
+    expect(routes("src/router.tsx", objects, ctx)).toEqual(["/", "/", "/about"]);
+  });
+
+  it("ignores object literals that are not inside a route-config array", () => {
+    const ctx = ctxWith("react-router-dom");
+    const code = `
+      const menu = [{ path: "/settings", children: [{ path: "profile" }] }];
+      const breadcrumbs = { path: "/x", element: "y" };`;
+    expect(routes("src/nav.tsx", code, ctx)).toEqual([]);
+  });
+
+  it("recognizes object routes in an array assigned to a *routes/*Routes variable", () => {
+    const ctx = ctxWith("react-router-dom");
+    const code = `export const appRoutes = [{ path: "/a", element: <A /> }];`;
+    expect(routes("src/routes.tsx", code, ctx)).toEqual(["/a"]);
+  });
 });
