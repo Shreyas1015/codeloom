@@ -33,7 +33,8 @@ export interface PathMatch {
 function rank(c: Confidence): number {
   return c === "exact" ? 0 : c === "param" ? 1 : 2;
 }
-function worse(a: Confidence, b: Confidence): Confidence {
+/** The less certain of two confidences (exact < param < guess). */
+export function worse(a: Confidence, b: Confidence): Confidence {
   return rank(a) >= rank(b) ? a : b;
 }
 

@@ -2,7 +2,7 @@ import { symbolAt } from "./code-index.js";
 import type { FileCodeIndex } from "./code-index.js";
 import type { CallResolver, SymbolRef, WalkStep } from "./resolve-calls.js";
 import { walkCallers } from "./resolve-calls.js";
-import { joinPaths, pickRoute } from "./paths.js";
+import { joinPaths, pickRoute, worse } from "./paths.js";
 import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
 import type { EffectiveRoute } from "./mounts.js";
@@ -16,9 +16,16 @@ export interface LinkInput {
   resolvers: Map<string, CallResolver>;
 }
 
+/** One walk hop: the symbol plus the confidence of its call towards the next symbol on the way to the
+ * HTTP call site (the call-site symbol itself, which makes no further hop, is "exact"). */
+export type ReachStep = SymbolRef & { confidence: Confidence };
+
 export interface PageReach {
   page: UiPage;
-  path: SymbolRef[];
+  /** page symbol, ..., call-site symbol. */
+  path: ReachStep[];
+  /** Worst confidence over every hop in `path`. */
+  confidence: Confidence;
 }
 
 export interface UiLink {
@@ -89,7 +96,8 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
     const pageRef = pageSymbolRef(input, repoId, page);
     if (!pageRef || !byKey.has(stepKey(pageRef))) continue;
     const path = chainTowardStart(steps, stepKey(pageRef), startKey);
-    reaches.push({ page, path: path.map((s) => s.ref) });
+    const hops: ReachStep[] = path.map((s) => ({ ...s.ref, confidence: s.via?.confidence ?? "exact" }));
+    reaches.push({ page, path: hops, confidence: hops.reduce<Confidence>((acc, h) => worse(acc, h.confidence), "exact") });
   }
   reaches.sort((a, b) => compare(a.page.file, b.page.file) || a.page.line - b.page.line || compare(a.page.route, b.page.route));
   return reaches;

@@ -297,4 +297,32 @@ describe("linkUi", () => {
     expect(links[0]!.target).toMatchObject({ kind: "route", confidence: "guess", reason: "matched outside the hinted backends" });
     expect(links[0]!.target.kind === "route" && links[0]!.target.route.repo).toBe("worker");
   });
+  it("carries the worst walk-hop confidence onto the page reach", () => {
+    const files = {
+      "app/orders/page.tsx": [
+        "export default function OrdersPage({ svc }: any) {",
+        "  svc.loadAllOrders();",
+        "  return null;",
+        "}",
+        "",
+      ].join("\n"),
+      "lib/order-service.ts": [
+        "export class OrderService {",
+        "  loadAllOrders() {",
+        '    return fetch("/api/orders");',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    };
+    const call: HttpCall = { method: "GET", path: "/api/orders", raw: '"/api/orders"', resolved: true, client: "fetch", at: { file: "lib/order-service.ts", line: 3, symbol: "OrderService.loadAllOrders" }, kind: "literal" };
+    const web = repo("web", { pages: [{ route: "/orders", file: "app/orders/page.tsx", line: 1, framework: "next-app" }], httpCalls: [call] });
+    const links = linkUi({ ws: ws([web]), resolvers: new Map([["web", resolverFor(files, "web")]]) });
+    expect(links[0]!.pages).toHaveLength(1);
+    expect(links[0]!.pages[0]!.confidence).toBe("guess");
+    expect(links[0]!.pages[0]!.path.map((s) => [s.symbol, s.confidence])).toEqual([
+      ["OrdersPage", "guess"],
+      ["OrderService.loadAllOrders", "exact"],
+    ]);
+  });
 });
