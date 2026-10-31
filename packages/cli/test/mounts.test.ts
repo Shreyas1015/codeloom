@@ -87,6 +87,68 @@ describe("routeKey", () => {
   });
 });
 
+describe("effectiveRoutes: mount chains that dead-end, cycle or exceed the cap", () => {
+  it("is false when the outer router of a mount chain is never itself mounted (orphaned)", () => {
+    // inner.ts's router is mounted at /a onto "outer" (declared in mid.ts), but "outer" is never
+    // mounted anywhere codeloom can see, so the chain dead-ends mid-way.
+    const r = route("GET", "/widgets", "inner.ts", "express", "innerRouter");
+    const m = mount("/a", "express-use", "outer", { file: "inner.ts" }, "mid.ts");
+    const [eff] = effectiveRoutes(endpoints("api", [r], [m]));
+    expect(eff!.mountsKnown).toBe(false);
+    expect(eff!.effectivePath).toBe("/a/widgets");
+  });
+
+  it("terminates and is false for a mutual-mount cycle between two files", () => {
+    // fileA's routerA is mounted (prefix /x) onto fileB's routerB; fileB's routerB is in turn mounted
+    // (prefix /y) onto fileA's routerA — a cycle with no top-level terminator.
+    const r = route("GET", "/thing", "fileA.ts", "express", "routerA");
+    const mountAOntoB = mount("/x", "express-use", "routerB", { file: "fileA.ts" }, "fileB.ts");
+    const mountBOntoA = mount("/y", "express-use", "routerA", { file: "fileB.ts" }, "fileA.ts");
+    const effs = effectiveRoutes(endpoints("api", [r], [mountAOntoB, mountBOntoA]));
+    expect(effs).toHaveLength(1);
+    expect(effs[0]!.mountsKnown).toBe(false);
+  });
+
+  it("is false for a mount chain longer than the depth cap", () => {
+    const r = route("GET", "/leaf", "f0.ts", "express", "r0");
+    const mounts: Mount[] = [];
+    // Chain of 8 mounts, each mounting the previous router one level further out: well past
+    // MAX_MOUNT_LEVELS (5), so the depth cap trips before the chain's top is reached.
+    for (let i = 0; i < 8; i++) {
+      mounts.push(mount(`/p${i}`, "express-use", `r${i + 1}`, { file: `f${i}.ts` }, `f${i + 1}.ts`));
+    }
+    const effs = effectiveRoutes(endpoints("api", [r], mounts));
+    expect(effs).toHaveLength(1);
+    expect(effs[0]!.mountsKnown).toBe(false);
+  });
+
+  it("is true with the full composed path for a complete 3-level chain", () => {
+    const r = route("GET", "/c", "file0.ts", "express", "r0");
+    const mid = mount("/mid", "express-use", "r1", { file: "file0.ts" }, "file1.ts");
+    const outer = mount("/outer", "express-use", "app", { file: "file1.ts" }, "file2.ts");
+    const [eff] = effectiveRoutes(endpoints("api", [r], [mid, outer]));
+    expect(eff).toMatchObject({ effectivePath: "/outer/mid/c", mountsKnown: true, mounts: [outer, mid] });
+  });
+
+  it("does not prefix a route with an in-file middleware mount (regression)", () => {
+    // app.use("/api", requireAuth) in the same file as a route declared directly on app: requireAuth
+    // is not a router and must not contribute a prefix to this unrelated route.
+    const r = route("GET", "/health", "server.ts", "express", "app");
+    const middleware = mount("/api", "express-use", "app", { name: "requireAuth" }, "server.ts");
+    const [eff] = effectiveRoutes(endpoints("api", [r], [middleware]));
+    expect(eff).toMatchObject({ effectivePath: "/health", mountsKnown: true, mounts: [] });
+  });
+
+  it("does not double-apply an Adonis group prefix already baked into the route path", () => {
+    // Adonis routes never carry a `router` field (there is no app.use()-style mount step for them),
+    // so they must pass through untouched even when the repo records other mounts.
+    const r = route("GET", "/api/v1/users", "users-routes.ts", "adonis");
+    const unrelated = mount("/other", "express-use", "app", { file: "other-routes.ts" }, "server.ts");
+    const [eff] = effectiveRoutes(endpoints("api", [r], [unrelated]));
+    expect(eff).toMatchObject({ effectivePath: "/api/v1/users", mountsKnown: true, mounts: [] });
+  });
+});
+
 describe("unknown-mount routes are only matched by callers via a unique path suffix", () => {
   it("feeds mountsKnown: false into pickRoute's suffix-guess rule (Task 8)", () => {
     const r = route("POST", "/invoices/:id/pay", "billing-routes.ts", "express", "billingRouter");
