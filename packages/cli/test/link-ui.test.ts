@@ -361,4 +361,11 @@ describe("linkUi", () => {
         .toMatchObject({ kind: "route" });
     });
   });
+  it("orders calls on the same line by method, then path", () => {
+    const at = { file: "lib/x.ts", line: 1, symbol: "f" };
+    const mk = (method: HttpCall["method"], path: string): HttpCall => ({ method, path, raw: `"${path}"`, resolved: true, client: "fetch", at, kind: "literal" });
+    const web = repo("web", { httpCalls: [mk("POST", "/b"), mk("GET", "/z"), mk("GET", "/a")] });
+    const links = linkUi({ ws: ws([web]), resolvers: new Map([["web", resolverFor({}, "web")]]) });
+    expect(links.map((l) => `${l.call.method} ${l.call.path}`)).toEqual(["GET /a", "GET /z", "POST /b"]);
+  });
 });

@@ -215,6 +215,7 @@ export function linkUi(input: LinkInput): UiLink[] {
       });
     }
   }
-  links.sort((a, b) => compare(a.repo, b.repo) || compare(a.call.at.file, b.call.at.file) || a.call.at.line - b.call.at.line);
+  links.sort((a, b) => compare(a.repo, b.repo) || compare(a.call.at.file, b.call.at.file) || a.call.at.line - b.call.at.line
+    || compare(a.call.method, b.call.method) || compare(a.call.path, b.call.path));
   return links;
 }
