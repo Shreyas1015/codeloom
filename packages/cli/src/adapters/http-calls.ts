@@ -1,6 +1,6 @@
 import ts from "typescript";
-import type { HttpCall, HttpMethod } from "../store/schemas.js";
-import { enclosingSymbol, isRouterName, lastName, lineOf, pathPattern, prop, stringValue, walk } from "./ast.js";
+import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
+import { enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
 import type { ParsedFile } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
@@ -72,14 +72,48 @@ export function detectHttpCalls(file: ParsedFile): HttpCall[] {
     const pattern = pathPattern(urlExpr);
     out.push({
       method,
-      path: pattern?.path ?? urlExpr.getText(),
+      path: pattern?.path ?? "",
       raw: urlExpr.getText(),
       resolved: pattern?.resolved ?? false,
       client,
       at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
-      // Interim Task 1 value: a real literal/template/unknown distinction and `base` extraction land in
-      // Task 2, which rewrites this function and `pathPattern`'s return type together.
-      kind: pattern ? "literal" : "unknown",
+      kind: pattern?.kind ?? "unknown",
+      ...(pattern?.base !== undefined ? { base: pattern.base } : {}),
+    });
+  });
+  return out;
+}
+
+/** "axios"/"create" -> "axios"; "ky"/"create"|"extend" -> "ky"; any other receiver's "create" -> its own name. */
+function clientFactory(receiver: string, method: string): string | undefined {
+  if (receiver === "axios" && method === "create") return "axios";
+  if (receiver === "ky" && (method === "create" || method === "extend")) return "ky";
+  if (method === "create") return receiver;
+  return undefined;
+}
+
+export function detectHttpClients(file: ParsedFile): HttpClient[] {
+  if (!file.sf) return [];
+  const out: HttpClient[] = [];
+  walk(file.sf, (node) => {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
+    const receiver = node.expression.expression;
+    if (!ts.isIdentifier(receiver)) return;
+    const factory = clientFactory(receiver.text, node.expression.name.text);
+    if (!factory) return;
+    const decl = node.parent;
+    if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) return;
+    const [opts] = node.arguments;
+    const obj = opts && ts.isObjectLiteralExpression(opts) ? opts : undefined;
+    const baseNode = obj && (prop(obj, "baseURL") ?? prop(obj, "prefixUrl"));
+    const literal = baseNode && stringValue(baseNode);
+    out.push({
+      name: decl.name.text,
+      file: file.rel,
+      line: lineOf(node),
+      factory,
+      ...(baseNode && literal === undefined ? { baseExpr: baseNode.getText() } : {}),
+      ...(literal !== undefined ? { baseLiteral: normalizePath(literal) } : {}),
     });
   });
   return out;

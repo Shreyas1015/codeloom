@@ -4,7 +4,7 @@ import type { EndpointsFile, HttpClient, Mount, QueueOp, Route, TableDef } from 
 import { compare } from "../util.js";
 import { JS_EXT, parseSource } from "./ast.js";
 import { detectDb } from "./db.js";
-import { detectHttpCalls } from "./http-calls.js";
+import { detectHttpCalls, detectHttpClients } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectRoutes } from "./routes.js";
@@ -60,6 +60,7 @@ export function runAdapters(rel: string, content: string, ctx: AdapterContext): 
   const file: ParsedFile = { rel, content, sf: isJs ? parseSource(rel, content) : undefined };
   part.pages.push(...detectPages(file, ctx));
   part.httpCalls.push(...detectHttpCalls(file));
+  part.httpClients.push(...detectHttpClients(file));
   part.routes.push(...detectRoutes(file, ctx));
   const db = detectDb(file, ctx);
   part.dbAccess.push(...db.dbAccess);

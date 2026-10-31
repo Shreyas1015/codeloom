@@ -209,26 +209,51 @@ export function normalizePath(p: string): string {
   return s;
 }
 
-/** Turn a URL expression into a route pattern. Undefined when it is only a variable (nothing literal). */
-export function pathPattern(expr: ts.Expression): { path: string; resolved: boolean } | undefined {
+/** Turn a URL expression into a route pattern. Undefined when it is only a variable (nothing literal).
+ * A leading non-literal expression is treated as a stripped `base` when its own text matches BASE_RE
+ * (looks like a url/host/env var) or when it is immediately followed by literal text starting with "/"
+ * (a dynamic prefix is almost never how a real path parameter starts). `kind` is "literal" when every
+ * remaining part (after stripping the base) is literal text, "template" when any part remains dynamic. */
+export function pathPattern(
+  expr: ts.Expression,
+): { path: string; resolved: boolean; kind: "literal" | "template"; base?: string } | undefined {
   const parts: Part[] = [];
   if (!collect(expr, parts)) return undefined;
   if (!parts.some((p) => "text" in p)) return undefined;
+
+  let base: string | undefined;
+  let rest = parts;
+  const [first, second] = parts;
+  if (first && !("text" in first)) {
+    const text = first.expr.getText();
+    const followedBySlash = !!second && "text" in second && second.text.startsWith("/");
+    if (BASE_RE.test(text) || followedBySlash) {
+      base = text;
+      rest = parts.slice(1);
+    }
+  }
+
   let out = "";
   let resolved = true;
-  parts.forEach((p, i) => {
+  let hasExpr = false;
+  for (const p of rest) {
     if ("text" in p) {
       out += p.text;
-      return;
+      continue;
     }
-    if (i === 0 && BASE_RE.test(p.expr.getText())) return;
+    hasExpr = true;
     const name = paramName(p.expr);
     if (name === undefined) {
       resolved = false;
       out += ":param";
     } else out += `:${name}`;
-  });
-  return { path: normalizePath(out), resolved };
+  }
+  return {
+    path: normalizePath(out),
+    resolved,
+    kind: hasExpr ? "template" : "literal",
+    ...(base !== undefined ? { base } : {}),
+  };
 }
 
 export function fileRoute(segments: string[]): string {

@@ -13,13 +13,41 @@ function firstCall(code: string, file = "x.ts"): ts.CallExpression {
 
 describe("pathPattern", () => {
   const p = (expr: string) => pathPattern(firstCall(`f(${expr})`).arguments[0]);
-  it("keeps literals", () => expect(p(`"/api/customers"`)).toEqual({ path: "/api/customers", resolved: true }));
+
+  it("keeps literals", () =>
+    expect(p(`"/api/customers"`)).toEqual({ path: "/api/customers", resolved: true, kind: "literal" }));
+
   it("drops a base-url prefix and names params", () =>
-    expect(p("`${process.env.NEXT_PUBLIC_API_URL}/api/customers/${customer.id}`")).toEqual({ path: "/api/customers/:id", resolved: true }));
-  it("handles concatenation", () => expect(p(`API_BASE + "/customers/" + id`)).toEqual({ path: "/customers/:id", resolved: true }));
-  it("strips origin and query", () => expect(p(`"https://pay.example.com/v1/charges?x=1"`)).toEqual({ path: "/v1/charges", resolved: true }));
-  it("unwraps encodeURIComponent", () => expect(p("`/customers/${encodeURIComponent(id)}`")).toEqual({ path: "/customers/:id", resolved: true }));
+    expect(p("`${process.env.NEXT_PUBLIC_API_URL}/api/customers/${customer.id}`")).toEqual({
+      path: "/api/customers/:id", resolved: true, kind: "template", base: "process.env.NEXT_PUBLIC_API_URL",
+    }));
+
+  it("handles concatenation", () =>
+    expect(p(`API_BASE + "/customers/" + id`)).toEqual({
+      path: "/customers/:id", resolved: true, kind: "template", base: "API_BASE",
+    }));
+
+  it("strips origin and query", () =>
+    expect(p(`"https://pay.example.com/v1/charges?x=1"`)).toEqual({
+      path: "/v1/charges", resolved: true, kind: "literal",
+    }));
+
+  it("unwraps encodeURIComponent", () =>
+    expect(p("`/customers/${encodeURIComponent(id)}`")).toEqual({
+      path: "/customers/:id", resolved: true, kind: "template",
+    }));
+
   it("gives up on a bare variable", () => expect(p("url")).toBeUndefined());
+
+  it("strips a leading dynamic prefix immediately followed by '/', even when its name doesn't look like a base", () =>
+    expect(p("`${cfg}/api/customers`")).toEqual({
+      path: "/api/customers", resolved: true, kind: "literal", base: "cfg",
+    }));
+
+  it("does not strip a dynamic part that isn't first", () =>
+    expect(p("`/api/customers/${cfg}`")).toEqual({
+      path: "/api/customers/:cfg", resolved: true, kind: "template",
+    }));
 });
 
 describe("enclosingSymbol", () => {
