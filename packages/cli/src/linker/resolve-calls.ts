@@ -30,6 +30,9 @@ export interface CallResolver {
   callsFrom(ref: SymbolRef): ResolvedCall[];
   callersOf(ref: SymbolRef): Array<{ from: SymbolRef; call: ResolvedCall }>;
   resolveExport(file: string, exportedName: string): SymbolRef | null;
+  /** What a plain identifier `name` binds to in `file`: a local function/class declared there, else a
+   * named/default import chased through barrels. Null when it is neither (a global, a dotted name). */
+  resolveName(file: string, name: string): SymbolRef | null;
   /** The cached per-file index this resolver was built over (used by linkUi / findHandler with symbolAt). */
   fileIndex(file: string): FileCodeIndex | undefined;
 }
@@ -379,6 +382,17 @@ export function createCallResolver(input: RepoResolveInput): CallResolver {
     },
     resolveExport(file, exportedName) {
       const hit = resolveExportIn(ctx, file, exportedName, 0);
+      return hit ? { repo: input.repo, file: hit.file, symbol: hit.symbol } : null;
+    },
+    resolveName(file, name) {
+      const fi = input.index.get(file);
+      if (!fi) return null;
+      const local = fi.symbols.find((s) => s.name === name && (s.kind === "function" || s.kind === "class") && s.binding);
+      if (local) return { repo: input.repo, file, symbol: local.name };
+      const imp = fi.imports.find((i) => i.local === name && i.kind !== "namespace");
+      if (!imp) return null;
+      const target = resolveImport(file, imp.from, ctx.files, ctx.aliases);
+      const hit = target ? resolveExportIn(ctx, target, importedName(imp), 0) : null;
       return hit ? { repo: input.repo, file: hit.file, symbol: hit.symbol } : null;
     },
     fileIndex: (file) => input.index.get(file),

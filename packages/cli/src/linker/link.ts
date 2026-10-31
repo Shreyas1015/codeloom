@@ -57,14 +57,21 @@ export function chainTowardStart(steps: WalkStep[], targetKey: string, startKey:
   return chain;
 }
 
-/** "CodeSymbol whose lines include page.line, else the file's default export." */
+/** The symbol a page starts from. React Router: the routed component, resolved through the router
+ * file's own bindings/imports (never the router component that merely contains the `<Route>`s — that
+ * would credit every page with whatever the shell calls); unresolvable -> undefined (reaches nothing).
+ * Next: the file's default export, else the symbol at page.line. */
 function pageSymbolRef(input: LinkInput, repoId: string, page: UiPage): SymbolRef | undefined {
-  const idx: FileCodeIndex | undefined = input.resolvers.get(repoId)?.fileIndex(page.file);
-  if (!idx) return undefined;
-  const bySite = symbolAt(idx, page.line);
-  if (bySite) return { repo: repoId, file: page.file, symbol: bySite.name };
+  const resolver = input.resolvers.get(repoId);
+  const idx: FileCodeIndex | undefined = resolver?.fileIndex(page.file);
+  if (!resolver || !idx) return undefined;
+  if (page.framework === "react-router") {
+    return page.component ? resolver.resolveName(page.file, page.component.name) ?? undefined : undefined;
+  }
   const def = idx.symbols.find((s) => s.exportNames?.includes("default"));
-  return def ? { repo: repoId, file: page.file, symbol: def.name } : undefined;
+  if (def) return { repo: repoId, file: page.file, symbol: def.name };
+  const bySite = symbolAt(idx, page.line);
+  return bySite ? { repo: repoId, file: page.file, symbol: bySite.name } : undefined;
 }
 
 /** Every UiPage that reaches `call` by a reverse walk over resolved calls, ≤6 hops. */

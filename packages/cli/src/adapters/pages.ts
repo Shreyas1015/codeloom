@@ -27,19 +27,53 @@ export function detectPages(file: ParsedFile, ctx: AdapterContext): UiPage[] {
 interface RouteInfo {
   path?: string;
   index: boolean;
+  /** Tag / identifier text of the rendered component, when it is a plain JSX element or identifier. */
+  component?: string;
+}
+
+/** `<X />` / `<X></X>` / `<A.B />` -> its tag name; anything else (a call, a conditional) -> undefined. */
+function jsxTagName(expr: ts.Expression | undefined): string | undefined {
+  if (!expr) return undefined;
+  while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  if (ts.isJsxSelfClosingElement(expr)) return expr.tagName.getText();
+  if (ts.isJsxElement(expr)) return expr.openingElement.tagName.getText();
+  return undefined;
+}
+
+/** Local name -> module specifier for every import in the file (default, named, namespace). */
+function importSources(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !st.importClause) continue;
+    const from = st.moduleSpecifier.text;
+    const clause = st.importClause;
+    if (clause.name) out.set(clause.name.text, from);
+    const nb = clause.namedBindings;
+    if (nb && ts.isNamespaceImport(nb)) out.set(nb.name.text, from);
+    if (nb && ts.isNamedImports(nb)) for (const el of nb.elements) out.set(el.name.text, from);
+  }
+  return out;
 }
 
 function jsxRouteInfo(node: ts.JsxOpeningLikeElement): RouteInfo | undefined {
   if (node.tagName.getText() !== "Route") return undefined;
   let path: string | undefined;
   let index = false;
+  let component: string | undefined;
   for (const attr of node.attributes.properties) {
     if (!ts.isJsxAttribute(attr)) continue;
     const name = attr.name.getText();
     if (name === "path" && attr.initializer && ts.isStringLiteral(attr.initializer)) path = attr.initializer.text;
     if (name === "index") index = true;
+    if (name === "element" && attr.initializer && ts.isJsxExpression(attr.initializer)) {
+      component = jsxTagName(attr.initializer.expression);
+    }
+    if (name === "Component" && attr.initializer && ts.isJsxExpression(attr.initializer)) {
+      const e = attr.initializer.expression;
+      if (e && ts.isIdentifier(e)) component = e.text;
+    }
   }
-  return { path, index };
+  return { path, index, component };
 }
 
 const ROUTER_CALLS = new Set(["createBrowserRouter", "createHashRouter", "createMemoryRouter", "createStaticRouter", "useRoutes"]);
@@ -97,13 +131,17 @@ function objectRouteInfo(node: ts.ObjectLiteralExpression, routes: Set<ts.ArrayL
   if (!node.parent || !ts.isArrayLiteralExpression(node.parent) || !routes.has(node.parent)) return undefined;
   let path: string | undefined;
   let index = false;
+  let component: string | undefined;
   for (const p of node.properties) {
+    if (ts.isShorthandPropertyAssignment(p) && p.name.text === "Component") component = "Component";
     if (!ts.isPropertyAssignment(p)) continue;
     const key = p.name.getText();
     if (key === "path") path = stringValue(p.initializer);
     if (key === "index" && p.initializer.kind === ts.SyntaxKind.TrueKeyword) index = true;
+    if (key === "element") component = jsxTagName(p.initializer);
+    if (key === "Component" && ts.isIdentifier(p.initializer)) component = p.initializer.text;
   }
-  return { path, index };
+  return { path, index, component };
 }
 
 function joinRoute(parent: string, child: string): string {
@@ -114,6 +152,7 @@ function joinRoute(parent: string, child: string): string {
 function reactRouterPages(file: ParsedFile): UiPage[] {
   const out: UiPage[] = [];
   const routes = routeArrays(file.sf!);
+  const imports = importSources(file.sf!);
   walk(file.sf!, (node) => {
     let info: RouteInfo | undefined;
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) info = jsxRouteInfo(node);
@@ -128,7 +167,12 @@ function reactRouterPages(file: ParsedFile): UiPage[] {
       if (ancestor !== undefined) full = joinRoute(ancestor, full);
       cur = cur.parent;
     }
-    out.push({ route: normalizePath(full), file: file.rel, line: lineOf(node), framework: "react-router" });
+    const page: UiPage = { route: normalizePath(full), file: file.rel, line: lineOf(node), framework: "react-router" };
+    if (info.component) {
+      const importSource = imports.get(info.component.split(".")[0]!);
+      page.component = importSource !== undefined ? { name: info.component, importSource } : { name: info.component };
+    }
+    out.push(page);
   });
   return out;
 }

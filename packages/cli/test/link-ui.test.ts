@@ -204,4 +204,87 @@ describe("linkUi", () => {
     const links = linkUi({ ws: ws([web, a, b]), resolvers });
     expect(links[0]!.target).toMatchObject({ kind: "route", confidence: "guess" });
   });
+  describe("react-router pages", () => {
+    const spaFiles = {
+      "src/App.tsx": [
+        'import { Customers } from "./customers";',
+        'import { useMe } from "./hooks";',
+        "export function App() {",
+        "  const me = useMe();",
+        "  return (",
+        "    <Routes>",
+        '      <Route path="/customers" element={<Customers />} />',
+        '      <Route path="/lazy" element={<Missing />} />',
+        "    </Routes>",
+        "  );",
+        "}",
+        "",
+      ].join("\n"),
+      "src/customers.tsx": [
+        'import { useCustomers } from "./hooks";',
+        "export function Customers() {",
+        "  const list = useCustomers();",
+        "  return null;",
+        "}",
+        "",
+      ].join("\n"),
+      "src/hooks.ts": [
+        "export function useMe() {",
+        '  return fetch("/api/me");',
+        "}",
+        "export function useCustomers() {",
+        '  return fetch("/api/customers");',
+        "}",
+        "",
+      ].join("\n"),
+    };
+
+    it("uses the routed component (through the router file's imports), never the router component", () => {
+      const meCall: HttpCall = { method: "GET", path: "/api/me", raw: '"/api/me"', resolved: true, client: "fetch", at: { file: "src/hooks.ts", line: 2, symbol: "useMe" }, kind: "literal" };
+      const custCall: HttpCall = { method: "GET", path: "/api/customers", raw: '"/api/customers"', resolved: true, client: "fetch", at: { file: "src/hooks.ts", line: 5, symbol: "useCustomers" }, kind: "literal" };
+      const spa = repo("spa", {
+        pages: [
+          { route: "/customers", file: "src/App.tsx", line: 7, framework: "react-router", component: { name: "Customers", importSource: "./customers" } },
+          { route: "/lazy", file: "src/App.tsx", line: 8, framework: "react-router", component: { name: "Missing" } },
+        ],
+        httpCalls: [meCall, custCall],
+      });
+      const links = linkUi({ ws: ws([spa]), resolvers: new Map([["spa", resolverFor(spaFiles, "spa")]]) });
+      const byPath = new Map(links.map((l) => [l.call.path, l]));
+      expect(byPath.get("/api/me")!.pages).toEqual([]);
+      expect(byPath.get("/api/customers")!.pages.map((p) => p.page.route)).toEqual(["/customers"]);
+      expect(byPath.get("/api/customers")!.pages[0]!.path.map((s) => s.symbol)).toEqual(["Customers", "useCustomers"]);
+    });
+
+    it("a react-router page with no component reaches nothing", () => {
+      const meCall: HttpCall = { method: "GET", path: "/api/me", raw: '"/api/me"', resolved: true, client: "fetch", at: { file: "src/hooks.ts", line: 2, symbol: "useMe" }, kind: "literal" };
+      const spa = repo("spa", {
+        pages: [{ route: "/x", file: "src/App.tsx", line: 7, framework: "react-router" }],
+        httpCalls: [meCall],
+      });
+      const links = linkUi({ ws: ws([spa]), resolvers: new Map([["spa", resolverFor(spaFiles, "spa")]]) });
+      expect(links[0]!.pages).toEqual([]);
+    });
+  });
+  it("a Next page starts from the file's default export even when a helper comes first", () => {
+    const files = {
+      "app/orders/page.tsx": [
+        "function formatTotal(n: number) {",
+        "  return String(n);",
+        "}",
+        "export default function OrdersPage() {",
+        "  loadOrders();",
+        "  return null;",
+        "}",
+        "function loadOrders() {",
+        '  return fetch("/api/orders");',
+        "}",
+        "",
+      ].join("\n"),
+    };
+    const call: HttpCall = { method: "GET", path: "/api/orders", raw: '"/api/orders"', resolved: true, client: "fetch", at: { file: "app/orders/page.tsx", line: 9, symbol: "loadOrders" }, kind: "literal" };
+    const web = repo("web", { pages: [{ route: "/orders", file: "app/orders/page.tsx", line: 1, framework: "next-app" }], httpCalls: [call] });
+    const links = linkUi({ ws: ws([web]), resolvers: new Map([["web", resolverFor(files, "web")]]) });
+    expect(links[0]!.pages.map((p) => p.path.map((s) => s.symbol))).toEqual([["OrdersPage", "loadOrders"]]);
+  });
 });

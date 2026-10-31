@@ -87,4 +87,32 @@ describe("detectPages", () => {
   it("does not treat src/pages in a non-Next package as Next pages", () => {
     expect(routes("apps/spa/src/pages/Dashboard.tsx", "", ctxIn("apps/spa", "react"))).toEqual([]);
   });
+  it("records the React Router page component and where it is imported from", () => {
+    const ctx = ctxWith("react-router-dom");
+    const jsx = `
+      import { Customers } from "./customers";
+      import Orders from "./orders";
+      export const App = () => (
+        <Routes>
+          <Route path="/customers" element={<Customers />} />
+          <Route path="/orders" element={<Orders.Page />} />
+          <Route path="/raw" element={renderRaw()} />
+        </Routes>
+      );`;
+    const pages = detectPages(parsed("src/App.tsx", jsx), ctx);
+    expect(pages.map((p) => [p.route, p.component])).toEqual([
+      ["/customers", { name: "Customers", importSource: "./customers" }],
+      ["/orders", { name: "Orders.Page", importSource: "./orders" }],
+      ["/raw", undefined],
+    ]);
+    const objects = `
+      import Home from "./home";
+      const router = createBrowserRouter([
+        { path: "/", Component: Home, children: [{ path: "about", element: <About /> }] },
+      ]);`;
+    expect(detectPages(parsed("src/router.tsx", objects), ctx).map((p) => [p.route, p.component])).toEqual([
+      ["/", { name: "Home", importSource: "./home" }],
+      ["/about", { name: "About" }],
+    ]);
+  });
 });

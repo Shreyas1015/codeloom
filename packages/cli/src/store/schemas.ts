@@ -16,6 +16,9 @@ export const UiPageSchema = z.object({
   file: z.string(),
   line: z.number().int().positive(),
   framework: z.enum(["next-app", "next-pages", "react-router"]),
+  /** React Router only: the component the route renders (`element={<X/>}`, `element: <X/>`,
+   * `Component: X`) and the module it is imported from in the router file, when it is imported. */
+  component: z.object({ name: z.string(), importSource: z.string().optional() }).optional(),
 });
 export type UiPage = z.infer<typeof UiPageSchema>;
 
