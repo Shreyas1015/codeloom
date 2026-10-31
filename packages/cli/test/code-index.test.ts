@@ -174,3 +174,171 @@ describe("buildFileCodeIndex — non-JS/TS files", () => {
     expect(idx).toEqual({ symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] });
   });
 });
+
+const sym = (idx: ReturnType<typeof buildFileCodeIndex>) =>
+  idx.symbols.map((s) => ({ name: s.name, kind: s.kind, exported: s.exported, exportedAs: s.exportedAs }));
+
+describe("buildFileCodeIndex — review fixes", () => {
+  it("1: arrow / function-expression consts become function symbols", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+const createInvoice = async (req, res) => {
+  return res.json(req.body);
+};
+export const Page = () => null;
+const f = function () { return 1; };
+`));
+    expect(idx.symbols).toEqual([
+      { name: "createInvoice", kind: "function", lines: [2, 4], exported: false },
+      { name: "Page", kind: "function", lines: [5, 5], exported: true },
+      { name: "f", kind: "function", lines: [6, 6], exported: false },
+    ]);
+  });
+
+  it("2: class property arrows become Class.prop methods", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+export class InvoiceController {
+  create = async (req, res) => {
+    return res.json({});
+  };
+}
+`));
+    expect(sym(idx)).toEqual([
+      { name: "InvoiceController", kind: "class", exported: true, exportedAs: undefined },
+      { name: "InvoiceController.create", kind: "method", exported: false, exportedAs: undefined },
+    ]);
+    expect(idx.symbols[1]!.lines).toEqual([3, 5]);
+  });
+
+  it("3: anonymous default-export class is <anonymous>, exported as default", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+export default class {
+  run() { return 1; }
+}
+`));
+    expect(sym(idx)).toEqual([
+      { name: "<anonymous>", kind: "class", exported: true, exportedAs: "default" },
+      { name: "<anonymous>.run", kind: "method", exported: false, exportedAs: undefined },
+    ]);
+  });
+
+  it("4: local export lists and export default before the declaration", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+export default Late;
+function a() {}
+function hidden() {}
+export { a, a as b };
+const svc = { go() {} };
+export { svc };
+function Late() {}
+`));
+    expect(sym(idx)).toEqual([
+      { name: "a", kind: "function", exported: true, exportedAs: "b" },
+      { name: "hidden", kind: "function", exported: false, exportedAs: undefined },
+      { name: "svc.go", kind: "object-method", exported: true, exportedAs: undefined },
+      { name: "Late", kind: "function", exported: true, exportedAs: "default" },
+    ]);
+  });
+
+  it("5a: module.exports = Ident / { a, b: c } / exports.x = y", () => {
+    const one = buildFileCodeIndex(parsed("src/a.js", `
+function handler() {}
+module.exports = handler;
+`));
+    expect(sym(one)).toEqual([{ name: "handler", kind: "function", exported: true, exportedAs: "default" }]);
+
+    const many = buildFileCodeIndex(parsed("src/b.js", `
+function a() {}
+const impl = () => 1;
+function c() {}
+function d() {}
+function unused() {}
+module.exports = { a, b: impl };
+exports.c = c;
+module.exports.e = d;
+`));
+    expect(sym(many)).toEqual([
+      { name: "a", kind: "function", exported: true, exportedAs: undefined },
+      { name: "impl", kind: "function", exported: true, exportedAs: "b" },
+      { name: "c", kind: "function", exported: true, exportedAs: undefined },
+      { name: "d", kind: "function", exported: true, exportedAs: "e" },
+      { name: "unused", kind: "function", exported: false, exportedAs: undefined },
+    ]);
+  });
+
+  it("5b: object literals in module.exports / export default name methods exports.* / default.*", () => {
+    const cjs = buildFileCodeIndex(parsed("src/a.js", `
+module.exports = {
+  async list() { return 1; },
+  find: async (id) => id,
+};
+`));
+    expect(sym(cjs)).toEqual([
+      { name: "exports.list", kind: "object-method", exported: true, exportedAs: undefined },
+      { name: "exports.find", kind: "object-method", exported: true, exportedAs: undefined },
+    ]);
+    const esm = buildFileCodeIndex(parsed("src/b.ts", `
+export default {
+  list() { return 1; },
+  find: function (id) { return id; },
+};
+`));
+    expect(sym(esm)).toEqual([
+      { name: "default.list", kind: "object-method", exported: true, exportedAs: undefined },
+      { name: "default.find", kind: "object-method", exported: true, exportedAs: undefined },
+    ]);
+  });
+
+  it("7: this.x = new Svc() in a constructor is a class field", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+export class InvoiceController {
+  svc: InvoiceService;
+  constructor() {
+    this.svc = new InvoiceService();
+    this.audit = new AuditLogger();
+  }
+}
+`));
+    expect(idx.classFields).toEqual([
+      { className: "InvoiceController", field: "svc", typeName: "InvoiceService" },
+      { className: "InvoiceController", field: "audit", typeName: "AuditLogger" },
+    ]);
+  });
+
+  it("8: symbolAt prefers the deeper symbol on equal span", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+class A { m() { return 1; } }
+`));
+    expect(symbolAt(idx, 2)?.name).toBe("A.m");
+  });
+});
+
+describe("contract: every call site's caller is a symbol in the same file", () => {
+  const snippets: Record<string, string> = {
+    "arrows.ts": `
+const createInvoice = async (req, res) => { await save(req); };
+export const Page = () => render();
+const f = function () { go(); };
+const g = function named() { go(); };
+foo(function cb() { go(); });
+function outer() { const inner = () => go(); inner(); }`,
+    "classes.ts": `
+export default class { run() { go(); } }
+class B { create = async () => { go(); }; get x() { return go(); } m() { [1].map(() => go()); } }
+const C = class { k() { go(); } };`,
+    "objects.ts": `
+export const svc = { a() { go(); }, b: () => go(), c: function () { go(); } };
+export default { list() { go(); }, find: (id) => go(id) };`,
+    "cjs.js": `
+module.exports = { list() { go(); }, find: async (id) => go(id) };
+exports.helper = function helper() { go(); };`,
+  };
+  for (const [file, code] of Object.entries(snippets)) {
+    it(file, () => {
+      const idx = buildFileCodeIndex(parsed(file, code));
+      const names = new Set(idx.symbols.map((s) => s.name));
+      const callers = idx.calls.map((c) => c.caller).filter((c) => c !== "<module>");
+      expect(callers.length).toBeGreaterThan(0);
+      for (const c of callers) expect(names, `caller ${c}`).toContain(c);
+    });
+  }
+});

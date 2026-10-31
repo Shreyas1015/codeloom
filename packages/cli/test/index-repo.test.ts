@@ -85,6 +85,23 @@ describe("indexRepo", () => {
   });
 });
 
+describe("indexRepo cache guard", () => {
+  // A record missing the key entirely fails the schema (whole cache discarded); `null` passes
+  // `z.any()`, so the per-file guard is what keeps it from reaching the linker.
+  it("rebuilds a file's code index when a cache hit has no codeIndex", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    const cache = join(repo, ".codeloom/fingerprints.json");
+    const fp = JSON.parse(readFileSync(cache, "utf8"));
+    fp.files["src/util.ts"].codeIndex = null;
+    writeFileSync(cache, JSON.stringify(fp));
+    const res = await indexRepo(repo, "svc");
+    expect(res.codeIndex.get("src/util.ts")?.symbols.map((s) => s.name)).toEqual(["add"]);
+    expect(res.stats.parsed).toBe(1);
+    expect(res.stats.reused).toBe(2);
+  });
+});
+
 describe("indexRepo determinism (committed files depend only on code)", () => {
   it("writes byte-identical graph.json and endpoints.json on a second run, leaving git clean", async () => {
     const repo = makeRepo(files);

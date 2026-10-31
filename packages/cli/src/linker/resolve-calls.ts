@@ -207,7 +207,10 @@ function resolveMember(input: RepoResolveInput, file: string, site: CallSite, ca
     if (hit) return { site, target: { repo, file: hit.file, symbol: hit.symbol }, confidence: "exact", via: "import" };
   }
 
-  const localNew = fi.localNews.find((n) => n.caller === site.caller && n.local === callee.object);
+  // The caller's own `const x = new C()` first; else a module-level singleton used inside a function.
+  const localNew =
+    fi.localNews.find((n) => n.caller === site.caller && n.local === callee.object) ??
+    fi.localNews.find((n) => n.caller === "<module>" && n.local === callee.object);
   if (localNew) {
     const hit = resolveClassMethod(index, files, aliases, file, localNew.className, callee.prop);
     if (hit) return { site, target: { repo, file: hit.file, symbol: hit.symbol }, confidence: "exact", via: "new" };

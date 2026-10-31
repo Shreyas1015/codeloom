@@ -333,3 +333,20 @@ describe("fileIndex", () => {
     expect(resolver.fileIndex("nope.ts")).toBeUndefined();
   });
 });
+
+describe("createCallResolver — module-level singletons", () => {
+  it("resolves svc.method() inside a function to a module-level `const svc = new Svc()`", () => {
+    const resolver = resolverOf({
+      "services/customer-service.ts": CUSTOMER_SERVICE,
+      "controllers/customers.ts": `
+        import { CustomerService } from "../services/customer-service.js";
+        const svc = new CustomerService();
+        export function show(id: number) { return svc.find(id); }
+      `,
+    });
+    const rc = siteAt(resolver, "controllers/customers.ts", "show");
+    expect(rc).toMatchObject({
+      target: { file: "services/customer-service.ts", symbol: "CustomerService.find" }, confidence: "exact", via: "new",
+    });
+  });
+});

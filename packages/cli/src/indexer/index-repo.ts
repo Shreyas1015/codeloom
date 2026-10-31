@@ -124,7 +124,8 @@ export async function indexRepo(
       const content = readFileSync(abs, "utf8");
       const hash = contentHash(content);
       const hit = oldFiles[rel] as FileRecord | undefined;
-      if (hit && hit.hash === hash) {
+      // A record without a codeIndex (shape drift) is treated as a miss and rebuilt.
+      if (hit && hit.hash === hash && hit.codeIndex) {
         record = hit;
         stats.reused++;
       } else {

@@ -96,35 +96,60 @@ function memberName(name: ts.Node | undefined): string {
   return name.getText();
 }
 
-function className(cls: ts.ClassLikeDeclaration): string {
+export function className(cls: ts.ClassLikeDeclaration): string {
   return cls.name?.text ?? "<anonymous>";
 }
 
-/** `const name = { ... }` → "name", for an object literal directly assigned to a variable. */
-function objectVarName(obj: ts.Node): string | undefined {
+/** Is `expr` the expression `module.exports`? */
+export function isModuleExports(expr: ts.Node): boolean {
+  return ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) &&
+    expr.expression.text === "module" && expr.name.text === "exports";
+}
+
+/** The name an object literal's methods are keyed on: `const name = { ... }` -> "name",
+ * `module.exports = { ... }` / `export = { ... }` -> "exports", `export default { ... }` -> "default". */
+export function objectName(obj: ts.Node): string | undefined {
   if (!ts.isObjectLiteralExpression(obj)) return undefined;
   const p = obj.parent;
-  return p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name) ? p.name.text : undefined;
+  if (!p) return undefined;
+  if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+  if (ts.isBinaryExpression(p) && p.right === obj && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && isModuleExports(p.left)) {
+    return "exports";
+  }
+  if (ts.isExportAssignment(p)) return p.isExportEquals ? "exports" : "default";
+  return undefined;
+}
+
+function isMethodLike(n: ts.Node): n is ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration {
+  return ts.isMethodDeclaration(n) || ts.isGetAccessor(n) || ts.isSetAccessor(n);
+}
+
+/** The symbol name of a function-like node, or undefined when it has none of its own (anonymous
+ * callbacks etc.). The single naming rule shared by enclosingSymbol and the linker's code index. */
+export function functionLikeName(cur: ts.Node): string | undefined {
+  if (ts.isFunctionDeclaration(cur)) return cur.name?.text;
+  if (isMethodLike(cur)) {
+    if (ts.isClassLike(cur.parent)) return `${className(cur.parent)}.${memberName(cur.name)}`;
+    const obj = objectName(cur.parent);
+    return obj ? `${obj}.${memberName(cur.name)}` : undefined;
+  }
+  if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && cur.parent) {
+    const p = cur.parent;
+    if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+    if (ts.isPropertyDeclaration(p) && ts.isClassLike(p.parent)) return `${className(p.parent)}.${memberName(p.name)}`;
+    if (ts.isPropertyAssignment(p)) {
+      const obj = objectName(p.parent);
+      if (obj) return `${obj}.${memberName(p.name)}`;
+    }
+    if (ts.isFunctionExpression(cur) && cur.name) return cur.name.text;
+  }
+  return undefined;
 }
 
 export function enclosingSymbol(node: ts.Node): string {
-  let cur: ts.Node | undefined = node.parent;
-  while (cur) {
-    if (ts.isFunctionDeclaration(cur) && cur.name) return cur.name.text;
-    if ((ts.isMethodDeclaration(cur) || ts.isGetAccessor(cur) || ts.isSetAccessor(cur)) && ts.isClassLike(cur.parent)) {
-      return `${className(cur.parent)}.${memberName(cur.name)}`;
-    }
-    if ((ts.isMethodDeclaration(cur) || ts.isGetAccessor(cur) || ts.isSetAccessor(cur)) && objectVarName(cur.parent)) {
-      return `${objectVarName(cur.parent)}.${memberName(cur.name)}`;
-    }
-    if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && cur.parent) {
-      const p = cur.parent;
-      if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
-      if (ts.isPropertyDeclaration(p) && ts.isClassLike(p.parent)) return `${className(p.parent)}.${memberName(p.name)}`;
-      if (ts.isPropertyAssignment(p) && objectVarName(p.parent)) return `${objectVarName(p.parent)}.${memberName(p.name)}`;
-      if (ts.isFunctionExpression(cur) && cur.name) return cur.name.text;
-    }
-    cur = cur.parent;
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    const name = functionLikeName(cur);
+    if (name !== undefined) return name;
   }
   return "<module>";
 }

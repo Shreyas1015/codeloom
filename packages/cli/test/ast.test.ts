@@ -75,6 +75,40 @@ describe("enclosingSymbol", () => {
   });
 });
 
+describe("enclosingSymbol — CommonJS and default-export objects", () => {
+  const names = (code: string) => {
+    const sf = parseSource("x.js", code);
+    const out: string[] = [];
+    walk(sf, (n) => { if (ts.isCallExpression(n) && /from/.test(n.expression.getText())) out.push(enclosingSymbol(n)); });
+    return out;
+  };
+
+  it("names methods and property functions of an object assigned to module.exports as exports.<name>", () => {
+    expect(names(`
+      module.exports = {
+        async list() { return db.from("a"); },
+        find: async (id) => db.from("b"),
+        remove: function (id) { return db.from("c"); },
+      };`)).toEqual(["exports.list", "exports.find", "exports.remove"]);
+  });
+
+  it("names methods of an object literal in export default as default.<name>", () => {
+    expect(names(`
+      export default {
+        list() { return db.from("a"); },
+        find: (id) => db.from("b"),
+      };`)).toEqual(["default.list", "default.find"]);
+  });
+
+  it("names class property arrows and anonymous default classes", () => {
+    expect(names(`
+      export default class {
+        run() { return db.from("a"); }
+        create = async () => db.from("b");
+      }`)).toEqual(["<anonymous>.run", "<anonymous>.create"]);
+  });
+});
+
 describe("helpers", () => {
   it("normalizes paths", () => {
     expect(normalizePath("customers//x/")).toBe("/customers/x");
