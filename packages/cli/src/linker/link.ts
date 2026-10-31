@@ -103,18 +103,30 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
   return reaches;
 }
 
-const ABSOLUTE_URL_RE = /^[`'"]?https?:\/\//i;
-
-/** A hardcoded absolute foreign URL (no stripped `base` expression — that only happens for a pure
- * literal, which is exactly the "someone pasted a real host" case) is treated as external, never a
- * workspace backend. */
-function isExternalAbsolute(call: HttpCall): boolean {
-  return call.base === undefined && ABSOLUTE_URL_RE.test(call.raw);
+/** Host (lowercased, port kept) of an absolute URL at the start of `text` (quotes/backtick allowed). */
+function urlHost(text: string): string | undefined {
+  return text.match(/^\s*[`'"]?[a-z][a-z0-9+.-]*:\/\/([^/'"`?#\s]+)/i)?.[1]?.toLowerCase();
 }
 
-function externalHost(call: HttpCall): string {
-  const m = call.raw.match(/https?:\/\/([^/'"`]+)/i);
-  return m ? m[1]! : call.raw;
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
+
+/** Hosts named in any repo's apiBase (entries may be env var names, bare hosts, or full URLs). */
+function apiBaseHosts(repos: RepoData[]): Set<string> {
+  const out = new Set<string>();
+  for (const r of repos) {
+    for (const entry of r.ref.apiBase ?? []) {
+      const host = urlHost(entry) ?? entry.trim().split("/")[0]!.toLowerCase();
+      if (host !== "") out.add(host);
+    }
+  }
+  return out;
+}
+
+/** Loopback hosts and hosts listed in an apiBase are the workspace's own backends; anything else is a
+ * third party. `host` may carry a port; a known host matches with or without it. */
+function isInternalHost(host: string, known: Set<string>): boolean {
+  const hostname = host.replace(/:\d+$/, "");
+  return LOOPBACK_HOSTS.has(hostname) || known.has(host) || known.has(hostname);
 }
 
 const ENV_VAR_RE = /process\.env\.(\w+)/;
@@ -122,8 +134,10 @@ const ENV_VAR_RE = /process\.env\.(\w+)/;
 /** Text of whatever base expression a call carries, or its client's, to match against `apiBase` hints. */
 function baseHintText(call: HttpCall, clients: HttpClient[]): string {
   if (call.base) return call.base;
+  const own = urlHost(call.raw);
+  if (own) return own;
   const client = clients.find((c) => c.name === call.client);
-  return client?.baseExpr ?? "";
+  return client?.baseExpr ?? client?.baseHost ?? "";
 }
 
 /** Backend choice for a call (memo (c)): all repos with routes; unique match wins; several → prefer
@@ -154,11 +168,17 @@ export function callPathWithClient(call: HttpCall, clients: HttpClient[]): strin
 
 function resolveTarget(
   call: HttpCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
+  knownHosts: Set<string>,
 ): UiLink["target"] {
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
-  if (isExternalAbsolute(call)) return { kind: "external", base: externalHost(call) };
+  // A hardcoded absolute URL (no stripped `base` expression) names its host outright; otherwise the
+  // client's literal baseURL may. Loopback / apiBase hosts are ours (strip and match), others external.
+  const ownHost = call.base === undefined ? urlHost(call.raw) : undefined;
+  const host = ownHost ?? clients.find((c) => c.name === call.client)?.baseHost;
+  if (host !== undefined && !isInternalHost(host, knownHosts)) return { kind: "external", base: host };
   if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };
-  const path = callPathWithClient(call, clients);
+  // An absolute URL on the call itself overrides any client baseURL (axios/ky semantics).
+  const path = ownHost !== undefined ? call.path : callPathWithClient(call, clients);
   // chooseBackend only narrows the candidate pool (e.g. to avoid matching the wrong repo's same-named
   // route); it is NOT itself a confidence signal. pickRoute already produces "guess" on a genuine tie
   // (two backends whose best candidate is equally specific), which is the only real ambiguity — a
@@ -183,6 +203,7 @@ function resolveTarget(
 export function linkUi(input: LinkInput): UiLink[] {
   const allBackends = input.ws.repos.filter((r) => r.endpoints.routes.length > 0);
   const effectiveByRepo = new Map(input.ws.repos.map((r) => [r.ref.id, effectiveRoutes(r.endpoints)]));
+  const knownHosts = apiBaseHosts(input.ws.repos);
   const links: UiLink[] = [];
   for (const repo of input.ws.repos) {
     for (const call of repo.endpoints.httpCalls) {
@@ -190,7 +211,7 @@ export function linkUi(input: LinkInput): UiLink[] {
         repo: repo.ref.id,
         call,
         pages: reachingPages(input, repo.ref.id, call),
-        target: resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo),
+        target: resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts),
       });
     }
   }

@@ -162,6 +162,8 @@ function resolveClientReceiver(
   return undefined;
 }
 
+const ABSOLUTE_HOST_RE = /^\s*[a-z][a-z0-9+.-]*:\/\/([^/?#\s]+)/i;
+
 export function detectHttpClients(file: ParsedFile): HttpClient[] {
   if (!file.sf) return [];
   const aliases = collectKnownLibAliases(file.sf);
@@ -186,6 +188,7 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
       factory,
       ...(baseNode && literal === undefined ? { baseExpr: baseNode.getText() } : {}),
       ...(literal !== undefined ? { baseLiteral: normalizePath(literal) } : {}),
+      ...(literal !== undefined && ABSOLUTE_HOST_RE.test(literal) ? { baseHost: literal.match(ABSOLUTE_HOST_RE)![1]!.toLowerCase() } : {}),
     });
   });
   return out;

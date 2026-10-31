@@ -128,6 +128,15 @@ describe("detectHttpClients", () => {
     expect(clients(`export const client = got.create({ baseURL: "/api" });`)).toEqual(["client got baseLiteral=/api"]);
   });
 
+  it("keeps the host of an absolute literal baseURL as baseHost (lowercased, port kept)", () => {
+    const [stripe] = detectHttpClients(parsed("src/lib.ts", `export const stripe = axios.create({ baseURL: "https://API.Stripe.com/v1" });`));
+    expect(stripe).toMatchObject({ baseLiteral: "/v1", baseHost: "api.stripe.com" });
+    const [local] = detectHttpClients(parsed("src/lib.ts", `export const api = axios.create({ baseURL: "http://localhost:3333/api" });`));
+    expect(local).toMatchObject({ baseLiteral: "/api", baseHost: "localhost:3333" });
+    const [rel] = detectHttpClients(parsed("src/lib.ts", `export const api = axios.create({ baseURL: "/api" });`));
+    expect(rel).not.toHaveProperty("baseHost");
+  });
+
   it("records a known library's client with no options as having neither baseLiteral nor baseExpr (axios.create() needs no baseURL)", () => {
     const [found] = detectHttpClients(parsed("src/lib.ts", `export const api = axios.create();`));
     expect(found).toMatchObject({ name: "api", factory: "axios" });

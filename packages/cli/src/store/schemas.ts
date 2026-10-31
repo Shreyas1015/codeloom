@@ -54,6 +54,9 @@ export const HttpClientSchema = z.object({
   baseExpr: z.string().optional(),
   /** baseURL when it is a string literal, normalised by normalizePath (host stripped). */
   baseLiteral: z.string().optional(),
+  /** Host (lowercased, port kept) of an absolute literal baseURL, e.g. "api.stripe.com" or
+   * "localhost:3333"; absent for a relative or non-literal baseURL. */
+  baseHost: z.string().optional(),
 });
 export type HttpClient = z.infer<typeof HttpClientSchema>;
 

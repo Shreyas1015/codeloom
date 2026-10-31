@@ -325,4 +325,40 @@ describe("linkUi", () => {
       ["OrderService.loadAllOrders", "exact"],
     ]);
   });
+  describe("internal vs external hosts", () => {
+    const route: EndpointsFile["routes"][number] = { method: "GET", path: "/api/x", handler: "h", inline: false, framework: "express", at: { file: "s.ts", line: 1, symbol: "h" } };
+    const run = (call: HttpCall, clients: HttpClient[] = [], apiBase?: string[]) => {
+      const web = repo("web", { httpCalls: [call], httpClients: clients });
+      const api = repo("api", { routes: [route, { ...route, path: "/v1/charges" }] }, apiBase ? { apiBase } : undefined);
+      const resolvers = new Map([["web", resolverFor({}, "web")], ["api", resolverFor({}, "api")]]);
+      return linkUi({ ws: ws([web, api]), resolvers })[0]!.target;
+    };
+    const at = { file: "lib/x.ts", line: 1, symbol: "f" };
+
+    it("treats a localhost absolute URL as the workspace backend", () => {
+      expect(run({ method: "GET", path: "/api/x", raw: '"http://localhost:3333/api/x"', resolved: true, client: "fetch", at, kind: "literal" }))
+        .toMatchObject({ kind: "route", confidence: "exact" });
+      expect(run({ method: "GET", path: "/api/x", raw: "`http://127.0.0.1:3333/api/x`", resolved: true, client: "fetch", at, kind: "literal" }))
+        .toMatchObject({ kind: "route" });
+    });
+
+    it("treats a host listed in a repo's apiBase as internal", () => {
+      expect(run({ method: "GET", path: "/api/x", raw: '"https://api.myco.com/api/x"', resolved: true, client: "fetch", at, kind: "literal" }, [], ["api.myco.com"]))
+        .toMatchObject({ kind: "route" });
+      expect(run({ method: "GET", path: "/api/x", raw: '"https://api.myco.com/api/x"', resolved: true, client: "fetch", at, kind: "literal" }))
+        .toEqual({ kind: "external", base: "api.myco.com" });
+    });
+
+    it("treats calls through a client whose literal baseURL is a foreign host as external", () => {
+      const clients: HttpClient[] = [{ name: "stripe", file: "lib/stripe.ts", line: 1, factory: "axios", baseLiteral: "/v1", baseHost: "api.stripe.com" }];
+      expect(run({ method: "GET", path: "/charges", raw: '"/charges"', resolved: true, client: "stripe", at, kind: "literal" }, clients))
+        .toEqual({ kind: "external", base: "api.stripe.com" });
+    });
+
+    it("matches calls through a localhost client against the workspace", () => {
+      const clients: HttpClient[] = [{ name: "api", file: "lib/api.ts", line: 1, factory: "axios", baseLiteral: "/api", baseHost: "localhost:3333" }];
+      expect(run({ method: "GET", path: "/x", raw: '"/x"', resolved: true, client: "api", at, kind: "literal" }, clients))
+        .toMatchObject({ kind: "route" });
+    });
+  });
 });
