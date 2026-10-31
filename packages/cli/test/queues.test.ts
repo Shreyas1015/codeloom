@@ -28,4 +28,42 @@ describe("detectQueues", () => {
       export function fan(channel: any) { channel.publish("logs", "", Buffer.from("")); }
     `, "amqplib")).toEqual(["publish logs @fan"]);
   });
+
+  it("records exchange and routing key on an exchange publish, and none on sendToQueue", () => {
+    const calls = detectQueues(parsed("src/events.ts", `
+      export function publishInvoiceCreated(channel: any) { channel.sendToQueue("invoice.created", Buffer.from("")); }
+      export function announce(ch: any) { ch.publish("billing", "invoice.paid", Buffer.from("")); }
+    `), ctxWith("amqplib"));
+    expect(calls).toEqual([
+      { queue: "invoice.created", op: "publish", at: { file: "src/events.ts", line: 2, symbol: "publishInvoiceCreated" } },
+      {
+        queue: "billing:invoice.paid", op: "publish", exchange: "billing", routingKey: "invoice.paid",
+        at: { file: "src/events.ts", line: 3, symbol: "announce" },
+      },
+    ]);
+  });
+
+  it("records a topic bind, and ignores assertExchange", () => {
+    const calls = detectQueues(parsed("src/notify-consumer.ts", `
+      export function startNotifier(channel: any) {
+        channel.assertExchange("billing", "topic");
+        channel.bindQueue("emails", "billing", "invoice.*");
+        channel.consume("emails", () => {});
+      }
+    `), ctxWith("amqplib"));
+    expect(calls).toEqual([
+      {
+        queue: "emails", op: "bind", exchange: "billing", routingKey: "invoice.*",
+        at: { file: "src/notify-consumer.ts", line: 4, symbol: "startNotifier" },
+      },
+      { queue: "emails", op: "consume", at: { file: "src/notify-consumer.ts", line: 5, symbol: "startNotifier" } },
+    ]);
+  });
+
+  it("skips a bind whose routing key is not a string literal", () => {
+    const calls = detectQueues(parsed("src/x.ts", `
+      export function bad(channel: any, key: string) { channel.bindQueue("emails", "billing", key); }
+    `), ctxWith("amqplib"));
+    expect(calls).toEqual([]);
+  });
 });
