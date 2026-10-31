@@ -350,3 +350,184 @@ describe("createCallResolver — module-level singletons", () => {
     });
   });
 });
+
+describe("review fixes", () => {
+  it("1: export * never forwards default", () => {
+    const resolver = resolverOf({
+      "lib/star.ts": `export default function starDefault() { return 1; }`,
+      "lib/barrel.ts": `export * from "./star.js";`,
+      "controllers/d.ts": `
+        import D from "../lib/barrel.js";
+        export function run() { return D(); }
+      `,
+    });
+    expect(siteAt(resolver, "controllers/d.ts", "run")).toBeNull();
+    expect(resolver.resolveExport("lib/barrel.ts", "default")).toBeNull();
+  });
+
+  it("1b: export * never forwards a default class (new D().m() through the barrel)", () => {
+    const resolver = resolverOf({
+      "lib/star.ts": `export default class Star { m() { return 1; } }`,
+      "lib/other.ts": `export class Other { m() { return 2; } }`,
+      "lib/barrel.ts": `export * from "./star.js";`,
+      "controllers/d.ts": `
+        import D from "../lib/barrel.js";
+        export function run() { return new D().m(); }
+      `,
+    });
+    expect(siteAt(resolver, "controllers/d.ts", "run")).toBeNull();
+  });
+
+  it("2: renamed default re-export of a class resolves to the default class's method", () => {
+    const resolver = resolverOf({
+      "ui/button.ts": `export default class Button { click() { return 1; } }`,
+      "ui/index.ts": `export { default as Button } from "./button.js";`,
+      "pages/home.ts": `
+        import { Button } from "../ui/index.js";
+        export function run() { return new Button().click(); }
+      `,
+    });
+    expect(siteAt(resolver, "pages/home.ts", "run")).toMatchObject({
+      target: { file: "ui/button.ts", symbol: "Button.click" }, confidence: "exact", via: "new",
+    });
+  });
+
+  it("2b: renamed default re-export of an anonymous default class", () => {
+    const resolver = resolverOf({
+      "ui/button.ts": `export default class { click() { return 1; } }`,
+      "ui/index.ts": `export { default as Button } from "./button.js";`,
+      "pages/home.ts": `
+        import { Button } from "../ui/index.js";
+        export function run() { return new Button().click(); }
+      `,
+    });
+    expect(siteAt(resolver, "pages/home.ts", "run")).toMatchObject({
+      target: { file: "ui/button.ts", symbol: "<anonymous>.click" }, confidence: "exact", via: "new",
+    });
+  });
+
+  it("3: export { a as b } resolves import { b } to a", () => {
+    const resolver = resolverOf({
+      "lib/x.ts": `function a() { return 1; } export { a as b };`,
+      "c.ts": `import { b } from "./lib/x.js"; export function run() { return b(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toMatchObject({
+      target: { file: "lib/x.ts", symbol: "a" }, confidence: "exact", via: "import",
+    });
+  });
+
+  it("3b: module.exports = { b: impl } resolves import { b } to impl", () => {
+    const resolver = resolverOf({
+      "lib/x.js": `function impl() { return 1; } module.exports = { b: impl };`,
+      "c.ts": `import { b } from "./lib/x.js"; export function run() { return b(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toMatchObject({
+      target: { file: "lib/x.js", symbol: "impl" }, confidence: "exact", via: "import",
+    });
+  });
+
+  it("3c: export { Svc as Service } resolves new Service().m() to Svc.m", () => {
+    const resolver = resolverOf({
+      "lib/svc.ts": `class Svc { m() { return 1; } } export { Svc as Service };`,
+      "c.ts": `import { Service } from "./lib/svc.js"; export function run() { return new Service().m(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toMatchObject({
+      target: { file: "lib/svc.ts", symbol: "Svc.m" }, confidence: "exact", via: "new",
+    });
+  });
+
+  it("4: const svc = require('./x'); svc.list() resolves to exports.list", () => {
+    const resolver = resolverOf({
+      "services/x.js": `module.exports = { list() { return []; } };`,
+      "controllers/c.js": `
+        const svc = require("../services/x.js");
+        function run() { return svc.list(); }
+      `,
+      "services/y.js": `class Other { list() { return 1; } }`,
+    });
+    expect(siteAt(resolver, "controllers/c.js", "run")).toMatchObject({
+      target: { file: "services/x.js", symbol: "exports.list" }, confidence: "exact",
+    });
+  });
+
+  it("4b: const CS = require('./x'); new CS().m() resolves to the class exported via module.exports = CS", () => {
+    const resolver = resolverOf({
+      "services/cs.js": `class CS { m() { return 1; } } module.exports = CS;`,
+      "services/other.js": `class Other { m() { return 2; } }`,
+      "controllers/c.js": `
+        const CS = require("../services/cs.js");
+        function run() { return new CS().m(); }
+      `,
+    });
+    expect(siteAt(resolver, "controllers/c.js", "run")).toMatchObject({
+      target: { file: "services/cs.js", symbol: "CS.m" }, confidence: "exact", via: "new",
+    });
+  });
+
+  it("4c: default import of an `export default {}` object resolves svc.m() to default.m", () => {
+    const resolver = resolverOf({
+      "services/x.ts": `export default { list() { return []; } };`,
+      "services/y.ts": `export class Y { list() { return 1; } }`,
+      "controllers/c.ts": `import svc from "../services/x.js"; export function run() { return svc.list(); }`,
+    });
+    expect(siteAt(resolver, "controllers/c.ts", "run")).toMatchObject({
+      target: { file: "services/x.ts", symbol: "default.list" }, confidence: "exact",
+    });
+  });
+
+  it("5: callersOf / walkCallers are independent of index insertion order", () => {
+    const filesA: Record<string, string> = {
+      "lib/t.ts": `export function target() { return 1; }`,
+      "b/caller.ts": `import { target } from "../lib/t.js"; export function zeta() { return target(); } export function alpha() { return target(); }`,
+      "a/caller.ts": `import { target } from "../lib/t.js"; export function beta() { target(); return target(); }`,
+    };
+    const filesB: Record<string, string> = Object.fromEntries(Object.entries(filesA).reverse());
+    const r1 = resolverOf(filesA);
+    const r2 = resolverOf(filesB);
+    const t = ref("lib/t.ts", "target");
+    const c1 = r1.callersOf(t);
+    expect(c1.map((c) => `${c.from.file}#${c.from.symbol}:${c.call.site.line}`)).toEqual([
+      "a/caller.ts#beta:1", "a/caller.ts#beta:1", "b/caller.ts#alpha:1", "b/caller.ts#zeta:1",
+    ]);
+    expect(r2.callersOf(t)).toEqual(c1);
+    expect(walkCallers(r2, t)).toEqual(walkCallers(r1, t));
+  });
+
+  it("6: no unique-method guess for bare identifier calls", () => {
+    const resolver = resolverOf({
+      "services/s.ts": `export class S { next() { return 1; } }`,
+      "c.ts": `export function run() { return next(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toBeNull();
+  });
+
+  it("8: this.m() inside an object-literal method resolves to the sibling object-method", () => {
+    const resolver = resolverOf({
+      "services/inv.ts": `
+        export const invoiceService = {
+          create(d: unknown) { return this.validate(d); },
+          validate(d: unknown) { return d; },
+        };
+      `,
+      "services/other.ts": `export class Other { validate() { return 1; } }`,
+    });
+    expect(siteAt(resolver, "services/inv.ts", "invoiceService.create")).toMatchObject({
+      target: { file: "services/inv.ts", symbol: "invoiceService.validate" }, confidence: "exact", via: "this",
+    });
+  });
+
+  it("9: static call on an imported class is via import (barrel when re-exported)", () => {
+    const resolver = resolverOf({
+      "lib/util.ts": `export class Util { static make() { return 1; } }`,
+      "lib/index.ts": `export * from "./util.js";`,
+      "c.ts": `import { Util } from "./lib/util.js"; export function run() { return Util.make(); }`,
+      "d.ts": `import { Util } from "./lib/index.js"; export function run() { return Util.make(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toMatchObject({
+      target: { file: "lib/util.ts", symbol: "Util.make" }, confidence: "exact", via: "import",
+    });
+    expect(siteAt(resolver, "d.ts", "run")).toMatchObject({
+      target: { file: "lib/util.ts", symbol: "Util.make" }, confidence: "exact", via: "barrel",
+    });
+  });
+});
