@@ -199,7 +199,7 @@ export const FingerprintsSchema = z.object({
   gitCommitHash: z.string(),
   files: z.record(
     z.string(),
-    z.object({ hash: z.string(), structure: z.any(), calls: z.any(), endpoints: z.any() }),
+    z.object({ hash: z.string(), structure: z.any(), calls: z.any(), endpoints: z.any(), codeIndex: z.any() }),
   ),
 });
 export type Fingerprints = z.infer<typeof FingerprintsSchema>;

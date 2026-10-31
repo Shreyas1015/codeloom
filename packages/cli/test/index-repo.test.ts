@@ -63,6 +63,26 @@ describe("indexRepo", () => {
     await expect(indexRepo(repo, "svc")).rejects.toThrow(CodeloomError);
     await expect(indexRepo(repo, "svc")).rejects.toThrow(/svc/);
   });
+
+  it("builds a per-repo code index for JS/TS files only", async () => {
+    const repo = makeRepo(files);
+    const res = await indexRepo(repo, "svc");
+    expect([...res.codeIndex.keys()].sort()).toEqual(["src/server.ts", "src/util.ts"]);
+    expect(res.codeIndex.get("src/util.ts")?.symbols.map((s) => s.name)).toEqual(["add"]);
+    expect(res.files.has("package.json")).toBe(true);
+    expect(res.aliases).toEqual([]);
+  });
+
+  it("keeps the code index after a cache hit and after a cold cache rebuild", async () => {
+    const repo = makeRepo(files);
+    await indexRepo(repo, "svc");
+    const reused = await indexRepo(repo, "svc");
+    expect(reused.stats.reused).toBe(3);
+    expect(reused.codeIndex.get("src/util.ts")?.symbols.map((s) => s.name)).toEqual(["add"]);
+    rmSync(join(repo, ".codeloom/fingerprints.json"));
+    const cold = await indexRepo(repo, "svc");
+    expect(cold.codeIndex.get("src/util.ts")?.symbols.map((s) => s.name)).toEqual(["add"]);
+  });
 });
 
 describe("indexRepo determinism (committed files depend only on code)", () => {

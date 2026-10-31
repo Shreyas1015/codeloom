@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
-import { CodeloomError } from "../errors.js";
+import { JS_EXT, parseSource } from "../adapters/ast.js";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
-import type { EndpointsPart } from "../adapters/types.js";
+import type { EndpointsPart, ParsedFile } from "../adapters/types.js";
+import { CodeloomError } from "../errors.js";
+import { buildFileCodeIndex, type FileCodeIndex, type RepoCodeIndex } from "../linker/code-index.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
 import {
@@ -14,7 +16,7 @@ import { listFiles } from "../workspace/files.js";
 import { git } from "../workspace/git.js";
 import { gitHead } from "../workspace/repos.js";
 import { buildGraph } from "./build-graph.js";
-import { loadAliases, resolveImport } from "./resolve-imports.js";
+import { type Alias, loadAliases, resolveImport } from "./resolve-imports.js";
 import { analyzeStructure, EMPTY_STRUCTURE, type FileEntry, getPlugin, isSourceFile } from "./structure.js";
 
 const MAX_BYTES = 1_000_000;
@@ -65,9 +67,19 @@ export interface IndexResult {
   graph: KnowledgeGraph;
   endpoints: EndpointsFile;
   stats: IndexStats;
+  codeIndex: RepoCodeIndex;
+  files: Set<string>;
+  aliases: Alias[];
 }
 
-type FileRecord = Fingerprints["files"][string] & FileEntry & { endpoints: EndpointsPart };
+type FileRecord = Fingerprints["files"][string] & FileEntry & { endpoints: EndpointsPart; codeIndex: FileCodeIndex };
+
+/** The same shape adapters build internally (adapters/run.ts), so the linker's own AST pass sees
+ * exactly what the adapters saw. */
+function toParsedFile(rel: string, content: string): ParsedFile {
+  const isJs = JS_EXT.test(rel) && !rel.endsWith(".d.ts");
+  return { rel, content, sf: isJs ? parseSource(rel, content) : undefined };
+}
 
 export async function indexRepo(
   repoAbs: string,
@@ -116,7 +128,12 @@ export async function indexRepo(
         record = hit;
         stats.reused++;
       } else {
-        record = { hash, ...analyzeStructure(plugin, rel, content), endpoints: runAdapters(rel, content, ctx.contextFor(rel)) };
+        record = {
+          hash,
+          ...analyzeStructure(plugin, rel, content),
+          endpoints: runAdapters(rel, content, ctx.contextFor(rel)),
+          codeIndex: buildFileCodeIndex(toParsedFile(rel, content)),
+        };
         stats.parsed++;
       }
     } catch (err) {
@@ -147,5 +164,11 @@ export async function indexRepo(
     gitCommitHash: head,
     files: next,
   } satisfies Fingerprints);
-  return { graph, endpoints, stats };
+
+  const codeIndex: RepoCodeIndex = new Map();
+  for (const [rel, record] of Object.entries(next)) {
+    if (JS_EXT.test(rel) && !rel.endsWith(".d.ts")) codeIndex.set(rel, record.codeIndex);
+  }
+
+  return { graph, endpoints, stats, codeIndex, files: fileSet, aliases };
 }
