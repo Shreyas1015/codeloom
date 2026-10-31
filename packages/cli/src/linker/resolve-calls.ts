@@ -228,11 +228,13 @@ function exact(ctx: Ctx, site: CallSite, hit: ExportHit, via: ResolvedCall["via"
 }
 
 /** Bare identifier calls (`helper()`, `fetch()`) resolve to a local function or an import, or not at
- * all: a global like `fetch` / a callback param like `next` must never be guessed onto a method. */
+ * all: a global like `fetch` / a callback param like `next` must never be guessed onto a method.
+ * Only names that really bind in the file count as local: `exports.fetch = function () { fetch() }`
+ * must not link the global `fetch` (or an imported `find`) onto the export itself. */
 function resolveIdent(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "ident" }>): ResolvedCall | null {
   const fi = ctx.index.get(file);
   if (!fi) return null;
-  const local = fi.symbols.find((s) => s.name === callee.name && s.kind === "function");
+  const local = fi.symbols.find((s) => s.name === callee.name && s.kind === "function" && s.binding);
   if (local) return exact(ctx, site, { file, symbol: local.name, hops: 0 }, "local");
   const imp = fi.imports.find((i) => i.local === callee.name && i.kind !== "namespace");
   if (imp) {

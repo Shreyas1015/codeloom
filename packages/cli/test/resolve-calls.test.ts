@@ -624,3 +624,45 @@ describe("review fixes", () => {
     });
   });
 });
+
+describe("createCallResolver — only real bindings resolve bare identifiers", () => {
+  it("A: exports.fetch = function wrapping the global fetch does not link to itself", () => {
+    const resolver = resolverOf({ "a.js": `exports.fetch = function (u) { return fetch(u); };` });
+    expect(resolver.callsFrom(ref("a.js", "fetch"))).toEqual([]);
+  });
+
+  it("B: exports.find wrapping an imported find resolves to the import", () => {
+    const resolver = resolverOf({
+      "db.ts": `export function find(id) { return id; }`,
+      "b.ts": `
+        import { find } from "./db.js";
+        exports.find = function (id) { return find(id); };
+      `,
+    });
+    expect(siteAt(resolver, "b.ts", "find")).toMatchObject({
+      target: { file: "db.ts", symbol: "find" }, confidence: "exact", via: "import",
+    });
+  });
+
+  it("C: the own name of module.exports = function main is not in module scope", () => {
+    const resolver = resolverOf({ "c.js": `module.exports = function main() {};\nfunction run() { main(); }` });
+    expect(resolver.callsFrom(ref("c.js", "run"))).toEqual([]);
+  });
+
+  it("D: the own name of a function expression passed as a value is not in module scope", () => {
+    const resolver = resolverOf({ "d.js": `foo({ cb: function named() {} });\nfunction run() { named(); }` });
+    expect(resolver.callsFrom(ref("d.js", "run"))).toEqual([]);
+  });
+
+  it("a declared function and a same-named CJS export: the bare call resolves to the declaration", () => {
+    const resolver = resolverOf({ "f.js": `function list() { return 1; }\nexports.list = function () { return list(); };` });
+    const idx = resolver.fileIndex("f.js")!;
+    expect(idx.symbols.filter((s) => s.name === "list").map((s) => s.binding)).toEqual([true, false]);
+    const calls = resolver.callsFrom(ref("f.js", "list"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ target: { file: "f.js", symbol: "list" }, confidence: "exact", via: "local" });
+    expect(calls[0]!.target).toEqual(ref("f.js", "list"));
+    // the target is the declaration (line 1), not the CJS export (line 2)
+    expect(idx.symbols.find((s) => s.name === "list" && s.binding)!.lines).toEqual([1, 1]);
+  });
+});

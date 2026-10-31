@@ -9,6 +9,11 @@ export interface CodeSymbol {
   kind: "function" | "class" | "method" | "object-method";
   lines: [number, number];
   exported: boolean;
+  /** True only when `name` really binds in the file's scope, so a bare `name()` call there can mean it:
+   * function declarations, const/let/var-declared functions, named class declarations, and their
+   * methods. False for CommonJS property names (`exports.x = function () {}`), a function expression's
+   * own name outside a declaration (`module.exports = function main() {}`), and "default" names. */
+  binding: boolean;
   /** The preferred export alias when it differs from `name` ("default" wins over a rename). */
   exportedAs?: string;
   /** Functions/classes: every name other files can import this symbol under ("default" for the default
@@ -129,8 +134,10 @@ function ownVariableStatement(decl: ts.VariableDeclaration): ts.VariableStatemen
 
 /** A function/class symbol exported under `names` (none = not exported here; export lists and
  * CommonJS assignments elsewhere in the file are added by applyExportMarks). */
-function plainSymbol(name: string, kind: "function" | "class", lines: [number, number], names: string[]): CodeSymbol {
-  const sym: CodeSymbol = { name, kind, lines, exported: false };
+function plainSymbol(
+  name: string, kind: "function" | "class", lines: [number, number], names: string[], binding: boolean,
+): CodeSymbol {
+  const sym: CodeSymbol = { name, kind, lines, exported: false, binding };
   for (const n of names) addExportName(sym, n);
   return sym;
 }
@@ -151,27 +158,43 @@ function modifierExportNames(node: ts.Node, name: string): string[] {
 /** Symbol for a function-like node already named by functionLikeName (the adapters' naming rule). */
 function functionSymbol(node: ts.Node, name: string): CodeSymbol {
   const own: [number, number] = [lineOf(node), endLineOf(node)];
-  if (ts.isFunctionDeclaration(node)) return plainSymbol(name, "function", own, modifierExportNames(node, name));
+  if (ts.isFunctionDeclaration(node)) {
+    return plainSymbol(name, "function", own, modifierExportNames(node, name), node.name !== undefined);
+  }
   const p = node.parent;
   if (ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node)) {
-    if (ts.isClassLike(p)) return { name, kind: "method", lines: own, exported: false };
-    return { name, kind: "object-method", lines: own, exported: objectExported(p) };
+    if (ts.isClassLike(p)) return { name, kind: "method", lines: own, exported: false, binding: classBinds(p) };
+    return { name, kind: "object-method", lines: own, exported: objectExported(p), binding: objectBinds(p) };
   }
   // Arrow function / function expression.
   if (ts.isVariableDeclaration(p)) {
     const stmt = ownVariableStatement(p);
-    return plainSymbol(name, "function", [lineOf(p), endLineOf(p)], stmt && isExported(stmt) ? [name] : []);
+    return plainSymbol(name, "function", [lineOf(p), endLineOf(p)], stmt && isExported(stmt) ? [name] : [], true);
   }
-  if (ts.isPropertyDeclaration(p)) return { name, kind: "method", lines: [lineOf(p), endLineOf(p)], exported: false };
+  if (ts.isPropertyDeclaration(p)) {
+    return { name, kind: "method", lines: [lineOf(p), endLineOf(p)], exported: false, binding: classBinds(p.parent) };
+  }
   if (ts.isPropertyAssignment(p) && objectName(p.parent) !== undefined) {
-    return { name, kind: "object-method", lines: own, exported: objectExported(p.parent) };
+    return { name, kind: "object-method", lines: own, exported: objectExported(p.parent), binding: objectBinds(p.parent) };
   }
+  // Below, `name` is a CommonJS property, "default", or a function expression's own name (visible only
+  // inside that function): none of them bind in the file's scope.
   // `exports.x = function () {}` (exported as x) / `module.exports = function main() {}` (as default).
   const cjs = commonJsAssignedName(node);
-  if (cjs !== undefined) return plainSymbol(name, "function", own, [cjs]);
+  if (cjs !== undefined) return plainSymbol(name, "function", own, [cjs], false);
   // `export default () => {}` / `export = function () {}`.
-  if (ts.isExportAssignment(p)) return plainSymbol(name, "function", own, ["default"]);
-  return plainSymbol(name, "function", own, []);
+  if (ts.isExportAssignment(p)) return plainSymbol(name, "function", own, ["default"], false);
+  return plainSymbol(name, "function", own, [], false);
+}
+
+/** Does a class's name bind in the file scope? Only a named class declaration does. */
+function classBinds(cls: ts.Node): boolean {
+  return ts.isClassDeclaration(cls) && cls.name !== undefined;
+}
+
+/** Does an object literal's name bind in the file scope? Only `const x = {…}` (not exports/default). */
+function objectBinds(obj: ts.Node): boolean {
+  return !!obj.parent && ts.isVariableDeclaration(obj.parent) && ts.isIdentifier(obj.parent.name);
 }
 
 /** Are an object literal's methods importable? `module.exports = {…}` / `export default {…}` always;
@@ -232,7 +255,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       // `module.exports = class Repo {}` (default) / `exports.Repo = class {}` / `export = class {}`.
       const cjs = decl ? undefined : ts.isExportAssignment(node.parent) ? "default" : commonJsAssignedName(node);
       const names = decl ? modifierExportNames(node, cls) : cjs !== undefined ? [cjs] : [];
-      idx.symbols.push(plainSymbol(cls, "class", [lineOf(node), endLineOf(node)], names));
+      idx.symbols.push(plainSymbol(cls, "class", [lineOf(node), endLineOf(node)], names, classBinds(node)));
       for (const m of node.members) {
         if (ts.isPropertyDeclaration(m)) {
           const name = memberName(m.name);

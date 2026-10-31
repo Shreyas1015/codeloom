@@ -46,7 +46,7 @@ function NewInvoicePage() {
 export default NewInvoicePage;
 `));
     expect(idx.symbols).toEqual([
-      { name: "NewInvoicePage", kind: "function", lines: [2, 4], exported: true, exportedAs: "default", exportNames: ["default"] },
+      { name: "NewInvoicePage", kind: "function", lines: [2, 4], exported: true, binding: true, exportedAs: "default", exportNames: ["default"] },
     ]);
   });
 });
@@ -188,9 +188,9 @@ export const Page = () => null;
 const f = function () { return 1; };
 `));
     expect(idx.symbols).toEqual([
-      { name: "createInvoice", kind: "function", lines: [2, 4], exported: false },
-      { name: "Page", kind: "function", lines: [5, 5], exported: true, exportNames: ["Page"] },
-      { name: "f", kind: "function", lines: [6, 6], exported: false },
+      { name: "createInvoice", kind: "function", lines: [2, 4], exported: false, binding: true },
+      { name: "Page", kind: "function", lines: [5, 5], exported: true, binding: true, exportNames: ["Page"] },
+      { name: "f", kind: "function", lines: [6, 6], exported: false, binding: true },
     ]);
   });
 
@@ -454,5 +454,29 @@ module.exports = obj;
     expect(sym(idx)).toEqual([{ name: "obj.list", kind: "object-method", exported: true, exportedAs: undefined }]);
     const none = buildFileCodeIndex(parsed("src/y.js", `function f() {} module.exports = f;`));
     expect(none.defaultObject).toBeUndefined();
+  });
+});
+
+describe("buildFileCodeIndex — binding", () => {
+  it("marks only names that bind in the file scope", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.js", `
+function decl() {}
+const arrow = () => {};
+var fexpr = function inner() {};
+class Repo { m() {} }
+const svc = { a() {} };
+exports.cjs = function () {};
+module.exports = function main() {};
+foo({ cb: function named() {} });
+module.exports.Klass = class {};
+`));
+    expect(idx.symbols.map((s) => [s.name, s.binding])).toEqual([
+      ["decl", true], ["arrow", true], ["fexpr", true], ["Repo", true], ["Repo.m", true],
+      ["svc.a", true], ["cjs", false], ["main", false], ["named", false], ["<anonymous>", false],
+    ]);
+    const def = buildFileCodeIndex(parsed("src/y.ts", `export default () => {};`));
+    expect(def.symbols.map((s) => [s.name, s.binding])).toEqual([["default", false]]);
+    const defFn = buildFileCodeIndex(parsed("src/z.ts", `export default function () {}`));
+    expect(defFn.symbols.map((s) => [s.name, s.binding])).toEqual([["default", false]]);
   });
 });
