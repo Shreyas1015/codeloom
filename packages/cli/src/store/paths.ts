@@ -5,4 +5,6 @@ export const FILES = {
   graph: "graph.json",
   endpoints: "endpoints.json",
   fingerprints: "fingerprints.json",
+  chains: "chains.json",
+  journeys: "journeys.json",
 } as const;

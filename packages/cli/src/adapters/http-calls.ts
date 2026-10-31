@@ -77,6 +77,9 @@ export function detectHttpCalls(file: ParsedFile): HttpCall[] {
       resolved: pattern?.resolved ?? false,
       client,
       at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
+      // Interim Task 1 value: a real literal/template/unknown distinction and `base` extraction land in
+      // Task 2, which rewrites this function and `pathPattern`'s return type together.
+      kind: pattern ? "literal" : "unknown",
     });
   });
   return out;

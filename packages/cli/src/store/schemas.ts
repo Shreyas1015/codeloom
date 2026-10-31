@@ -19,29 +19,72 @@ export const UiPageSchema = z.object({
 });
 export type UiPage = z.infer<typeof UiPageSchema>;
 
+export const ConfidenceSchema = z.enum(["exact", "param", "guess"]);
+export type Confidence = z.infer<typeof ConfidenceSchema>;
+
+export const HttpCallKindSchema = z.enum(["literal", "template", "unknown"]);
+export type HttpCallKind = z.infer<typeof HttpCallKindSchema>;
+
 export const HttpCallSchema = z.object({
   method: HttpMethodSchema,
+  /** Normalised route pattern; "" when kind === "unknown" (nothing literal in the URL). */
   path: z.string(),
   raw: z.string(),
   resolved: z.boolean(),
   client: z.string(),
   at: LocSchema,
+  /** literal: whole URL is a string; template: literal text + expressions; unknown: no literal text. */
+  kind: HttpCallKindSchema,
+  /** Source text of a leading base expression that was stripped, e.g. "process.env.NEXT_PUBLIC_API_URL". */
+  base: z.string().optional(),
 });
 export type HttpCall = z.infer<typeof HttpCallSchema>;
 
+export const HttpClientSchema = z.object({
+  /** Variable the instance is bound to (`export const api = axios.create(...)` -> "api"). */
+  name: z.string(),
+  file: z.string(),
+  line: z.number().int().positive(),
+  /** "axios" | "ky" | callee text of a generic `create({ baseURL })`. */
+  factory: z.string(),
+  /** Source text of a non-literal baseURL / prefixUrl expression. */
+  baseExpr: z.string().optional(),
+  /** baseURL when it is a string literal, normalised by normalizePath (host stripped). */
+  baseLiteral: z.string().optional(),
+});
+export type HttpClient = z.infer<typeof HttpClientSchema>;
+
 export const RouteSchema = z.object({
   method: HttpMethodSchema,
+  /** As declared, including Adonis group prefixes (Plan 1 behaviour); mounts are NOT applied here. */
   path: z.string(),
   handler: z.string(),
   inline: z.boolean(),
   framework: z.enum(["adonis", "express", "fastify", "nest", "next-api"]),
   at: LocSchema,
-  /** Repo-relative file holding the handler's code, when codeloom could find it. */
   handlerFile: z.string().optional(),
-  /** First and last line of the handler function, for inline handlers (and Nest methods). */
   handlerLines: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
+  /** Receiver identifier the route was registered on (express/fastify): "router", "app", "fastify", ... */
+  router: z.string().optional(),
 });
 export type Route = z.infer<typeof RouteSchema>;
+
+export const MountKindSchema = z.enum(["express-use", "fastify-register", "nest-global"]);
+export type MountKind = z.infer<typeof MountKindSchema>;
+
+export const MountSchema = z.object({
+  /** Normalised prefix ("/billing"); nest-global "api" -> "/api". */
+  prefix: z.string(),
+  kind: MountKindSchema,
+  /** Receiver the mount was called on ("app", "router", "fastify"); "" for nest-global. */
+  on: z.string(),
+  /** What gets the prefix. name = local identifier passed (router var / plugin fn); file = repo-relative
+   * file it resolves to when imported (set by finalizeEndpoints from the draft's import specifier).
+   * Both absent for nest-global (applies to every nest route in the repo). */
+  target: z.object({ name: z.string().optional(), file: z.string().optional() }),
+  at: LocSchema,
+});
+export type Mount = z.infer<typeof MountSchema>;
 
 export const DbOpSchema = z.enum(["read", "insert", "update", "delete"]);
 export type DbOp = z.infer<typeof DbOpSchema>;
@@ -72,18 +115,25 @@ export const ModelDefSchema = z.object({
 export type ModelDef = z.infer<typeof ModelDefSchema>;
 
 export const QueueOpSchema = z.object({
+  /** publish via sendToQueue: queue name; publish via exchange: "exchange:key" (or exchange alone when key
+   * is ""); consume / bind: queue name. (Plan 1 encoding kept.) */
   queue: z.string(),
-  op: z.enum(["publish", "consume"]),
+  op: z.enum(["publish", "consume", "bind"]),
   at: LocSchema,
+  exchange: z.string().optional(),
+  /** Present (possibly "") for exchange publishes and binds. */
+  routingKey: z.string().optional(),
 });
 export type QueueOp = z.infer<typeof QueueOpSchema>;
 
 export const EndpointsFileSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   repo: z.string(),
   pages: z.array(UiPageSchema),
   httpCalls: z.array(HttpCallSchema),
+  httpClients: z.array(HttpClientSchema),
   routes: z.array(RouteSchema),
+  mounts: z.array(MountSchema),
   dbAccess: z.array(DbAccessSchema),
   tables: z.array(TableDefSchema),
   models: z.array(ModelDefSchema),
@@ -102,14 +152,40 @@ export function defaultRepoConfig(): RepoConfig {
   return { version: 1, autoUpdate: true, ignore: [] };
 }
 
-export const RepoRefSchema = z.object({ id: z.string(), path: z.string() });
+export const RepoRoleSchema = z.enum(["ui", "api", "worker", "lib"]);
+export type RepoRole = z.infer<typeof RepoRoleSchema>;
+
+export const RepoRefSchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  /** Optional hint for picking the target backend of an HTTP call. */
+  role: RepoRoleSchema.optional(),
+  /** Env var names (e.g. "NEXT_PUBLIC_API_URL") or hosts ("api.example.com") whose calls go to this repo. */
+  apiBase: z.array(z.string()).optional(),
+});
 export type RepoRef = z.infer<typeof RepoRefSchema>;
+
+/** Stored now, used by Plan 2b. Validated so a typo is caught early. */
+export const TracesConfigSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("tempo"),
+    url: z.string(),
+    headersEnv: z.string().optional(),
+    services: z.record(z.string(), z.string()).optional(),
+    lookback: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("otlp-file"), path: z.string() }),
+]);
+export type TracesConfig = z.infer<typeof TracesConfigSchema>;
 
 export const WorkspaceFileSchema = z.object({
   version: z.literal(1),
   name: z.string(),
   repos: z.array(RepoRefSchema),
+  /** Manual hops. Strings use the chain-stop address form "<repo>:<file>#<symbol>" or
+   * "route:<repo>:<METHOD path>" / "queue:<repo>:<queue>" (see R11 parseLinkRef, Task 11). */
   links: z.array(z.object({ from: z.string(), to: z.string() })),
+  traces: TracesConfigSchema.optional(),
 });
 export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 

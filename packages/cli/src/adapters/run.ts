@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import type { EndpointsFile, Route, TableDef } from "../store/schemas.js";
+import type { EndpointsFile, HttpClient, Mount, QueueOp, Route, TableDef } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { JS_EXT, parseSource } from "./ast.js";
 import { detectDb } from "./db.js";
@@ -8,7 +8,7 @@ import { detectHttpCalls } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectRoutes } from "./routes.js";
-import { type AdapterContext, type EndpointsPart, emptyPart, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
+import { type AdapterContext, type EndpointsPart, emptyPart, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
   const deps = new Set<string>();
@@ -24,7 +24,7 @@ function readDeps(abs: string): Set<string> {
 }
 
 /** Each file gets the deps of its nearest package.json at or above it (unioned with the repo
- * root's, for hoisted monorepo deps) and that package's folder; no package.json above → empty set. */
+ * root's, for hoisted monorepo deps) and that package's folder; no package.json above -> empty set. */
 export function loadContext(repoAbs: string, files: string[]): RepoContext {
   const byDir = new Map<string, Set<string>>();
   for (const rel of files) {
@@ -80,8 +80,29 @@ function resolveHandler(draft: RouteDraft, resolve?: ImportResolver): Route {
   return route;
 }
 
+/** Turn a draft mount's targetImport into target.file, and drop the internal field. Mirrors
+ * resolveHandler. Task 1 only wires the plumbing; nothing produces a MountDraft with targetImport
+ * set until Task 3 (detectMounts), so this is exercised there. */
+function resolveMount(draft: MountDraft, resolve?: ImportResolver): Mount {
+  const { targetImport, ...mount } = draft;
+  if (targetImport && !mount.target.file && resolve) {
+    const file = resolve(mount.at.file, targetImport);
+    if (file) mount.target = { ...mount.target, file };
+  }
+  return mount;
+}
+
 const byLoc = <T extends { at: { file: string; line: number } }>(a: T, b: T) =>
   compare(a.at.file, b.at.file) || a.at.line - b.at.line;
+
+const byHttpClient = (a: HttpClient, b: HttpClient) =>
+  compare(a.file, b.file) || a.line - b.line || compare(a.name, b.name);
+
+const byMount = (a: Mount, b: Mount) =>
+  compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.prefix, b.prefix);
+
+const byQueue = (a: QueueOp, b: QueueOp) =>
+  byLoc(a, b) || compare(a.op, b.op) || compare(a.exchange ?? "", b.exchange ?? "") || compare(a.routingKey ?? "", b.routingKey ?? "");
 
 /** Resolves a module specifier written in `fromRel` to a repo file (null when it is not in the repo). */
 export type ImportResolver = (fromRel: string, specifier: string) => string | null;
@@ -112,14 +133,16 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
     if (!tables.has(m.table)) tables.set(m.table, { name: m.table, file: m.file, line: 1, source: "model" });
   }
   return {
-    version: 1,
+    version: 2,
     repo,
     pages: all.pages.sort((a, b) => compare(a.route, b.route) || compare(a.file, b.file)),
     httpCalls: all.httpCalls.sort(byLoc),
+    httpClients: all.httpClients.sort(byHttpClient),
     routes: all.routes.map((r) => resolveHandler(r, resolveImport)).sort(byLoc),
+    mounts: all.mounts.map((m) => resolveMount(m, resolveImport)).sort(byMount),
     dbAccess: dbAccess.sort(byLoc),
     tables: [...tables.values()].sort((a, b) => compare(a.name, b.name)),
     models: all.models.sort((a, b) => compare(a.model, b.model)),
-    queues: all.queues.sort(byLoc),
+    queues: all.queues.sort(byQueue),
   };
 }

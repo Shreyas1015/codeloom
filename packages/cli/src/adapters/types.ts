@@ -1,9 +1,15 @@
 import type ts from "typescript";
-import type { DbAccess, HttpCall, ModelDef, QueueOp, Route, TableDef, UiPage } from "../store/schemas.js";
+import type {
+  DbAccess, HttpCall, HttpClient, ModelDef, Mount, QueueOp, Route, TableDef, UiPage,
+} from "../store/schemas.js";
 
 /** A route as an adapter sees it: `handlerImport` is the raw module specifier of an imported
  * handler, resolved to `handlerFile` by the indexer (which knows every file and alias) and then dropped. */
 export type RouteDraft = Route & { handlerImport?: string };
+
+/** A mount as an adapter sees it: `targetImport` is the raw module specifier of an imported router/plugin,
+ * resolved to `target.file` by `finalizeEndpoints` (which knows every file and alias) and then dropped. */
+export type MountDraft = Mount & { targetImport?: string };
 
 export interface ParsedFile {
   rel: string;
@@ -36,7 +42,9 @@ export function packageRelative(rel: string, ctx: AdapterContext): string | unde
 export interface EndpointsPart {
   pages: UiPage[];
   httpCalls: HttpCall[];
+  httpClients: HttpClient[];
   routes: RouteDraft[];
+  mounts: MountDraft[];
   dbAccess: DbAccess[];
   tables: TableDef[];
   models: ModelDef[];
@@ -44,5 +52,8 @@ export interface EndpointsPart {
 }
 
 export function emptyPart(): EndpointsPart {
-  return { pages: [], httpCalls: [], routes: [], dbAccess: [], tables: [], models: [], queues: [] };
+  return {
+    pages: [], httpCalls: [], httpClients: [], routes: [], mounts: [], dbAccess: [], tables: [], models: [],
+    queues: [],
+  };
 }

@@ -50,7 +50,7 @@ describe("runAdapters + finalizeEndpoints", () => {
       runAdapters("types.d.ts", "declare const x: number;", ctx),
     ];
     const ep = finalizeEndpoints("api", parts);
-    expect(ep.version).toBe(1);
+    expect(ep.version).toBe(2);
     expect(ep.repo).toBe("api");
     expect(ep.dbAccess).toMatchObject([{ model: "Customer", table: "customers", op: "insert" }]);
     expect(ep.tables).toMatchObject([{ name: "customers", source: "model" }]);
