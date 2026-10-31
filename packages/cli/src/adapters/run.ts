@@ -7,7 +7,7 @@ import { detectDb } from "./db.js";
 import { detectHttpCalls, detectHttpClients } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
-import { detectRoutes } from "./routes.js";
+import { detectMounts, detectRoutes } from "./routes.js";
 import { type AdapterContext, type EndpointsPart, emptyPart, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
@@ -62,6 +62,7 @@ export function runAdapters(rel: string, content: string, ctx: AdapterContext): 
   part.httpCalls.push(...detectHttpCalls(file));
   part.httpClients.push(...detectHttpClients(file));
   part.routes.push(...detectRoutes(file, ctx));
+  part.mounts.push(...detectMounts(file, ctx));
   const db = detectDb(file, ctx);
   part.dbAccess.push(...db.dbAccess);
   part.tables.push(...db.tables);

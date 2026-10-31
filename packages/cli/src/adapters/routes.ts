@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpMethod, Route } from "../store/schemas.js";
 import { enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
-import { type AdapterContext, packageRelative, type ParsedFile, type RouteDraft } from "./types.js";
+import { type AdapterContext, packageRelative, type MountDraft, type ParsedFile, type RouteDraft } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE", any: "ANY", all: "ANY",
@@ -185,15 +185,20 @@ function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFil
     const p = url && pathPattern(url);
     if (!m || !p) return undefined;
     const method = ROUTE_METHODS[m.toLowerCase()] ?? "ANY";
-    return { method, path: p.path, ...handlerOf(prop(o, "handler"), `${method} ${p.path}`, file.sf!), framework: "fastify", at };
+    return {
+      method, path: p.path, ...handlerOf(prop(o, "handler"), `${method} ${p.path}`, file.sf!),
+      framework: "fastify", router: recv.text, at,
+    };
   }
 
   const method = ROUTE_METHODS[name];
   if (!method) return undefined;
   let path: string | undefined;
+  let router: string | undefined;
   if (ts.isIdentifier(recv) && isRouter(node, recv.text)) {
     if (node.arguments.length < 2) return undefined;
     path = pathPattern(node.arguments[0]!)?.path;
+    router = recv.text;
   } else if (
     ts.isCallExpression(recv) &&
     ts.isPropertyAccessExpression(recv.expression) &&
@@ -203,6 +208,7 @@ function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFil
   ) {
     const s = stringValue(recv.arguments[0]);
     path = s === undefined ? undefined : normalizePath(s);
+    router = recv.expression.expression.text;
   } else return undefined;
   if (path === undefined) return undefined;
   const full = normalizePath(`${groupPrefix(node)}/${path}`);
@@ -211,6 +217,10 @@ function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFil
     path: full,
     ...handlerOf(node.arguments[node.arguments.length - 1], `${method} ${full}`, file.sf!),
     framework,
+    // The receiver is only a meaningful "router" for express/fastify (schema: "express/fastify");
+    // Adonis's router/Route identifiers pass isRouter via the generic-name fallback too, but Adonis
+    // has no app.use()-style mount step for Route.router to feed, so it stays undefined there.
+    router: framework === "adonis" ? undefined : router,
     at,
   };
 }
@@ -303,6 +313,56 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[
       if (route) out.push(route);
     }
     if (ts.isClassDeclaration(node) && ctx.deps.has("@nestjs/core")) out.push(...nestRoutes(node, file));
+  });
+  return out;
+}
+
+export function detectMounts(file: ParsedFile, ctx: AdapterContext): MountDraft[] {
+  if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
+  if (!file.sf) return [];
+  const generic = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
+  const isRouter: IsRouter = (node, name) => generic.has(name) || isRouterName(node, name);
+  const out: MountDraft[] = [];
+  walk(file.sf, (node) => {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
+    const method = node.expression.name.text;
+    const recv = node.expression.expression;
+    const at = { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) };
+
+    if (method === "use" && ts.isIdentifier(recv) && isRouter(node, recv.text) && node.arguments.length >= 2) {
+      const prefix = stringValue(node.arguments[0]);
+      if (prefix === undefined) return;
+      const targetArg = node.arguments[node.arguments.length - 1]!;
+      if (!ts.isIdentifier(targetArg)) return;
+      const loc = locateName(file.sf!, targetArg.text);
+      out.push({
+        prefix: normalizePath(prefix), kind: "express-use", on: recv.text, target: { name: targetArg.text },
+        ...(loc.handlerImport ? { targetImport: loc.handlerImport } : {}),
+        at,
+      });
+      return;
+    }
+
+    if (method === "register" && ts.isIdentifier(recv) && isRouter(node, recv.text) && node.arguments.length >= 2) {
+      const [pluginArg, optsArg] = node.arguments;
+      if (!pluginArg || !ts.isIdentifier(pluginArg)) return;
+      const opts = optsArg && ts.isObjectLiteralExpression(optsArg) ? optsArg : undefined;
+      const prefix = opts && stringValue(prop(opts, "prefix"));
+      if (prefix === undefined) return;
+      const loc = locateName(file.sf!, pluginArg.text);
+      out.push({
+        prefix: normalizePath(prefix), kind: "fastify-register", on: recv.text, target: { name: pluginArg.text },
+        ...(loc.handlerImport ? { targetImport: loc.handlerImport } : {}),
+        at,
+      });
+      return;
+    }
+
+    if (method === "setGlobalPrefix" && ctx.deps.has("@nestjs/core")) {
+      const prefix = stringValue(node.arguments[0]);
+      if (prefix === undefined) return;
+      out.push({ prefix: normalizePath(prefix), kind: "nest-global", on: "", target: {}, at });
+    }
   });
   return out;
 }
