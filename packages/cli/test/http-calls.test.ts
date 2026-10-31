@@ -160,4 +160,39 @@ describe("detectHttpClients", () => {
     const [found] = detectHttpClients(parsed("src/lib.ts", `\n\nexport const api = axios.create({ baseURL: "/api" });`));
     expect(found!.line).toBe(3);
   });
+
+  it("captures a bare `baseUrl` option (not just baseURL/prefixUrl)", () => {
+    expect(clients(`const api = makeClient.create({ baseUrl: "/api" });`)).toEqual(["api makeClient baseLiteral=/api"]);
+  });
+
+  it("recognizes a renamed default import of a known HTTP library", () => {
+    expect(
+      clients(`
+      import Axios from "axios";
+      export const api = Axios.create();
+    `),
+    ).toEqual(["api axios"]);
+  });
+
+  it("recognizes a known HTTP library required under a local binding", () => {
+    expect(
+      clients(`
+      const http = require("got");
+      const c = http.create({ prefixUrl: "/x" });
+    `),
+    ).toEqual(["c got baseLiteral=/x"]);
+  });
+
+  it("recognizes CJS interop's `<knownLib>.default.create(...)`", () => {
+    expect(clients(`export const api = axios.default.create();`)).toEqual(["api axios"]);
+  });
+
+  it("does not treat a renamed import of an unknown module as a known library", () => {
+    expect(
+      clients(`
+      import Thing from "./thing";
+      const t = Thing.create();
+    `),
+    ).toEqual([]);
+  });
 });
