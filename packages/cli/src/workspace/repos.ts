@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
-import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
+import { type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
 import { git } from "./git.js";
 
 export function discoverRepos(root: string): RepoRef[] {
@@ -34,11 +34,13 @@ function gitToplevel(start: string): string | null {
   }
 }
 
-export function loadWorkspace(start: string): { root: string; name: string; repos: RepoRef[] } {
+export function loadWorkspace(start: string): {
+  root: string; name: string; repos: RepoRef[]; links: WorkspaceFile["links"]; traces?: TracesConfig;
+} {
   const wsRoot = findWorkspaceRoot(start);
   if (wsRoot) {
     const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema);
-    if (ws) return { root: wsRoot, name: ws.name, repos: ws.repos };
+    if (ws) return { root: wsRoot, name: ws.name, repos: ws.repos, links: ws.links, traces: ws.traces };
   }
   const top = gitToplevel(start);
   if (!top) {
@@ -46,7 +48,7 @@ export function loadWorkspace(start: string): { root: string; name: string; repo
       `No codeloom workspace or git repo found at ${resolve(start)}. Run "codeloom init" in a repo or a folder of repos first.`,
     );
   }
-  return { root: top, name: basename(top), repos: [{ id: basename(top), path: "." }] };
+  return { root: top, name: basename(top), repos: [{ id: basename(top), path: "." }], links: [] };
 }
 
 export function gitHead(repoAbs: string): string {

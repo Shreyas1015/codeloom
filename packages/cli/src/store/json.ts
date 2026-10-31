@@ -1,16 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { z } from "zod";
-import { CodeloomError } from "../errors.js";
+import { dataError } from "../errors.js";
 
-/** Read and validate a JSON file. Missing file → null. Bad JSON or bad shape → CodeloomError. */
+/** Read and validate a JSON file. Missing file → null. Bad JSON or bad shape → CodeloomError (exit 2). */
 export function readJson<T>(path: string, schema: z.ZodType<T>): T | null {
   if (!existsSync(path)) return null;
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    throw new CodeloomError(
+    throw dataError(
       `${path} is not valid JSON. Delete it and run "codeloom index" again to rebuild it.`,
     );
   }
@@ -19,7 +19,7 @@ export function readJson<T>(path: string, schema: z.ZodType<T>): T | null {
     const lines = result.error.issues.map(
       (i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`,
     );
-    throw new CodeloomError(
+    throw dataError(
       `${path} has an unexpected shape:\n${lines.join("\n")}\nFix the file by hand, or delete it and run "codeloom index" again.`,
     );
   }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { runInit } from "../src/commands/init.js";
-import { CodeloomError, formatError } from "../src/errors.js";
+import { CodeloomError, dataError, formatError } from "../src/errors.js";
 import { indexRepo } from "../src/indexer/index-repo.js";
 import { makeRepo } from "./helpers.js";
 
@@ -70,5 +70,55 @@ describe("formatError", () => {
   it("keeps the stack when debugging", () => {
     const err = new TypeError("boom");
     expect(formatError(err, true)).toContain(err.stack!);
+  });
+});
+
+describe("CodeloomError", () => {
+  it("defaults to exit code 1", () => {
+    const err = new CodeloomError("boom");
+    expect(err.exitCode).toBe(1);
+    expect(err.message).toBe("boom");
+    expect(err.name).toBe("CodeloomError");
+  });
+
+  it("accepts an explicit exit code", () => {
+    expect(new CodeloomError("boom", { exitCode: 2 }).exitCode).toBe(2);
+  });
+});
+
+describe("dataError", () => {
+  it("builds a CodeloomError with exit code 2", () => {
+    const err = dataError("bad data");
+    expect(err).toBeInstanceOf(CodeloomError);
+    expect(err.exitCode).toBe(2);
+    expect(err.message).toBe("bad data");
+  });
+});
+
+describe("formatError", () => {
+  it("prints a CodeloomError's message as is", () => {
+    expect(formatError(new CodeloomError("nice message"), false)).toBe("nice message");
+  });
+
+  it("prints a CodeloomError's message as is even with debug on", () => {
+    expect(formatError(new CodeloomError("nice message"), true)).toBe("nice message");
+  });
+
+  it("wraps an unexpected error without a stack by default", () => {
+    const text = formatError(new Error("oops"), false);
+    expect(text).toBe("codeloom hit an unexpected error: oops\nPlease report it with the command you ran.");
+  });
+
+  it("includes the stack when debugging", () => {
+    const err = new Error("oops");
+    const text = formatError(err, true);
+    expect(text.startsWith("codeloom hit an unexpected error: oops\nPlease report it with the command you ran.\n\n")).toBe(true);
+    expect(text).toContain(err.stack);
+  });
+
+  it("stringifies a non-Error throw", () => {
+    expect(formatError("plain string", false)).toBe(
+      "codeloom hit an unexpected error: plain string\nPlease report it with the command you ran.",
+    );
   });
 });

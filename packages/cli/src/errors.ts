@@ -1,9 +1,18 @@
-/** An error whose message is meant for the user; the CLI prints it without a stack trace. */
+/** An error whose message is meant for the user; the CLI prints it without a stack trace.
+ * exitCode is what the CLI process exits with (default 1); a data/usage problem exits 2. */
 export class CodeloomError extends Error {
-  constructor(message: string) {
+  readonly exitCode: number;
+
+  constructor(message: string, opts?: { exitCode?: number }) {
     super(message);
     this.name = "CodeloomError";
+    this.exitCode = opts?.exitCode ?? 1;
   }
+}
+
+/** A data or usage problem (missing/old/invalid .codeloom files, a bad flag value): exit code 2. */
+export function dataError(message: string): CodeloomError {
+  return new CodeloomError(message, { exitCode: 2 });
 }
 
 /** What the CLI prints for an error: a CodeloomError's message as is; anything else as a short

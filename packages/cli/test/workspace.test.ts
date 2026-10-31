@@ -33,7 +33,7 @@ describe("loadWorkspace", () => {
       JSON.stringify({ version: 1, name: "shop", repos: [{ id: "web", path: "web" }], links: [] }),
     );
     const ws = loadWorkspace(join(root, "web"));
-    expect(ws).toEqual({ root, name: "shop", repos: [{ id: "web", path: "web" }] });
+    expect(ws).toEqual({ root, name: "shop", repos: [{ id: "web", path: "web" }], links: [], traces: undefined });
   });
 
   it("falls back to the git repo around the start folder", () => {
