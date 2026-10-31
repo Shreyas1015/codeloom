@@ -46,7 +46,7 @@ function NewInvoicePage() {
 export default NewInvoicePage;
 `));
     expect(idx.symbols).toEqual([
-      { name: "NewInvoicePage", kind: "function", lines: [2, 4], exported: true, exportedAs: "default" },
+      { name: "NewInvoicePage", kind: "function", lines: [2, 4], exported: true, exportedAs: "default", exportNames: ["default"] },
     ]);
   });
 });
@@ -189,7 +189,7 @@ const f = function () { return 1; };
 `));
     expect(idx.symbols).toEqual([
       { name: "createInvoice", kind: "function", lines: [2, 4], exported: false },
-      { name: "Page", kind: "function", lines: [5, 5], exported: true },
+      { name: "Page", kind: "function", lines: [5, 5], exported: true, exportNames: ["Page"] },
       { name: "f", kind: "function", lines: [6, 6], exported: false },
     ]);
   });
@@ -331,6 +331,14 @@ export default { list() { go(); }, find: (id) => go(id) };`,
     "cjs.js": `
 module.exports = { list() { go(); }, find: async (id) => go(id) };
 exports.helper = function helper() { go(); };`,
+    "cjs-inline.js": `
+exports.list = function () { go(); };
+module.exports.x = () => go();
+foo({ cb: function named() { go(); } });`,
+    "cjs-main.js": `module.exports = function main() { go(); };`,
+    "cjs-anon.js": `module.exports = async () => { go(); };`,
+    "default-fn.ts": `export default function () { go(); }`,
+    "default-arrow.ts": `export default () => go();`,
   };
   for (const [file, code] of Object.entries(snippets)) {
     it(file, () => {
@@ -341,4 +349,110 @@ exports.helper = function helper() { go(); };`,
       for (const c of callers) expect(names, `caller ${c}`).toContain(c);
     });
   }
+});
+
+describe("buildFileCodeIndex — follow-up fixes", () => {
+  it("1: inline CommonJS function exports are function symbols named by the property", () => {
+    const idx = buildFileCodeIndex(parsed("src/a.js", `
+exports.helper = function helper() { go(); };
+exports.list = function () { go(); };
+module.exports.x = () => go();
+exports.renamed = function inner() { go(); };
+`));
+    expect(sym(idx)).toEqual([
+      { name: "helper", kind: "function", exported: true, exportedAs: undefined },
+      { name: "list", kind: "function", exported: true, exportedAs: undefined },
+      { name: "x", kind: "function", exported: true, exportedAs: undefined },
+      { name: "renamed", kind: "function", exported: true, exportedAs: undefined },
+    ]);
+    expect(idx.calls.map((c) => c.caller)).toEqual(["helper", "list", "x", "renamed"]);
+  });
+
+  it("1b: module.exports = function main / class Repo are default exports", () => {
+    const fn = buildFileCodeIndex(parsed("src/a.js", `module.exports = function main() { go(); };`));
+    expect(sym(fn)).toEqual([{ name: "main", kind: "function", exported: true, exportedAs: "default" }]);
+    expect(fn.calls[0]!.caller).toBe("main");
+    const cls = buildFileCodeIndex(parsed("src/b.js", `module.exports = class Repo { find() { go(); } };`));
+    expect(sym(cls)).toEqual([
+      { name: "Repo", kind: "class", exported: true, exportedAs: "default" },
+      { name: "Repo.find", kind: "method", exported: false, exportedAs: undefined },
+    ]);
+    const anon = buildFileCodeIndex(parsed("src/c.js", `module.exports = () => go();`));
+    expect(sym(anon)).toEqual([{ name: "default", kind: "function", exported: true, exportedAs: "default" }]);
+    expect(anon.calls[0]!.caller).toBe("default");
+  });
+
+  it("2: anonymous default functions are named default; named ones keep their name", () => {
+    const decl = buildFileCodeIndex(parsed("src/a.ts", `export default function () { go(); }`));
+    expect(sym(decl)).toEqual([{ name: "default", kind: "function", exported: true, exportedAs: "default" }]);
+    expect(decl.calls[0]!.caller).toBe("default");
+    const arrow = buildFileCodeIndex(parsed("src/b.ts", `export default () => { go(); };`));
+    expect(sym(arrow)).toEqual([{ name: "default", kind: "function", exported: true, exportedAs: "default" }]);
+    expect(arrow.calls[0]!.caller).toBe("default");
+    const named = buildFileCodeIndex(parsed("src/c.ts", `export default function handler() { go(); }`));
+    expect(sym(named)).toEqual([{ name: "handler", kind: "function", exported: true, exportedAs: "default" }]);
+  });
+
+  it("3: constructor this.x = new X() scan skips nested classes and non-arrow functions", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+class A {
+  constructor() {
+    this.svc = new Svc();
+    const f = () => { this.arrow = new Arrow(); };
+    const g = function () { this.notMine = new Wrong(); };
+    const C = class { m() { this.inner = new Inner(); } };
+  }
+}
+`));
+    expect(idx.classFields).toEqual([
+      { className: "A", field: "svc", typeName: "Svc" },
+      { className: "A", field: "arrow", typeName: "Arrow" },
+    ]);
+  });
+
+  it("4: a named function expression in an unnamed object is a function", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `foo({ cb: function named() { go(); } });`));
+    expect(sym(idx)).toEqual([{ name: "named", kind: "function", exported: false, exportedAs: undefined }]);
+  });
+
+  it("6: exportNames lists every name a function/class is exported under", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+function a() {}
+function onlyRenamed() {}
+export { a, a as b };
+export { onlyRenamed as r };
+export default function foo() {}
+export class K {}
+function hidden() {}
+`));
+    expect(idx.symbols.map((s) => [s.name, s.exportNames])).toEqual([
+      ["a", ["a", "b"]],
+      ["onlyRenamed", ["r"]],
+      ["foo", ["default"]],
+      ["K", ["K"]],
+      ["hidden", undefined],
+    ]);
+    const cjs = buildFileCodeIndex(parsed("src/y.js", `
+function impl() {}
+function c() {}
+module.exports = { b: impl, c };
+exports.list = function () {};
+`));
+    expect(cjs.symbols.map((s) => [s.name, s.exportNames])).toEqual([
+      ["impl", ["b"]],
+      ["c", ["c"]],
+      ["list", ["list"]],
+    ]);
+  });
+
+  it("5: module.exports = obj records the default object", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.js", `
+const obj = { list() { return 1; } };
+module.exports = obj;
+`));
+    expect(idx.defaultObject).toBe("obj");
+    expect(sym(idx)).toEqual([{ name: "obj.list", kind: "object-method", exported: true, exportedAs: undefined }]);
+    const none = buildFileCodeIndex(parsed("src/y.js", `function f() {} module.exports = f;`));
+    expect(none.defaultObject).toBeUndefined();
+  });
 });

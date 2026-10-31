@@ -120,6 +120,27 @@ export function objectName(obj: ts.Node): string | undefined {
   return undefined;
 }
 
+/** What a CommonJS assignment target exports: `exports.x` / `module.exports.x` -> "x",
+ * `module.exports` -> "default"; undefined for any other expression. */
+export function commonJsExportName(left: ts.Node): string | undefined {
+  if (isModuleExports(left)) return "default";
+  if (
+    ts.isPropertyAccessExpression(left) &&
+    ((ts.isIdentifier(left.expression) && left.expression.text === "exports") || isModuleExports(left.expression))
+  ) {
+    return left.name.text;
+  }
+  return undefined;
+}
+
+/** For a function/class expression that is the right side of `x = <expr>`: the CommonJS export name
+ * of `x` (see commonJsExportName), else undefined. */
+export function commonJsAssignedName(expr: ts.Node): string | undefined {
+  const p = expr.parent;
+  if (!p || !ts.isBinaryExpression(p) || p.right !== expr || p.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return undefined;
+  return commonJsExportName(p.left);
+}
+
 function isMethodLike(n: ts.Node): n is ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration {
   return ts.isMethodDeclaration(n) || ts.isGetAccessor(n) || ts.isSetAccessor(n);
 }
@@ -127,7 +148,10 @@ function isMethodLike(n: ts.Node): n is ts.MethodDeclaration | ts.GetAccessorDec
 /** The symbol name of a function-like node, or undefined when it has none of its own (anonymous
  * callbacks etc.). The single naming rule shared by enclosingSymbol and the linker's code index. */
 export function functionLikeName(cur: ts.Node): string | undefined {
-  if (ts.isFunctionDeclaration(cur)) return cur.name?.text;
+  if (ts.isFunctionDeclaration(cur)) {
+    // `export default function () {}` has no name of its own: it is the module's "default".
+    return cur.name?.text ?? (ts.getModifiers(cur)?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) ? "default" : undefined);
+  }
   if (isMethodLike(cur)) {
     if (ts.isClassLike(cur.parent)) return `${className(cur.parent)}.${memberName(cur.name)}`;
     const obj = objectName(cur.parent);
@@ -141,6 +165,12 @@ export function functionLikeName(cur: ts.Node): string | undefined {
       const obj = objectName(p.parent);
       if (obj) return `${obj}.${memberName(p.name)}`;
     }
+    // `exports.x = function () {}` / `module.exports.x = () => {}` -> "x" (the property, like a const's
+    // variable name); `module.exports = function main() {}` -> "main", anonymous -> "default".
+    const cjs = commonJsAssignedName(cur);
+    if (cjs !== undefined) return cjs === "default" && ts.isFunctionExpression(cur) && cur.name ? cur.name.text : cjs;
+    // `export default () => {}` / `export = function () {}`.
+    if (ts.isExportAssignment(p)) return ts.isFunctionExpression(cur) && cur.name ? cur.name.text : "default";
     if (ts.isFunctionExpression(cur) && cur.name) return cur.name.text;
   }
   return undefined;

@@ -130,3 +130,30 @@ describe("helpers", () => {
     expect(snakePlural("Address")).toBe("addresses");
   });
 });
+
+describe("enclosingSymbol — inline CommonJS exports and anonymous defaults", () => {
+  const names = (file: string, code: string) => {
+    const sf = parseSource(file, code);
+    const out: string[] = [];
+    walk(sf, (n) => { if (ts.isCallExpression(n) && /from/.test(n.expression.getText())) out.push(enclosingSymbol(n)); });
+    return out;
+  };
+
+  it("names functions assigned to exports.x / module.exports.x by the property", () => {
+    expect(names("x.js", `
+      exports.helper = function helper() { return db.from("a"); };
+      exports.list = function () { return db.from("b"); };
+      module.exports.x = () => db.from("c");`)).toEqual(["helper", "list", "x"]);
+  });
+
+  it("names module.exports = function main by its name, and anonymous ones default", () => {
+    expect(names("x.js", `module.exports = function main() { return db.from("a"); };`)).toEqual(["main"]);
+    expect(names("y.js", `module.exports = () => db.from("a");`)).toEqual(["default"]);
+  });
+
+  it("names anonymous default-export functions default", () => {
+    expect(names("x.ts", `export default function () { return db.from("a"); }`)).toEqual(["default"]);
+    expect(names("y.ts", `export default () => db.from("a");`)).toEqual(["default"]);
+    expect(names("z.ts", `export default function handler() { return db.from("a"); }`)).toEqual(["handler"]);
+  });
+});

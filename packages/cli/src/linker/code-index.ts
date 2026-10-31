@@ -1,6 +1,6 @@
 import ts from "typescript";
 import {
-  className, enclosingSymbol, functionLikeName, isModuleExports, lineOf, objectName, stringValue, walk,
+  className, commonJsAssignedName, enclosingSymbol, functionLikeName, isModuleExports, lineOf, objectName, stringValue, walk,
 } from "../adapters/ast.js";
 import type { ParsedFile } from "../adapters/types.js";
 
@@ -9,7 +9,11 @@ export interface CodeSymbol {
   kind: "function" | "class" | "method" | "object-method";
   lines: [number, number];
   exported: boolean;
+  /** The preferred export alias when it differs from `name` ("default" wins over a rename). */
   exportedAs?: string;
+  /** Functions/classes: every name other files can import this symbol under ("default" for the default
+   * export). Own `name` is included only when actually exported under it. Absent when not exported. */
+  exportNames?: string[];
 }
 
 export type ImportBinding =
@@ -48,6 +52,9 @@ export interface FileCodeIndex {
   classFields: ClassField[];
   localNews: Array<{ caller: string; local: string; className: string }>;
   calls: CallSite[];
+  /** CommonJS `module.exports = obj` / `export = obj` where `obj` is a local object literal: its name,
+   * so `require("./x").m()` / a default import's `x.m()` resolve to `obj.m`. */
+  defaultObject?: string;
 }
 
 export type RepoCodeIndex = Map<string, FileCodeIndex>;
@@ -120,29 +127,51 @@ function ownVariableStatement(decl: ts.VariableDeclaration): ts.VariableStatemen
   return list && ts.isVariableDeclarationList(list) && list.parent && ts.isVariableStatement(list.parent) ? list.parent : undefined;
 }
 
+/** A function/class symbol exported under `names` (none = not exported here; export lists and
+ * CommonJS assignments elsewhere in the file are added by applyExportMarks). */
+function plainSymbol(name: string, kind: "function" | "class", lines: [number, number], names: string[]): CodeSymbol {
+  const sym: CodeSymbol = { name, kind, lines, exported: false };
+  for (const n of names) addExportName(sym, n);
+  return sym;
+}
+
+function addExportName(s: CodeSymbol, as: string): void {
+  const names = (s.exportNames ??= []);
+  if (!names.includes(as)) names.push(as);
+  s.exported = true;
+  s.exportedAs = names.includes("default") ? "default" : names.find((n) => n !== s.name);
+}
+
+/** Names a declaration with export modifiers is exported under: `export default` -> "default",
+ * `export` -> its own name. */
+function modifierExportNames(node: ts.Node, name: string): string[] {
+  return isExported(node) ? [isDefaultExport(node) ? "default" : name] : [];
+}
+
 /** Symbol for a function-like node already named by functionLikeName (the adapters' naming rule). */
 function functionSymbol(node: ts.Node, name: string): CodeSymbol {
-  if (ts.isFunctionDeclaration(node)) {
-    return {
-      name, kind: "function", lines: [lineOf(node), endLineOf(node)],
-      exported: isExported(node), exportedAs: isDefaultExport(node) ? "default" : undefined,
-    };
-  }
+  const own: [number, number] = [lineOf(node), endLineOf(node)];
+  if (ts.isFunctionDeclaration(node)) return plainSymbol(name, "function", own, modifierExportNames(node, name));
   const p = node.parent;
   if (ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node)) {
-    if (ts.isClassLike(p)) return { name, kind: "method", lines: [lineOf(node), endLineOf(node)], exported: false };
-    return { name, kind: "object-method", lines: [lineOf(node), endLineOf(node)], exported: objectExported(p) };
+    if (ts.isClassLike(p)) return { name, kind: "method", lines: own, exported: false };
+    return { name, kind: "object-method", lines: own, exported: objectExported(p) };
   }
   // Arrow function / function expression.
   if (ts.isVariableDeclaration(p)) {
     const stmt = ownVariableStatement(p);
-    return { name, kind: "function", lines: [lineOf(p), endLineOf(p)], exported: !!stmt && isExported(stmt) };
+    return plainSymbol(name, "function", [lineOf(p), endLineOf(p)], stmt && isExported(stmt) ? [name] : []);
   }
   if (ts.isPropertyDeclaration(p)) return { name, kind: "method", lines: [lineOf(p), endLineOf(p)], exported: false };
-  if (ts.isPropertyAssignment(p)) {
-    return { name, kind: "object-method", lines: [lineOf(node), endLineOf(node)], exported: objectExported(p.parent) };
+  if (ts.isPropertyAssignment(p) && objectName(p.parent) !== undefined) {
+    return { name, kind: "object-method", lines: own, exported: objectExported(p.parent) };
   }
-  return { name, kind: "function", lines: [lineOf(node), endLineOf(node)], exported: false };
+  // `exports.x = function () {}` (exported as x) / `module.exports = function main() {}` (as default).
+  const cjs = commonJsAssignedName(node);
+  if (cjs !== undefined) return plainSymbol(name, "function", own, [cjs]);
+  // `export default () => {}` / `export = function () {}`.
+  if (ts.isExportAssignment(p)) return plainSymbol(name, "function", own, ["default"]);
+  return plainSymbol(name, "function", own, []);
 }
 
 /** Are an object literal's methods importable? `module.exports = {…}` / `export default {…}` always;
@@ -156,15 +185,30 @@ function objectExported(obj: ts.Node): boolean {
   return !!stmt && isExported(stmt);
 }
 
+/** `this.x = new X()` assignments in a constructor body, not looking inside nested class-likes or
+ * non-arrow functions (their `this` is a different object). Arrow functions share the constructor's `this`. */
+function constructorThisNews(body: ts.Node, visit: (field: string, typeName: string) => void): void {
+  body.forEachChild(function scan(n: ts.Node): void {
+    if (ts.isClassLike(n) || (ts.isFunctionLike(n) && !ts.isArrowFunction(n))) return;
+    if (
+      ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(n.left) && n.left.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+      const typeName = newExpressionClass(n.right);
+      if (typeName) visit(n.left.name.text, typeName);
+    }
+    n.forEachChild(scan);
+  });
+}
+
 /** Mark local symbols named in export lists / `export default X` / CommonJS exports. A function or
- * class `local` is exported (renamed exports and default set `exportedAs`, "default" winning); an
+ * class `local` gains export name `as`; an
  * object `local` exports its `local.*` object-methods. */
 function applyExportMarks(idx: FileCodeIndex, marks: ExportMark[]): void {
   for (const { local, as } of marks) {
     for (const s of idx.symbols) {
       if (s.name === local && (s.kind === "function" || s.kind === "class")) {
-        s.exported = true;
-        if (as !== local && (as === "default" || s.exportedAs === undefined)) s.exportedAs = as;
+        addExportName(s, as);
       } else if (s.kind === "object-method" && s.name.startsWith(`${local}.`)) {
         s.exported = true;
       }
@@ -176,6 +220,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const idx: FileCodeIndex = { symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] };
   if (!file.sf) return idx;
   const marks: ExportMark[] = [];
+  let defaultCandidate: string | undefined;
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
@@ -184,13 +229,10 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     if (ts.isClassLike(node)) {
       const cls = className(node);
       const decl = ts.isClassDeclaration(node);
-      idx.symbols.push({
-        name: cls,
-        kind: "class",
-        lines: [lineOf(node), endLineOf(node)],
-        exported: decl && isExported(node),
-        exportedAs: decl && isDefaultExport(node) ? "default" : undefined,
-      });
+      // `module.exports = class Repo {}` (default) / `exports.Repo = class {}` / `export = class {}`.
+      const cjs = decl ? undefined : ts.isExportAssignment(node.parent) ? "default" : commonJsAssignedName(node);
+      const names = decl ? modifierExportNames(node, cls) : cjs !== undefined ? [cjs] : [];
+      idx.symbols.push(plainSymbol(cls, "class", [lineOf(node), endLineOf(node)], names));
       for (const m of node.members) {
         if (ts.isPropertyDeclaration(m)) {
           const name = memberName(m.name);
@@ -204,17 +246,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
             const typeName = typeRefName(p.type);
             if (isParamProp && typeName) addField(idx, { className: cls, field: p.name.text, typeName });
           }
-          if (m.body) {
-            walk(m.body, (n) => {
-              if (
-                ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-                ts.isPropertyAccessExpression(n.left) && n.left.expression.kind === ts.SyntaxKind.ThisKeyword
-              ) {
-                const typeName = newExpressionClass(n.right);
-                if (typeName) addField(idx, { className: cls, field: n.left.name.text, typeName });
-              }
-            });
-          }
+          if (m.body) constructorThisNews(m.body, (field, typeName) => addField(idx, { className: cls, field, typeName }));
         }
       }
     }
@@ -223,7 +255,10 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const { left, right } = node;
       if (isModuleExports(left)) {
-        if (ts.isIdentifier(right)) marks.push({ local: right.text, as: "default" });
+        if (ts.isIdentifier(right)) {
+          marks.push({ local: right.text, as: "default" });
+          defaultCandidate = right.text;
+        }
         else if (ts.isObjectLiteralExpression(right)) {
           for (const p of right.properties) {
             if (ts.isShorthandPropertyAssignment(p)) marks.push({ local: p.name.text, as: p.name.text });
@@ -250,6 +285,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     }
     if (ts.isExportAssignment(node) && ts.isIdentifier(node.expression)) {
       marks.push({ local: node.expression.text, as: "default" });
+      if (node.isExportEquals) defaultCandidate = node.expression.text;
     }
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -313,6 +349,11 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   });
 
   applyExportMarks(idx, marks);
+  // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
+  const obj = defaultCandidate;
+  if (obj !== undefined && idx.symbols.some((s) => s.kind === "object-method" && s.name.startsWith(`${obj}.`))) {
+    idx.defaultObject = obj;
+  }
   return idx;
 }
 

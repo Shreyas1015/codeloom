@@ -64,19 +64,22 @@ function splitDotted(name: string): { base: string; rest: string } {
   return dot < 0 ? { base: name, rest: "" } : { base: name.slice(0, dot), rest: name.slice(dot) };
 }
 
-/** An exported class reachable under `exportedName`: its `exportedAs` (renamed / default export) wins
- * over its own name. */
+/** Is `s` a function/class importable under `exportedName` (one of its recorded export names)? */
+function exportedUnder(s: CodeSymbol, exportedName: string): boolean {
+  return (s.kind === "function" || s.kind === "class") && !!s.exportNames?.includes(exportedName);
+}
+
+/** The class importable under `exportedName` (its own name, an alias, or "default"). */
 function exportedClass(fi: FileCodeIndex, exportedName: string): CodeSymbol | undefined {
-  return (
-    fi.symbols.find((s) => s.kind === "class" && s.exported && s.exportedAs === exportedName) ??
-    (exportedName === "default" ? undefined : fi.symbols.find((s) => s.kind === "class" && s.exported && s.name === exportedName))
-  );
+  return fi.symbols.find((s) => s.kind === "class" && exportedUnder(s, exportedName));
 }
 
 /** Object-literal names an export `base` can stand for: `export default {…}` methods are keyed
- * `default.*`, `module.exports = {…}` ones `exports.*` (which is also the CommonJS default export). */
-function objectBases(base: string): string[] {
-  return base === "default" ? ["default", "exports"] : [base];
+ * `default.*`, `module.exports = {…}` ones `exports.*` (which is also the CommonJS default export), and
+ * `module.exports = obj` ones `obj.*` (recorded as the file's defaultObject). */
+function objectBases(fi: FileCodeIndex, base: string): string[] {
+  if (base !== "default") return [base];
+  return fi.defaultObject !== undefined ? ["default", "exports", fi.defaultObject] : ["default", "exports"];
 }
 
 /** A dotted member ("Class.method" / "obj.method") declared in `fi` and reachable via an export.
@@ -88,25 +91,26 @@ function exportedMember(fi: FileCodeIndex, base: string, rest: string): CodeSymb
     const m = fi.symbols.find((s) => s.kind === "method" && s.name === cls.name + rest);
     if (m) return m;
   }
-  for (const ob of objectBases(base)) {
+  for (const ob of objectBases(fi, base)) {
     const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === ob + rest);
     if (m) return m;
   }
   return undefined;
 }
 
-/** A non-dotted export: a function/class exported under that name (`exportedAs` first, so
- * `export { a as b }` / `module.exports = { b: impl }` map `b` to `a` / `impl`), else a CommonJS
- * `module.exports = { name() {} }` method (`exports.name`). */
+/** A non-dotted export: a function/class exported under exactly that name (`export { a as b }` /
+ * `module.exports = { b: impl }` map `b` to `a` / `impl`, never `a` / `impl` themselves), else a
+ * CommonJS default-object member: `module.exports = { name() {} }` (`exports.name`) or
+ * `module.exports = obj` (`obj.name`). */
 function exportedPlain(fi: FileCodeIndex, exportedName: string): CodeSymbol | undefined {
-  const plain = (s: CodeSymbol): boolean => s.exported && (s.kind === "function" || s.kind === "class");
-  return (
-    fi.symbols.find((s) => plain(s) && s.exportedAs === exportedName) ??
-    (exportedName === "default" ? undefined : fi.symbols.find((s) => plain(s) && s.name === exportedName)) ??
-    (exportedName === "default"
-      ? undefined
-      : fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === `exports.${exportedName}`))
-  );
+  const plain = fi.symbols.find((s) => exportedUnder(s, exportedName));
+  if (plain || exportedName === "default") return plain;
+  const bases = fi.defaultObject !== undefined ? ["exports", fi.defaultObject] : ["exports"];
+  for (const b of bases) {
+    const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === `${b}.${exportedName}`);
+    if (m) return m;
+  }
+  return undefined;
 }
 
 /** Follow `exportedName` (possibly dotted, e.g. "CustomerService.create") through `export *` / named

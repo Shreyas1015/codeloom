@@ -436,6 +436,61 @@ describe("review fixes", () => {
     });
   });
 
+  it("3d: export { a, a as b } still resolves import { a } (and { b }) to a", () => {
+    const resolver = resolverOf({
+      "lib/x.ts": `function a() { return 1; } export { a, a as b };`,
+      "c.ts": `import { a } from "./lib/x.js"; export function run() { return a(); }`,
+      "d.ts": `import { b } from "./lib/x.js"; export function run() { return b(); }`,
+    });
+    expect(siteAt(resolver, "c.ts", "run")).toMatchObject({ target: { file: "lib/x.ts", symbol: "a" }, confidence: "exact" });
+    expect(siteAt(resolver, "d.ts", "run")).toMatchObject({ target: { file: "lib/x.ts", symbol: "a" }, confidence: "exact" });
+  });
+
+  describe("6: a symbol is reachable only under the names it is exported as", () => {
+    const exactTarget = (resolver: CallResolver, file: string, symbol: string) =>
+      resolver.callsFrom(ref(file, symbol)).find((c) => c.confidence === "exact") ?? null;
+
+    it("export { a as b } + import { a } does not resolve", () => {
+      const resolver = resolverOf({
+        "lib/x.ts": `function a() { return 1; } export { a as b };`,
+        "c.ts": `import { a } from "./lib/x.js"; export function run() { return a(); }`,
+      });
+      expect(exactTarget(resolver, "c.ts", "run")).toBeNull();
+    });
+
+    it("export default function foo + import { foo } does not resolve", () => {
+      const resolver = resolverOf({
+        "lib/x.ts": `export default function foo() { return 1; }`,
+        "c.ts": `import { foo } from "./lib/x.js"; export function run() { return foo(); }`,
+      });
+      expect(exactTarget(resolver, "c.ts", "run")).toBeNull();
+    });
+
+    it("module.exports = { b: impl } + import { impl } does not resolve", () => {
+      const resolver = resolverOf({
+        "lib/x.js": `function impl() { return 1; } module.exports = { b: impl };`,
+        "c.ts": `import { impl } from "./lib/x.js"; export function run() { return impl(); }`,
+      });
+      expect(exactTarget(resolver, "c.ts", "run")).toBeNull();
+    });
+
+    it("export { Svc as Service } + import { Svc } does not resolve new Svc().m() exactly", () => {
+      const resolver = resolverOf({
+        "lib/svc.ts": `class Svc { m() { return 1; } } export { Svc as Service };`,
+        "c.ts": `import { Svc } from "./lib/svc.js"; export function run() { return new Svc().m(); }`,
+      });
+      expect(exactTarget(resolver, "c.ts", "run")).toBeNull();
+    });
+
+    it("import * as ns + ns.foo() where foo is only the default export does not resolve", () => {
+      const resolver = resolverOf({
+        "lib/x.ts": `export default function foo() { return 1; }`,
+        "c.ts": `import * as ns from "./lib/x.js"; export function run() { return ns.foo(); }`,
+      });
+      expect(exactTarget(resolver, "c.ts", "run")).toBeNull();
+    });
+  });
+
   it("4: const svc = require('./x'); svc.list() resolves to exports.list", () => {
     const resolver = resolverOf({
       "services/x.js": `module.exports = { list() { return []; } };`,
@@ -461,6 +516,44 @@ describe("review fixes", () => {
     });
     expect(siteAt(resolver, "controllers/c.js", "run")).toMatchObject({
       target: { file: "services/cs.js", symbol: "CS.m" }, confidence: "exact", via: "new",
+    });
+  });
+
+  it("4d: module.exports = obj (declared separately) resolves require().list() and default import x.list() to obj.list", () => {
+    const resolver = resolverOf({
+      "services/x.js": `const obj = { list() { return []; } };\nmodule.exports = obj;`,
+      "services/y.js": `const other = { list() { return 1; } };`,
+      "controllers/c.js": `
+        const svc = require("../services/x.js");
+        function run() { return svc.list(); }
+      `,
+      "controllers/d.ts": `import x from "../services/x.js"; export function go() { return x.list(); }`,
+    });
+    expect(siteAt(resolver, "controllers/c.js", "run")).toMatchObject({
+      target: { file: "services/x.js", symbol: "obj.list" }, confidence: "exact",
+    });
+    expect(siteAt(resolver, "controllers/d.ts", "go")).toMatchObject({
+      target: { file: "services/x.js", symbol: "obj.list" }, confidence: "exact",
+    });
+  });
+
+  it("4e: inline CommonJS exports and module.exports = class resolve exactly", () => {
+    const resolver = resolverOf({
+      "services/x.js": `exports.list = function () { return []; };`,
+      "services/r.js": `module.exports = class Repo { find() { return 1; } };`,
+      "services/o.js": `class Other { find() { return 2; } list() { return 3; } }`,
+      "controllers/c.js": `
+        const svc = require("../services/x.js");
+        const Repo = require("../services/r.js");
+        function run() { return svc.list(); }
+        function get() { return new Repo().find(); }
+      `,
+    });
+    expect(siteAt(resolver, "controllers/c.js", "run")).toMatchObject({
+      target: { file: "services/x.js", symbol: "list" }, confidence: "exact",
+    });
+    expect(siteAt(resolver, "controllers/c.js", "get")).toMatchObject({
+      target: { file: "services/r.js", symbol: "Repo.find" }, confidence: "exact",
     });
   });
 
