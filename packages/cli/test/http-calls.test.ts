@@ -124,15 +124,28 @@ describe("detectHttpClients", () => {
     `)).toEqual(["a ky baseLiteral=/api", "b ky baseLiteral=/api/v2"]);
   });
 
-  it("treats any receiver's .create({ baseURL }) bound to a variable as a client (deliberately permissive)", () => {
+  it("finds a known HTTP library's .create({ baseURL }) (got)", () => {
     expect(clients(`export const client = got.create({ baseURL: "/api" });`)).toEqual(["client got baseLiteral=/api"]);
   });
 
-  it("records a client with no options as having neither baseLiteral nor baseExpr", () => {
+  it("records a known library's client with no options as having neither baseLiteral nor baseExpr (axios.create() needs no baseURL)", () => {
     const [found] = detectHttpClients(parsed("src/lib.ts", `export const api = axios.create();`));
     expect(found).toMatchObject({ name: "api", factory: "axios" });
     expect(found).not.toHaveProperty("baseLiteral");
     expect(found).not.toHaveProperty("baseExpr");
+  });
+
+  it("does not treat an unknown builder/factory's .create(...) as an HTTP client", () => {
+    expect(
+      clients(`
+      const store = createStore.create();
+      const builder = Query.create({ limit: 1 });
+    `),
+    ).toEqual([]);
+  });
+
+  it("treats an unknown receiver's .create({ baseURL }) as a client (factory heuristic)", () => {
+    expect(clients(`const api = makeClient.create({ baseURL: "/api" });`)).toEqual(["api makeClient baseLiteral=/api"]);
   });
 
   it("ignores a create() call that isn't bound to a variable", () => {

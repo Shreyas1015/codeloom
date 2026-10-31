@@ -6,6 +6,8 @@ import type { ParsedFile } from "./types.js";
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
 const CLIENT_RE = /^(axios|ky|got|superagent)$|(api|client|http|request|instance|fetcher)$/i;
+/** Bindings known to be HTTP client libraries; a bare `<lib>.create(...)` is always a real client. */
+const KNOWN_HTTP_LIBS = new Set(["axios", "ky", "got", "ofetch", "redaxios", "wretch", "$fetch"]);
 
 function methodOf(value: string | undefined): HttpMethod | undefined {
   return value ? METHODS[value.toLowerCase()] : undefined;
@@ -92,6 +94,11 @@ function clientFactory(receiver: string, method: string): string | undefined {
   return undefined;
 }
 
+/** True when the factory call's first-argument object literal has a baseURL/baseUrl/prefixUrl property. */
+function hasBaseOption(obj: ts.ObjectLiteralExpression | undefined): boolean {
+  return !!obj && !!(prop(obj, "baseURL") ?? prop(obj, "baseUrl") ?? prop(obj, "prefixUrl"));
+}
+
 export function detectHttpClients(file: ParsedFile): HttpClient[] {
   if (!file.sf) return [];
   const out: HttpClient[] = [];
@@ -105,6 +112,7 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
     if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) return;
     const [opts] = node.arguments;
     const obj = opts && ts.isObjectLiteralExpression(opts) ? opts : undefined;
+    if (!KNOWN_HTTP_LIBS.has(receiver.text) && !hasBaseOption(obj)) return;
     const baseNode = obj && (prop(obj, "baseURL") ?? prop(obj, "prefixUrl"));
     const literal = baseNode && stringValue(baseNode);
     out.push({
