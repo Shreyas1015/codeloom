@@ -287,4 +287,14 @@ describe("linkUi", () => {
     const links = linkUi({ ws: ws([web]), resolvers: new Map([["web", resolverFor(files, "web")]]) });
     expect(links[0]!.pages.map((p) => p.path.map((s) => s.symbol))).toEqual([["OrdersPage", "loadOrders"]]);
   });
+  it("retries over every backend as a guess when the hinted backends have no matching route", () => {
+    const call: HttpCall = { method: "POST", path: "/billing/x", raw: '"/billing/x"', resolved: true, client: "fetch", at: { file: "lib/x.ts", line: 1, symbol: "f" }, kind: "literal" };
+    const api = repo("api", { routes: [{ method: "GET", path: "/other", handler: "h", inline: false, framework: "express", at: { file: "s.ts", line: 1, symbol: "h" } }] }, { role: "api" });
+    const worker = repo("worker", { routes: [{ method: "POST", path: "/billing/x", handler: "b", inline: false, framework: "express", at: { file: "w.ts", line: 1, symbol: "b" } }] }, { role: "worker" });
+    const web = repo("web", { httpCalls: [call] });
+    const resolvers = new Map([["web", resolverFor({}, "web")], ["api", resolverFor({}, "api")], ["worker", resolverFor({}, "worker")]]);
+    const links = linkUi({ ws: ws([web, api, worker]), resolvers });
+    expect(links[0]!.target).toMatchObject({ kind: "route", confidence: "guess", reason: "matched outside the hinted backends" });
+    expect(links[0]!.target.kind === "route" && links[0]!.target.route.repo).toBe("worker");
+  });
 });

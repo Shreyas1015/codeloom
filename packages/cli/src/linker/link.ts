@@ -156,15 +156,19 @@ function resolveTarget(
   // (two backends whose best candidate is equally specific), which is the only real ambiguity — a
   // repo set that merely wasn't *hinted* is not ambiguous when the paths themselves don't collide
   // (demo-shop's "api" and "billing" never share a route, so every call there resolves "exact").
-  const { repos: backends } = chooseBackend(call, clients, allBackends);
-  const candidates: RouteCandidate<EffectiveRoute>[] = backends.flatMap((b) =>
-    (effectiveByRepo.get(b.ref.id) ?? []).map((er) => ({
+  const pick = (repos: RepoData[]) => pickRoute(call.method, path, repos.flatMap((b) =>
+    (effectiveByRepo.get(b.ref.id) ?? []).map((er): RouteCandidate<EffectiveRoute> => ({
       item: er, method: er.route.method, path: er.effectivePath, mountsKnown: er.mountsKnown,
     })),
-  );
-  const picked = pickRoute(call.method, path, candidates);
-  if (!picked) return { kind: "unresolved", reason: "no matching route" };
-  return { kind: "route", route: picked.item, confidence: picked.match.confidence, reason: picked.match.reason };
+  ));
+  const { repos: backends, hinted } = chooseBackend(call, clients, allBackends);
+  const picked = pick(backends);
+  if (picked) return { kind: "route", route: picked.item, confidence: picked.match.confidence, reason: picked.match.reason };
+  // A hint (apiBase / role "api") that leads nowhere is weaker evidence than a route that really
+  // exists elsewhere: retry over every backend, but only ever as a guess.
+  const fallback = hinted ? pick(allBackends) : null;
+  if (fallback) return { kind: "route", route: fallback.item, confidence: "guess", reason: "matched outside the hinted backends" };
+  return { kind: "unresolved", reason: "no matching route" };
 }
 
 /** For each HttpCall: the UI pages that reach it, and the route (or external/unresolved) it targets. */
