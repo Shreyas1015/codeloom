@@ -98,6 +98,28 @@ describe("hopsFromChains", () => {
     const hops = hopsFromChains([c1, c2]).filter((f) => f.hop.type === "route-handler");
     expect(hops).toHaveLength(1);
   });
+
+  it("keeps the best confidence when an earlier-id chain finds a hop as a guess and a later one finds it exact", () => {
+    const guessRoute = { lane: "api" as const, kind: "route" as const, repo: "api", file: "r.ts", line: 1, symbol: "X.store", op: "POST" as const, label: "POST /api/x", hop: { confidence: "guess" as const, reason: "suffix match" } };
+    const exactRoute = { lane: "api" as const, kind: "route" as const, repo: "api", file: "r.ts", line: 1, symbol: "X.store", op: "POST" as const, label: "POST /api/x", hop: { confidence: "exact" as const } };
+    const handler = { lane: "code" as const, kind: "handler" as const, repo: "api", file: "c.ts", line: 2, symbol: "X.store", hop: { confidence: "exact" as const } };
+    const c1 = fakeChain({ id: "ch_000000000001", routeKey: "api:POST /api/x", stops: [guessRoute, handler] });
+    const c2 = fakeChain({ id: "ch_000000000002", routeKey: "api:POST /api/x", stops: [exactRoute, handler] });
+    const hops = hopsFromChains([c1, c2]).filter((f) => f.hop.type === "route-handler");
+    expect(hops).toHaveLength(1);
+    expect(hops[0]!.confidence).toBe("exact");
+  });
+
+  it("keeps the best confidence when an earlier-id chain finds a hop as exact and a later one finds it as a guess", () => {
+    const exactRoute = { lane: "api" as const, kind: "route" as const, repo: "api", file: "r.ts", line: 1, symbol: "X.store", op: "POST" as const, label: "POST /api/x", hop: { confidence: "exact" as const } };
+    const guessRoute = { lane: "api" as const, kind: "route" as const, repo: "api", file: "r.ts", line: 1, symbol: "X.store", op: "POST" as const, label: "POST /api/x", hop: { confidence: "guess" as const, reason: "suffix match" } };
+    const handler = { lane: "code" as const, kind: "handler" as const, repo: "api", file: "c.ts", line: 2, symbol: "X.store", hop: { confidence: "exact" as const } };
+    const c1 = fakeChain({ id: "ch_000000000001", routeKey: "api:POST /api/x", stops: [exactRoute, handler] });
+    const c2 = fakeChain({ id: "ch_000000000002", routeKey: "api:POST /api/x", stops: [guessRoute, handler] });
+    const hops = hopsFromChains([c1, c2]).filter((f) => f.hop.type === "route-handler");
+    expect(hops).toHaveLength(1);
+    expect(hops[0]!.confidence).toBe("exact");
+  });
 });
 
 function dbStop(overrides: Partial<ChainStop> = {}): ChainStop {

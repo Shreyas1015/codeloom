@@ -33,8 +33,9 @@ function pathFromLabel(stop: ChainStop): string {
 }
 
 /**
- * Turn chains into answer-key hops. Chains are walked in id order and a hop seen twice keeps its first
- * confidence. `handler-store` hops use `chain.routeKey || chain.entry` as `route`, so consumer chains
+ * Turn chains into answer-key hops. Chains are walked in id order and a hop seen twice keeps its best
+ * confidence across chains (exact beats param beats guess), regardless of which chain id found it.
+ * `handler-store` hops use `chain.routeKey || chain.entry` as `route`, so consumer chains
  * (empty routeKey) are keyed by their entry, `consumer:<repo>:<queue>#<file>#<symbol>`.
  */
 export function hopsFromChains(chains: Chain[]): FoundHop[] {
@@ -42,7 +43,14 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
   const found = new Map<string, FoundHop>();
   const add = (hop: ExpectedHop, confidence: Confidence) => {
     const key = hopKey(hop);
-    if (!found.has(key)) found.set(key, { hop, confidence });
+    const existing = found.get(key);
+    // Keep the best confidence seen for a hop key, not just the first chain (in id order) to
+    // find it: exact beats param beats guess, via CONFIDENCE_RANK. Otherwise a true positive
+    // found at "exact" by one chain could be downgraded to "guess" by an earlier-id chain,
+    // turning it into a false "missing" in scoreChains.
+    if (!existing || CONFIDENCE_RANK[confidence] < CONFIDENCE_RANK[existing.confidence]) {
+      found.set(key, { hop, confidence });
+    }
   };
 
   for (const chain of sorted) {
