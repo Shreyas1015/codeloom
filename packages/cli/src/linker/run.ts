@@ -1,6 +1,6 @@
 import { createCallResolver } from "./resolve-calls.js";
 import { linkAll } from "./link.js";
-import { buildChains, sortChains, syncJourneys, writeChains } from "./chains.js";
+import { buildChainsAndLinks, sortChains, syncJourneys, writeChains } from "./chains.js";
 import type { SymbolLineLookup } from "./chains.js";
 import type { IndexResult } from "../indexer/index-repo.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
@@ -35,8 +35,9 @@ export function runLinker(
   const codeIndex = new Map(indexed.map((x) => [x.ref.id, x.result.codeIndex]));
   const symbolLine: SymbolLineLookup = (repo, file, symbol) =>
     codeIndex.get(repo)?.get(file)?.symbols.find((s) => s.name === symbol)?.lines[0];
-  const chains = sortChains(buildChains(wsData, links, symbolLine));
-  const wrote = writeChains(ws.root, chains, links.uiReach);
+  const built = buildChainsAndLinks(wsData, links, symbolLine);
+  const chains = sortChains(built.chains);
+  const wrote = writeChains(ws.root, chains, links.uiReach, built.manualLinks);
   const sync = syncJourneys(ws.root, new Set(chains.map((c) => c.id)));
   return {
     chains: chains.length,

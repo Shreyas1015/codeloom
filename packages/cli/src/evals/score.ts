@@ -40,7 +40,8 @@ function pathFromLabel(stop: ChainStop): string {
  * A consume stop past a chain's first stop starts a paired consumer appended after a publish: it and every
  * stop after it are keyed to that consumer's entry (built the same way: its handler stop, or the consume
  * stop itself for an inline callback), never to the chain's route — so they dedupe with the consumer's own
- * chain instead of adding route hops the code does not have.
+ * chain instead of adding route hops the code does not have. Likewise a route stop that is neither the
+ * entry nor reached by a call (a manual link's appended route) keys its hops to `<repo>:<METHOD path>`.
  */
 export function hopsFromChains(chains: Chain[]): FoundHop[] {
   const sorted = [...chains].sort((a, b) => compare(a.id, b.id));
@@ -62,6 +63,12 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
     for (let i = 0; i < chain.stops.length; i++) {
       const stop = chain.stops[i]!;
       const next = chain.stops[i + 1];
+      // A route stop reached by a UI call (or the entry itself) is the chain's own route; any other route
+      // stop was appended by a manual link and starts its own segment, keyed by that route.
+      if (stop.kind === "route") {
+        const own = (i === 0 || chain.stops[i - 1]?.kind === "call") && chain.routeKey !== "";
+        route = own ? chain.routeKey : `${stop.repo}:${stop.label ?? ""}`;
+      }
       if (stop.kind === "consume" && i > 0) {
         const handler = next?.kind === "handler" ? next : stop;
         route = `consumer:${stop.repo}:${stop.label ?? ""}#${handler.file}#${handler.symbol}`;
@@ -79,7 +86,7 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
       }
       if (stop.kind === "route" && next?.kind === "handler") {
         add(
-          { type: "route-handler", route: chain.routeKey, handler: { file: next.file, symbol: next.symbol } },
+          { type: "route-handler", route, handler: { file: next.file, symbol: next.symbol } },
           lowerConfidence(stop.hop.confidence, next.hop.confidence),
         );
       }

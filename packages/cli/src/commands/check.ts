@@ -29,7 +29,7 @@ export function runCheck(start: string, opts: CheckOptions): { report: CheckRepo
   const chainsFile = readJson(chainsPath, ChainsFileSchema);
   if (!chainsFile) throw dataError(`${chainsPath} not found. Run "codeloom index" first.`);
 
-  const report = buildCheckReport(chainsFile.chains, ws, chainsFile.uiReach ?? []);
+  const report = buildCheckReport(chainsFile.chains, ws, chainsFile.uiReach ?? [], chainsFile.manualLinks ?? []);
   const output = opts.json ? formatCheckJson(report) : formatCheckText(report);
   const exitCode: 0 | 1 = failUnder !== undefined && belowFailUnder(report, failUnder) ? 1 : 0;
   return { report, output, exitCode };

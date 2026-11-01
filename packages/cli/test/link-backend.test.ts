@@ -247,7 +247,11 @@ describe("resolveManualLinks", () => {
       ws: ws([data], [{ from: "api:a.ts#f", to: "api:b.ts#g" }]),
       resolvers: new Map([["api", resolver]]),
     });
-    expect(links).toEqual([{ from: "api:a.ts#f", to: "api:b.ts#g", resolved: true }]);
+    // a symbol target is walked like a handler (final review batch 2, item B)
+    expect(links).toEqual([{
+      from: "api:a.ts#f", to: "api:b.ts#g", resolved: true,
+      target: { handler: { repo: "api", file: "b.ts", symbol: "g" }, hits: [], unresolved: [] },
+    }]);
   });
 
   it("marks a link unresolved when a referenced symbol does not exist", () => {

@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
-import { stepKey, uiReachKey } from "./link.js";
-import type { BackendLink, ConsumerLink, LinkResult, PageReach, QueuePair, StoreHit, UiLink } from "./link.js";
+import { parseLinkRef, stepKey, uiReachKey } from "./link.js";
+import type { BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, StoreHit, UiLink } from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
 import type { EffectiveRoute } from "./mounts.js";
 import { routeKey } from "./mounts.js";
@@ -11,7 +11,7 @@ import { worse } from "./paths.js";
 import type { WorkspaceData } from "../store/read.js";
 import {
   type Chain, type ChainStop, type ChainsFile, type Confidence, type Hop, type Journey, type JourneysFile,
-  JourneysFileSchema, type QueueOp, type UiReachFact, type Unresolved,
+  JourneysFileSchema, type ManualLinkStatus, type QueueOp, type UiReachFact, type Unresolved,
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -160,7 +160,9 @@ function hopFromStep(step: WalkStep): Hop {
  * hits), then each hit's own terminal db/publish stop; then, when `follow` allows, each publish hit's
  * paired consumers (consume, handler, its stores), in hit order then pairQueues order. `emitted` starts containing the entry symbol
  * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
-function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence, follow: QueueFollow): ChainStop[] {
+function hitStops(
+  ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence, follow: QueueFollow, pairedOut?: ChainStop[],
+): ChainStop[] {
   const stops: ChainStop[] = [];
   const paired: ChainStop[] = [];
   for (const hit of hits) {
@@ -187,6 +189,11 @@ function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>
   }
   // Paired consumers go after all of this link's own stops, so each consume stop past the first starts a
   // block that runs to the next one (or the end) — the scorer keys those stores to the consumer.
+  // `pairedOut` (a manual symbol block inserted mid-chain) collects them for the chain's end instead.
+  if (pairedOut) {
+    pairedOut.push(...paired);
+    return stops;
+  }
   return [...stops, ...paired];
 }
 
@@ -333,6 +340,118 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
   return out;
 }
 
+const MANUAL = "manual link";
+
+/** A resolved manual link with its parsed ends. `i` is its position in the workspace `links` list. */
+interface Manual { i: number; link: ManualLink; from: LinkRef; to: LinkRef }
+
+const SYMBOL_STOP_KINDS = new Set<ChainStop["kind"]>(["page", "function", "call", "handler", "consume"]);
+
+/** Does a chain stop match a link's `from`? symbol: a page/function/call/handler/consume stop by
+ * repo + file + symbol; route: a route stop by repo + method + effective path; queue: a publish/consume
+ * stop by repo + queue. */
+function matchesRef(ref: LinkRef, s: ChainStop): boolean {
+  if (s.repo !== ref.repo) return false;
+  if (ref.kind === "symbol") return SYMBOL_STOP_KINDS.has(s.kind) && s.file === ref.file && s.symbol === ref.symbol;
+  if (ref.kind === "route") return s.kind === "route" && s.op === ref.method && s.label === `${ref.method} ${ref.path}`;
+  return (s.kind === "publish" || s.kind === "consume") && s.label === ref.queue;
+}
+
+/** The backend link for a route ref (first in linkBackend's sorted order). */
+function backendFor(backend: BackendLink[], ref: LinkRef & { kind: "route" }): BackendLink | undefined {
+  return backend.find((b) => b.repo === ref.repo && b.route.route.method === ref.method && b.route.effectivePath === ref.path);
+}
+
+/** Where a symbol block goes: the end of the `from` stop's segment — before the next consume stop past the
+ * first stop (a paired consumer) or the next route stop not reached by a UI call (an appended route), so its
+ * stores are scored under the same route/consumer as `from`. */
+function segmentEnd(stops: ChainStop[], at: number): number {
+  for (let j = at + 1; j < stops.length; j++) {
+    const s = stops[j]!;
+    if (s.kind === "consume" || (s.kind === "route" && stops[j - 1]?.kind !== "call")) return j;
+  }
+  return stops.length;
+}
+
+function sameStop(a: ChainStop, b: ChainStop): boolean {
+  if (b.kind === "handler" || b.kind === "function") {
+    return (a.kind === "handler" || a.kind === "function") && a.repo === b.repo && a.file === b.file && a.symbol === b.symbol;
+  }
+  return a.kind === b.kind && a.repo === b.repo && a.file === b.file && a.line === b.line && a.label === b.label;
+}
+
+/** Add every resolved manual link whose `from` matches one of the chain's own stops (the last such stop).
+ * The `to` target's hop is exact with reason "manual link"; the stops after it carry their own walk's
+ * confidence. A symbol target (walked like a handler) is inserted at the end of the `from` stop's segment
+ * (its paired consumers go to the chain's end); a route target (route, handler, stores, paired consumers)
+ * and a queue target (the queue's consumers) are appended at the chain's end. One level: stops added by a
+ * manual link are never matched by another link. A target already in the chain is not added again. */
+function applyManualLinks(
+  ctx: Ctx, manual: Manual[], backend: BackendLink[], used: Set<number>, stops: ChainStop[], unresolved: Unresolved[],
+): { stops: ChainStop[]; unresolved: Unresolved[] } {
+  const own = new Set(stops);
+  let out = [...stops];
+  const tail: ChainStop[] = [];
+  const extra: Unresolved[] = [];
+  for (const m of manual) {
+    let at = -1;
+    out.forEach((s, j) => {
+      if (own.has(s) && matchesRef(m.from, s)) at = j;
+    });
+    if (at === -1) continue;
+    const manualHop = hop("exact", MANUAL);
+    const to = m.to;
+    if (to.kind === "symbol") {
+      const target = m.link.target;
+      if (!target) continue;
+      const block: ChainStop[] = [refStop(ctx, "code", "handler", target.handler, manualHop)];
+      used.add(m.i);
+      if ([...out, ...tail].some((s) => sameStop(s, block[0]!))) continue;
+      const paired: ChainStop[] = [];
+      block.push(...hitStops(ctx, target.handler.repo, target.hits, new Set([stepKey(target.handler)]), "exact", {}, paired));
+      const end = segmentEnd(out, at);
+      out = [...out.slice(0, end), ...block, ...out.slice(end)];
+      tail.push(...paired);
+      extra.push(...target.unresolved.map((u) => toUnresolved(target.handler.repo, u)));
+    } else if (to.kind === "route") {
+      const b = backendFor(backend, to);
+      if (!b) continue;
+      const block = [routeStop(ctx.ws, b.route, manualHop), ...backendStops(ctx, b, manualHop)];
+      used.add(m.i);
+      if ([...out, ...tail].some((s) => sameStop(s, block[0]!))) continue;
+      tail.push(...block);
+    } else {
+      const consumers = [...ctx.consumers.values()].filter((c) => c.repo === to.repo && c.consume.queue === to.queue);
+      if (consumers.length === 0) continue;
+      used.add(m.i);
+      for (const c of consumers) {
+        const block = consumerStops(ctx, c, manualHop, null);
+        if (![...out, ...tail].some((s) => sameStop(s, block[0]!))) tail.push(...block);
+      }
+    }
+  }
+  if (out.length === stops.length && tail.length === 0) return { stops, unresolved };
+  return { stops: [...out, ...tail], unresolved: [...unresolved, ...extra] };
+}
+
+/** A UI call that matched no route, whose call symbol is a manual link's `from` and whose `to` is a route:
+ * the link supplies the route (exact, "manual link"), as if codeloom had matched it. */
+function linkUnmatchedCalls(ui: UiLink[], manual: Manual[], backend: BackendLink[], used: Set<number>): UiLink[] {
+  return ui.map((l) => {
+    if (l.target.kind === "route") return l;
+    const at = l.call.at;
+    for (const m of manual) {
+      if (m.from.kind !== "symbol" || m.to.kind !== "route") continue;
+      if (m.from.repo !== l.repo || m.from.file !== at.file || m.from.symbol !== at.symbol) continue;
+      const b = backendFor(backend, m.to);
+      if (!b) continue;
+      used.add(m.i);
+      return { ...l, target: { kind: "route" as const, route: b.route, confidence: "exact" as const, reason: MANUAL } };
+    }
+    return l;
+  });
+}
+
 /** One chain per (entry, routeKey), memo (g) as amended:
  * - each page reaching a call that targets a route -> `page:<repo>:<route>` chain;
  * - each page reaching a call that matches no route -> a partial `page:` chain with routeKey "" carrying
@@ -348,8 +467,24 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
  * Inputs from linkAll are sorted, so when two sources produce the same id the first one wins.
  * `symbolLine` (from runLinker's code index) gives function/handler stops their own first line. */
 export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine: SymbolLineLookup = () => undefined): Chain[] {
+  return buildChainsAndLinks(ws, rawLinks, symbolLine).chains;
+}
+
+/** buildChains, plus what became of each workspace `links` entry (see ManualLinkStatus). Manual links:
+ * see linkUnmatchedCalls and applyManualLinks. */
+export function buildChainsAndLinks(
+  ws: WorkspaceData, rawLinks: LinkResult, symbolLine: SymbolLineLookup = () => undefined,
+): { chains: Chain[]; manualLinks: ManualLinkStatus[] } {
+  const backendLinks = rawLinks.backend.map(dropUnlabeledDb);
+  const manual: Manual[] = rawLinks.manual.flatMap((link, i) => {
+    const from = link.resolved ? parseLinkRef(link.from) : null;
+    const to = link.resolved ? parseLinkRef(link.to) : null;
+    return from && to ? [{ i, link, from, to }] : [];
+  });
+  const used = new Set<number>();
   const links: LinkResult = {
-    ...rawLinks, backend: rawLinks.backend.map(dropUnlabeledDb), consumers: rawLinks.consumers.map(dropUnlabeledDb),
+    ...rawLinks, backend: backendLinks, consumers: rawLinks.consumers.map(dropUnlabeledDb),
+    ui: linkUnmatchedCalls(rawLinks.ui, manual, backendLinks, used),
   };
   const pairs = new Map<string, QueuePair[]>();
   for (const p of links.queuePairs) {
@@ -365,7 +500,12 @@ export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine:
   for (const b of links.backend) if (!backendByIdentity.has(routeIdentity(b.route))) backendByIdentity.set(routeIdentity(b.route), b);
   const byId = new Map<string, Chain>();
   const add = (c: Chain) => {
-    if (!byId.has(c.id)) byId.set(c.id, c);
+    if (byId.has(c.id)) return;
+    const withLinks = applyManualLinks(ctx, manual, links.backend, used, c.stops, c.unresolved);
+    byId.set(c.id, withLinks.stops === c.stops ? c : {
+      ...c, stops: withLinks.stops, unresolved: sortUnresolved(withLinks.unresolved),
+      confidence: worstConfidence(withLinks.stops), complete: isComplete(withLinks.stops),
+    });
   };
   const pageRoutes = new Set<string>();
 
@@ -438,7 +578,11 @@ export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine:
     add(makeChain(entry, "", stops, c.unresolved.map((u) => toUnresolved(c.repo, u))));
   }
 
-  return [...byId.values()];
+  const manualLinks: ManualLinkStatus[] = rawLinks.manual.map((l, i) => {
+    if (!l.resolved) return { from: l.from, to: l.to, status: "broken", ...(l.reason !== undefined ? { reason: l.reason } : {}) };
+    return { from: l.from, to: l.to, status: used.has(i) ? "used" : "unused" };
+  });
+  return { chains: [...byId.values()], manualLinks };
 }
 
 /** Sort chains by id; stops keep walk order; unresolved is sorted when each chain is built. */
@@ -446,9 +590,12 @@ export function sortChains(chains: Chain[]): Chain[] {
   return chains.sort((a, b) => compare(a.id, b.id));
 }
 
-/** `uiReach` (the linker's per-call reach facts, already sorted) is written only when given. */
-export function writeChains(wsRoot: string, chains: Chain[], uiReach?: UiReachFact[]): boolean {
-  const file: ChainsFile = { version: 1, chains, ...(uiReach ? { uiReach } : {}) };
+/** `uiReach` (the linker's per-call reach facts, already sorted) is written only when given;
+ * `manualLinks` only when non-empty (a workspace with no `links` keeps its file unchanged). */
+export function writeChains(wsRoot: string, chains: Chain[], uiReach?: UiReachFact[], manualLinks?: ManualLinkStatus[]): boolean {
+  const file: ChainsFile = {
+    version: 1, chains, ...(uiReach ? { uiReach } : {}), ...(manualLinks && manualLinks.length > 0 ? { manualLinks } : {}),
+  };
   return writeJsonIfChanged(join(wsRoot, CODELOOM_DIR, FILES.chains), file);
 }
 

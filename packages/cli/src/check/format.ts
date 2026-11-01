@@ -21,7 +21,15 @@ const GROUPS: Group[] = [
     label: "Calls that could not be resolved, info only — they do not affect completeness",
     match: (i) => i.kind === "unmatched-call",
   },
+  { label: "Manual links that could not be resolved", match: (i) => i.kind === "manual-link-broken" },
+  { label: "Manual links that match no chain, info only", match: (i) => i.kind === "manual-link-unused" },
 ];
+
+/** Manual-link items point at the workspace file itself, not at a file inside a repo. */
+function itemLine(item: CheckItem): string {
+  if (item.kind === "manual-link-broken" || item.kind === "manual-link-unused") return `  ${item.file} ${item.symbol} — ${item.detail}`;
+  return `  ${item.repo}/${item.file}:${item.line} ${item.symbol} — ${item.detail}`;
+}
 
 function summaryLine(r: CheckReport): string {
   const { chains, complete, missingDb, brokenUiApi } = r.summary;
@@ -47,7 +55,7 @@ export function formatCheckText(r: CheckReport): string {
     const group = r.items.filter(match);
     if (group.length === 0) continue;
     lines.push(`${label} (${group.length}):`);
-    for (const item of group) lines.push(`  ${item.repo}/${item.file}:${item.line} ${item.symbol} — ${item.detail}`);
+    for (const item of group) lines.push(itemLine(item));
     lines.push("");
   }
   if (r.items.length === 0) lines.push("No issues found.");

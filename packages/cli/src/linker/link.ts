@@ -264,7 +264,12 @@ export interface ConsumerLink {
   repo: string; consume: QueueOp; handler: SymbolRef; hits: StoreHit[]; unresolved: Array<{ at: Loc; reason: string }>;
 }
 
-export interface ManualLink { from: string; to: string; resolved: boolean; reason?: string }
+/** A workspace `links` entry, validated. When resolved and `to` is a symbol, `target` is that symbol walked
+ * like a handler (its calls -> store hits), so buildChains can continue a chain from it. */
+export interface ManualLink {
+  from: string; to: string; resolved: boolean; reason?: string;
+  target?: { handler: SymbolRef; hits: StoreHit[]; unresolved: Array<{ at: Loc; reason: string }> };
+}
 
 /** Where a walk starts. `lines` is set for an anonymous inline route callback: it has no symbol of its
  * own, so its calls and store accesses are joined to it by line range within `ref.file`. `registration`
@@ -621,8 +626,19 @@ export function resolveManualLinks(input: LinkInput): ManualLink[] {
     if (!from || !to) return { from: l.from, to: l.to, resolved: false, reason: "could not parse link reference" };
     if (!refExists(input, from)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.from}" was not found` };
     if (!refExists(input, to)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.to}" was not found` };
-    return { from: l.from, to: l.to, resolved: true };
+    if (to.kind !== "symbol") return { from: l.from, to: l.to, resolved: true };
+    return { from: l.from, to: l.to, resolved: true, target: walkSymbol(input, { repo: to.repo, file: to.file, symbol: to.symbol }) };
   });
+}
+
+/** A manual link's `to` symbol walked like a handler: its calls -> every db access / publish reached. */
+function walkSymbol(input: LinkInput, ref: SymbolRef): NonNullable<ManualLink["target"]> {
+  const repo = input.ws.repos.find((r) => r.ref.id === ref.repo)!;
+  const resolver = input.resolvers.get(ref.repo)!;
+  const scope: HandlerScope = { ref, confidence: "exact" };
+  const { steps, hits } = storeHits(resolver, ref.repo, scope, repo.endpoints.dbAccess, repo.endpoints.queues);
+  const knownAt = knownAtKeys(repo.endpoints.dbAccess, repo.endpoints.queues);
+  return { handler: ref, hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt) };
 }
 
 

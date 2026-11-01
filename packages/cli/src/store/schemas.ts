@@ -297,8 +297,17 @@ export type UiReachFact = z.infer<typeof UiReachFactSchema>;
 
 /** `uiReach` was added after version 1 shipped; it is optional (absent in older files, which then yield
  * no ui-unreached items) and sorted by repo, file, line, method, path, symbol. */
+/** Each workspace `links` entry and what became of it: `used` (it added a hop to some chain), `unused`
+ * (valid, but its `from` matched no chain stop), `broken` (it does not parse or names nothing that exists;
+ * `reason` says which). Workspace-file order. Written only when the workspace has links. */
+export const ManualLinkStatusSchema = z.object({
+  from: z.string(), to: z.string(), status: z.enum(["used", "unused", "broken"]), reason: z.string().optional(),
+});
+export type ManualLinkStatus = z.infer<typeof ManualLinkStatusSchema>;
+
 export const ChainsFileSchema = z.object({
   version: z.literal(1), chains: z.array(ChainSchema), uiReach: z.array(UiReachFactSchema).optional(),
+  manualLinks: z.array(ManualLinkStatusSchema).optional(),
 });
 export type ChainsFile = z.infer<typeof ChainsFileSchema>;
 
@@ -328,6 +337,8 @@ export const CheckItemKindSchema = z.enum([
   "route-no-caller",
   "guess-link",
   "ui-unreached",
+  "manual-link-broken",
+  "manual-link-unused",
 ]);
 export type CheckItemKind = z.infer<typeof CheckItemKindSchema>;
 

@@ -1,6 +1,7 @@
 import { effectiveRoutes, type EffectiveRoute, routeKey } from "../linker/mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Chain, ChainStop, CheckItem, CheckReport, UiReachFact } from "../store/schemas.js";
+import { WORKSPACE_FILE } from "../store/paths.js";
+import type { Chain, ChainStop, CheckItem, CheckReport, ManualLinkStatus, UiReachFact } from "../store/schemas.js";
 import { compare } from "../util.js";
 
 function routeStopLoc(chain: Chain): { repo: string; file: string; line: number; symbol: string } {
@@ -152,6 +153,20 @@ function chainLevelItems(chain: Chain): CheckItem[] {
   return items;
 }
 
+/** Workspace `links` entries that are broken (`manual-link-broken`, with the reason) or valid but matched
+ * no chain stop (`manual-link-unused`, info only). They point at the workspace file and never decide a
+ * bucket. `repo` is the repo the link's `from` names, when it names one. */
+function manualLinkItems(links: ManualLinkStatus[]): CheckItem[] {
+  return links.flatMap((l): CheckItem[] => {
+    if (l.status === "used") return [];
+    const repo = l.from.match(/^(?:route:|queue:)?([^:#]+):/)?.[1] ?? "";
+    const base = { repo, file: WORKSPACE_FILE, line: 1, symbol: l.from };
+    return l.status === "broken"
+      ? [{ kind: "manual-link-broken", ...base, detail: `${l.from} -> ${l.to}: ${l.reason ?? "not resolved"}` }]
+      : [{ kind: "manual-link-unused", ...base, detail: `${l.from} -> ${l.to}: its from matches no chain stop` }];
+  });
+}
+
 function sortItems(items: CheckItem[]): CheckItem[] {
   return [...items].sort(
     (a, b) =>
@@ -163,9 +178,13 @@ function sortItems(items: CheckItem[]): CheckItem[] {
   );
 }
 
-/** `uiReach`: the linker's reach facts from chains.json (absent in an older file: no ui-unreached items). */
-export function buildCheckReport(chains: Chain[], ws: WorkspaceData, uiReach: UiReachFact[] = []): CheckReport {
+/** `uiReach`: the linker's reach facts from chains.json (absent in an older file: no ui-unreached items).
+ * `manualLinks`: chains.json's manual link statuses (absent when the workspace has no links). */
+export function buildCheckReport(
+  chains: Chain[], ws: WorkspaceData, uiReach: UiReachFact[] = [], manualLinks: ManualLinkStatus[] = [],
+): CheckReport {
   const items = sortItems([
+    ...manualLinkItems(manualLinks),
     ...unresolvedUrlItems(ws.repos),
     ...routeNoCallerItems(ws.repos, chains),
     ...uiUnreachedItems(uiReach),
