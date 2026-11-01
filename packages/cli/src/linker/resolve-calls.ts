@@ -318,8 +318,12 @@ function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extrac
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
-function resolveOther(ctx: Ctx, site: CallSite, callee: Extract<Callee, { kind: "other" }>): ResolvedCall | null {
-  return callee.prop ? guessUniqueMethod(ctx, site, callee.prop) : null;
+/** A chained / computed receiver (`prisma.emailLog.create()`, `make().run()`, `o["x"].run()`): no guess.
+ * The unique-method fallback is kept only for a simple identifier receiver (`svc.run()`); on a chain the
+ * receiver is usually a library object (an ORM delegate, a client), and a same-named method in the repo
+ * is a false link. */
+function resolveOther(_ctx: Ctx, _site: CallSite, _callee: Extract<Callee, { kind: "other" }>): ResolvedCall | null {
+  return null;
 }
 
 function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {

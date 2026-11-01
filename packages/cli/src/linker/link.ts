@@ -340,6 +340,18 @@ function scopedResolver(resolver: CallResolver, scope: HandlerScope): CallResolv
   };
 }
 
+/** `resolver` whose walk stops at recorded DbAccess / QueueOp sites: such a call is the ORM/broker call
+ * that already became a store hit (a terminal), so a resolution of it — typically a unique-method guess
+ * onto a same-named repo method — must not be followed. `knownAt` keys are `file:line`. */
+function terminalStores(resolver: CallResolver, knownAt: Set<string>): CallResolver {
+  return {
+    ...resolver,
+    callsFrom(ref) {
+      return resolver.callsFrom(ref).filter((rc) => !knownAt.has(`${ref.file}:${rc.site.line}`));
+    },
+  };
+}
+
 function describeCallee(c: CallSite["callee"]): string {
   switch (c.kind) {
     case "ident": return `could not resolve "${c.name}(...)"`;
@@ -384,7 +396,7 @@ function hitLabel(h: StoreHit): string {
 /** Store hits reachable from the scope's start symbol (≤6 hops), nearest first. An access counts when
  * its enclosing symbol was visited, or (synthetic inline handler) when it sits inside the handler's lines. */
 function storeHits(resolver: CallResolver, repoId: string, scope: HandlerScope, access: DbAccess[], queues: QueueOp[]): { steps: WalkStep[]; hits: StoreHit[] } {
-  const steps = walkCalls(scopedResolver(resolver, scope), scope.ref, 6);
+  const steps = walkCalls(terminalStores(scopedResolver(resolver, scope), knownAtKeys(access, queues)), scope.ref, 6);
   const visited = new Set(steps.map((s) => stepKey(s.ref)));
   const startKey = stepKey(scope.ref);
   const viaPathTo = (at: Loc): WalkStep[] | undefined => {

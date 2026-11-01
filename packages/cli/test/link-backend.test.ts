@@ -334,3 +334,46 @@ describe("backend linking — beyond the brief", () => {
     expect(parseLinkRef("route:api:FETCH /x")).toBeNull();
   });
 });
+
+describe("store sites are terminals (Task 12 fix)", () => {
+  it("does not walk on through a call that is itself a recorded DbAccess or QueueOp site", () => {
+    const files = {
+      "src/notify.ts": [
+        "export async function handleEmail(msg) {",
+        "  await db.create({ data: {} });",
+        '  await channel.publish("billing", "x");',
+        "}",
+        "",
+      ].join("\n"),
+      // `db.create(...)` / `channel.publish(...)` would otherwise be unique-method guesses onto these.
+      "src/invoice-service.ts": [
+        "export const invoiceService = {",
+        "  async create(data) {",
+        "    return store.insertInvoice(data);",
+        "  },",
+        "  async publish(id) {",
+        "    return store.insertOutbox(id);",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+    };
+    const { data, resolver } = repoWith("billing", files, {
+      queues: [
+        { queue: "emails", op: "consume", at: { file: "src/notify.ts", line: 1, symbol: "handleEmail" } },
+        { queue: "billing:x", op: "publish", exchange: "billing", routingKey: "x", at: { file: "src/notify.ts", line: 3, symbol: "handleEmail" } },
+      ],
+      dbAccess: [
+        { table: "email_logs", op: "insert", via: "prisma", at: { file: "src/notify.ts", line: 2, symbol: "handleEmail" } },
+        { table: "invoices", op: "insert", via: "prisma", at: { file: "src/invoice-service.ts", line: 3, symbol: "invoiceService.create" } },
+        { table: "outbox", op: "insert", via: "prisma", at: { file: "src/invoice-service.ts", line: 6, symbol: "invoiceService.publish" } },
+      ],
+    });
+    // Sanity: without the fix these sites do resolve (as guesses), so the walk would follow them.
+    expect(resolver.callsFrom({ repo: "billing", file: "src/notify.ts", symbol: "handleEmail" }).map((c) => c.target.symbol))
+      .toEqual(["invoiceService.create", "invoiceService.publish"]);
+    const [link] = linkConsumers({ ws: ws([data]), resolvers: new Map([["billing", resolver]]) });
+    expect(link!.hits.map((h) => (h.kind === "db" ? h.access.table : h.op.queue))).toEqual(["email_logs", "billing:x"]);
+    expect(link!.hits.every((h) => h.viaPath.length === 1)).toBe(true);
+  });
+});

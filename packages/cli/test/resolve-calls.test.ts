@@ -236,6 +236,24 @@ describe("unique-method guess fallback and object-literal services", () => {
     });
   });
 
+  it("does not guess for a chained receiver (a.b.c()), only for a simple identifier receiver", () => {
+    const resolver = resolverOf({
+      "services/invoice-service.ts": `export const invoiceService = { create(data: unknown) { return data; } };`,
+      "workers/notify.ts": `
+        export async function handleEmail(prisma: any) { return prisma.emailLog.create({}); }
+        export async function viaCall(make: any) { return make().create({}); }
+        export async function viaElement(o: any) { return o["x"].create({}); }
+        export async function simple(svc: any) { return svc.create({}); }
+      `,
+    });
+    expect(siteAt(resolver, "workers/notify.ts", "handleEmail")).toBeNull();
+    expect(resolver.callsFrom({ repo: "api", file: "workers/notify.ts", symbol: "viaCall" }).map((c) => c.target.symbol)).toEqual([]);
+    expect(resolver.callsFrom({ repo: "api", file: "workers/notify.ts", symbol: "viaElement" }).map((c) => c.target.symbol)).toEqual([]);
+    expect(siteAt(resolver, "workers/notify.ts", "simple")).toMatchObject({
+      target: { file: "services/invoice-service.ts", symbol: "invoiceService.create" }, confidence: "guess", via: "unique-method",
+    });
+  });
+
   it("does not guess when the method name is ambiguous repo-wide", () => {
     const resolver = resolverOf({
       "services/a.ts": `export class A { run() { return 1; } }`,
