@@ -283,9 +283,31 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
+/** Built-in classes a field type / `new X()` may name without importing them. */
+const GLOBAL_CLASSES = new Set([
+  "Array", "ArrayBuffer", "Blob", "Buffer", "DataView", "Date", "Error", "EventEmitter", "EventTarget", "FormData",
+  "Headers", "Intl", "Map", "Object", "Promise", "Proxy", "ReadableStream", "RegExp", "Request", "Response", "Set",
+  "String", "Number", "TextDecoder", "TextEncoder", "URL", "URLSearchParams", "WeakMap", "WeakRef", "WeakSet",
+  "WritableStream", "AbortController", "BroadcastChannel", "MessageChannel", "Worker", "WebSocket",
+]);
+
+/** Is the type `name` (as written in `file`) known to live outside the repo? An import from a module that
+ * does not resolve to a repo file (a package), or a built-in global class. A local / repo-imported class
+ * or interface, or a name we know nothing about, is not: those keep the unique-method guess. */
+function isExternalType(ctx: Ctx, file: string, name: string): boolean {
+  const fi = ctx.index.get(file);
+  if (!fi) return false;
+  if (fi.symbols.some((s) => s.kind === "class" && s.name === name)) return false;
+  const imp = fi.imports.find((i) => i.local === name);
+  if (imp) return resolveImport(file, imp.from, ctx.files, ctx.aliases) === null;
+  return GLOBAL_CLASSES.has(name);
+}
+
 function resolveNewMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "new-member" }>): ResolvedCall | null {
   const hit = resolveClassMethod(ctx, file, callee.className, callee.prop);
   if (hit) return exact(ctx, site, hit, "new");
+  // `new Client().findOne()` on a library / built-in class: a same-named repo method is a false link.
+  if (isExternalType(ctx, file, callee.className)) return null;
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
@@ -313,6 +335,8 @@ function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extrac
     if (field) {
       const hit = resolveClassMethod(ctx, file, field.typeName, callee.prop);
       if (hit) return exact(ctx, site, hit, "di");
+      // `private repo: Repository<User>` from a package: `this.repo.findOne()` is the library's method.
+      if (isExternalType(ctx, file, field.typeName)) return null;
     }
   }
   return guessUniqueMethod(ctx, site, callee.prop);

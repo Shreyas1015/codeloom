@@ -684,3 +684,73 @@ describe("createCallResolver — only real bindings resolve bare identifiers", (
     expect(idx.symbols.find((s) => s.name === "list" && s.binding)!.lines).toEqual([1, 1]);
   });
 });
+
+describe("no unique-method guess onto an external type (Task 12 review fix 5)", () => {
+  const USERS_REPO = `export class UsersRepo { findOne(id: number) { return id; } }`;
+
+  it("this.field.m() on a field typed with a library class (Repository<User>) stays unresolved", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "svc.ts": `
+        import { Repository } from "typeorm";
+        export class UserService {
+          constructor(private repo: Repository<User>) {}
+          get(id: number) { return this.repo.findOne(id); }
+        }
+      `,
+    });
+    expect(siteAt(resolver, "svc.ts", "UserService.get")).toBeNull();
+  });
+
+  it("the same with a type-only import", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "svc.ts": `
+        import type { Repository } from "typeorm";
+        export class UserService {
+          constructor(private repo: Repository<User>) {}
+          get(id: number) { return this.repo.findOne(id); }
+        }
+      `,
+    });
+    expect(siteAt(resolver, "svc.ts", "UserService.get")).toBeNull();
+  });
+
+  it("this.field.m() on a field typed with a global class stays unresolved", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "svc.ts": `export class C { private m: Map<string, number> = new Map(); run() { return this.m.findOne("x"); } }`,
+    });
+    expect(siteAt(resolver, "svc.ts", "C.run")).toBeNull();
+  });
+
+  it("still guesses when the field has no usable type", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "svc.ts": `export class C { constructor(private repo) {} run() { return this.repo.findOne(1); } }`,
+    });
+    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findOne" }, confidence: "guess" });
+  });
+
+  it("still guesses when the field's type is a repo class without that method (it may be inherited)", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "repos/base.ts": `export class BaseRepo {}`,
+      "svc.ts": `
+        import { BaseRepo } from "./repos/base.js";
+        export class C { constructor(private repo: BaseRepo) {} run() { return this.repo.findOne(1); } }
+      `,
+    });
+    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findOne" }, confidence: "guess" });
+  });
+
+  it("new X().m() on an imported library class or a global class stays unresolved", () => {
+    const resolver = resolverOf({
+      "repos/users.ts": USERS_REPO,
+      "a.ts": `import { Client } from "some-lib"; export function run() { return new Client().findOne(1); }`,
+      "b.ts": `export function run() { return new Map().findOne(1); }`,
+    });
+    expect(siteAt(resolver, "a.ts", "run")).toBeNull();
+    expect(siteAt(resolver, "b.ts", "run")).toBeNull();
+  });
+});
