@@ -282,7 +282,24 @@ export const ChainSchema = z.object({
 });
 export type Chain = z.infer<typeof ChainSchema>;
 
-export const ChainsFileSchema = z.object({ version: z.literal(1), chains: z.array(ChainSchema) });
+/** A UI-side HTTP call and whether ≥1 page reaches it (H3b), written by the linker from its own linkUi
+ * results. Backend calls, third-party calls and calls with no literal URL are not listed. */
+export const UiReachFactSchema = z.object({
+  repo: z.string(),
+  file: z.string(),
+  line: z.number().int().positive(),
+  symbol: z.string(),
+  method: HttpMethodSchema,
+  path: z.string(),
+  reached: z.boolean(),
+});
+export type UiReachFact = z.infer<typeof UiReachFactSchema>;
+
+/** `uiReach` was added after version 1 shipped; it is optional (absent in older files, which then yield
+ * no ui-unreached items) and sorted by repo, file, line, method, path, symbol. */
+export const ChainsFileSchema = z.object({
+  version: z.literal(1), chains: z.array(ChainSchema), uiReach: z.array(UiReachFactSchema).optional(),
+});
 export type ChainsFile = z.infer<typeof ChainsFileSchema>;
 
 export const JourneySchema = z.object({

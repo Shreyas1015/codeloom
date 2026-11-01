@@ -7,7 +7,7 @@ import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
 import type { EffectiveRoute } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Confidence, DbAccess, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage } from "../store/schemas.js";
+import type { Confidence, DbAccess, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage, UiReachFact } from "../store/schemas.js";
 import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
@@ -625,10 +625,6 @@ export function resolveManualLinks(input: LinkInput): ManualLink[] {
   });
 }
 
-/** A UI-side HTTP call (readable URL, not third-party, not backend) and whether ≥1 page reaches it. */
-export interface UiReachFact {
-  repo: string; file: string; line: number; symbol: string; method: HttpMethod; path: string; reached: boolean;
-}
 
 export function uiReachKey(f: { repo: string; file: string; line: number; method: string; path: string }): string {
   return [f.repo, f.file, String(f.line), f.method, f.path].join("\0");
@@ -659,7 +655,7 @@ function isBackendCall(input: LinkInput, repo: RepoData, call: LinkedCall, entri
   return !!resolver && walkCallers(resolver, start, 6).some((s) => handlerKeys.has(stepKey(s.ref)));
 }
 
-/** Reach facts for every UI-side call, from linkUi's results (never from deduplicated chains). Skipped:
+/** Reach facts (a UI-side call: readable URL, not third-party, not backend; reached by ≥1 page?) for every UI-side call, from linkUi's results (never from deduplicated chains). Skipped:
  * calls with no literal URL (check's "unresolved-url"), third-party calls, and backend calls (see
  * isBackendCall). Sorted by repo, file, line, method, path; one fact per key (reached if any link is). */
 export function uiReachFacts(input: LinkInput, ui: UiLink[], backend: BackendLink[], consumers: ConsumerLink[]): UiReachFact[] {

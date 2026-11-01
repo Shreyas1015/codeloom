@@ -1,7 +1,6 @@
-import { apiBaseHosts, externalHost } from "../linker/link.js";
 import { effectiveRoutes, type EffectiveRoute, routeKey } from "../linker/mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Chain, ChainStop, CheckItem, CheckReport } from "../store/schemas.js";
+import type { Chain, ChainStop, CheckItem, CheckReport, UiReachFact } from "../store/schemas.js";
 import { compare } from "../util.js";
 
 function routeStopLoc(chain: Chain): { repo: string; file: string; line: number; symbol: string } {
@@ -47,8 +46,7 @@ function unresolvedUrlItems(repos: RepoData[]): CheckItem[] {
 }
 
 /** A `ui-unreached` item: an HTTP call at `at` that no page reaches. `label` names the call
- * (`"POST /api/post"`). Shared by every source of unreached calls (adapter calls here; call-entry
- * chains later), so they all print in one group. */
+ * (`"POST /api/post"`). */
 export function uiUnreachedItem(repo: string, at: { file: string; line: number; symbol: string }, label: string): CheckItem {
   return {
     kind: "ui-unreached", repo, file: at.file, line: at.line, symbol: at.symbol,
@@ -56,39 +54,12 @@ export function uiUnreachedItem(repo: string, at: { file: string; line: number; 
   };
 }
 
-function locKey(repo: string, file: string, line: number): string {
-  return [repo, file, String(line)].join("\0");
-}
-
-/** HTTP calls (with a readable URL; unreadable ones are `unresolved-url`) that no page chain reaches.
- * A call is reached when a page chain carries it as its call stop or as an unresolved (no-route) entry.
- * Not listed: third-party calls (the linker writes no chain for them), and backend calls — in a file
- * that holds a route handler, or in a symbol that is a stop of a route / consumer chain. Per call, never
- * part of the chain buckets. */
-function uiUnreachedItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
-  const reached = new Set<string>();
-  const backendSymbols = new Set<string>();
-  for (const c of chains) {
-    if (c.entry.startsWith("page:")) {
-      for (const s of c.stops) if (s.kind === "call") reached.add(locKey(s.repo, s.file, s.line));
-      for (const u of c.unresolved) reached.add(locKey(u.at.repo, u.at.file, u.at.line));
-    } else {
-      for (const s of c.stops) backendSymbols.add([s.repo, s.file, s.symbol].join("\0"));
-    }
-  }
-  const knownHosts = apiBaseHosts(repos);
-  const items: CheckItem[] = [];
-  for (const repo of repos) {
-    const id = repo.ref.id;
-    const handlerFiles = new Set(repo.endpoints.routes.flatMap((r) => (r.handlerFile ? [r.handlerFile] : [])));
-    for (const call of repo.endpoints.httpCalls) {
-      if (call.kind === "unknown" || reached.has(locKey(id, call.at.file, call.at.line))) continue;
-      if (handlerFiles.has(call.at.file) || backendSymbols.has([id, call.at.file, call.at.symbol].join("\0"))) continue;
-      if (externalHost(call, repo.endpoints.httpClients, knownHosts) !== undefined) continue;
-      items.push(uiUnreachedItem(id, call.at, `${call.method} ${call.path}`));
-    }
-  }
-  return items;
+/** Built ONLY from the linker's reach facts (chains.json `uiReach`): every UI-side call no page reaches,
+ * whether or not it matched a route (a matched one also has a `call:` chain). The linker already left
+ * out backend, third-party and unreadable-URL calls. Never derived from chain stops, which are deduped
+ * per (entry, route) and so cannot say which calls a page reaches. Per call, never part of the buckets. */
+function uiUnreachedItems(uiReach: UiReachFact[]): CheckItem[] {
+  return uiReach.filter((f) => !f.reached).map((f) => uiUnreachedItem(f.repo, f, `${f.method} ${f.path}`));
 }
 
 /** A route stop's identity as the linker writes it (repo, registration site, method, effective path). */
@@ -101,10 +72,11 @@ function routeIdentity(r: EffectiveRoute): string {
 }
 
 /** Computed from endpoints, not from route chains, so a route the linker silently dropped is still
- * caught. A route has a UI caller when a page chain carries its plain routeKey, or — because the linker
- * suffixes colliding keys with `@<file>#<n>` — when a page chain's route stop is that very route. */
+ * caught. A route has a UI caller when a page or call-entry chain carries its plain routeKey, or —
+ * because the linker suffixes colliding keys with `@<file>#<n>` — when such a chain's route stop is that
+ * very route. (A call-entry chain's call is UI code that no page reaches; it is listed as ui-unreached.) */
 function routeNoCallerItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
-  const pageChains = chains.filter((c) => c.entry.startsWith("page:"));
+  const pageChains = chains.filter((c) => c.entry.startsWith("page:") || c.entry.startsWith("call:"));
   const pageRouteKeys = new Set(pageChains.map((c) => c.routeKey));
   const pageRouteStops = new Set(
     pageChains.flatMap((c) => c.stops.filter((s) => s.kind === "route")
@@ -191,11 +163,12 @@ function sortItems(items: CheckItem[]): CheckItem[] {
   );
 }
 
-export function buildCheckReport(chains: Chain[], ws: WorkspaceData): CheckReport {
+/** `uiReach`: the linker's reach facts from chains.json (absent in an older file: no ui-unreached items). */
+export function buildCheckReport(chains: Chain[], ws: WorkspaceData, uiReach: UiReachFact[] = []): CheckReport {
   const items = sortItems([
     ...unresolvedUrlItems(ws.repos),
     ...routeNoCallerItems(ws.repos, chains),
-    ...uiUnreachedItems(ws.repos, chains),
+    ...uiUnreachedItems(uiReach),
     ...chains.flatMap(chainLevelItems),
   ]);
 

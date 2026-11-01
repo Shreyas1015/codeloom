@@ -36,7 +36,7 @@ export function runLinker(
   const symbolLine: SymbolLineLookup = (repo, file, symbol) =>
     codeIndex.get(repo)?.get(file)?.symbols.find((s) => s.name === symbol)?.lines[0];
   const chains = sortChains(buildChains(wsData, links, symbolLine));
-  const wrote = writeChains(ws.root, chains);
+  const wrote = writeChains(ws.root, chains, links.uiReach);
   const sync = syncJourneys(ws.root, new Set(chains.map((c) => c.id)));
   return {
     chains: chains.length,

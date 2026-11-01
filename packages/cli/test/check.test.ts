@@ -441,51 +441,53 @@ describe("runCheck", () => {
   });
 });
 
-describe("buildCheckReport — ui-unreached (H3)", () => {
-  const call = (file: string, line: number, symbol: string, raw = '"/api/post"') => ({
-    method: "POST" as const, path: "/api/post", raw, resolved: true, client: "fetch", kind: "literal" as const, at: { file, line, symbol },
+describe("buildCheckReport — ui-unreached from reach facts (H3/H3b)", () => {
+  const fact = (file: string, line: number, symbol: string, reached: boolean) => ({
+    repo: "app", file, line, symbol, method: "POST" as const, path: "/api/post", reached,
   });
-  const pageChain = (file: string, line: number, symbol: string) => fakeChain({
-    stops: [
-      { lane: "ui", kind: "page", repo: "app", file: "src/app/create/page.tsx", line: 1, symbol: "Draft", hop: { confidence: "exact" } },
-      { lane: "ui", kind: "call", repo: "app", file, line, symbol, op: "POST", label: "/api/post", hop: { confidence: "exact" } },
-    ],
-  });
+  const app = () => fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {}));
 
-  it("lists an HTTP call no page reaches, without changing the chain buckets", () => {
-    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {
-      httpCalls: [call("src/app/create/page.tsx", 3, "submitData"), call("src/lib/orphan.ts", 7, "send")],
-    }));
-    const chains = [pageChain("src/app/create/page.tsx", 3, "submitData")];
-    const report = buildCheckReport(chains, fakeWorkspace([app]));
+  it("lists every call the linker recorded as unreached, without changing the chain buckets", () => {
+    const chains = [fakeChain({})];
+    const report = buildCheckReport(chains, fakeWorkspace([app()]), [
+      fact("src/app/create/page.tsx", 3, "submitData", true), fact("src/lib/orphan.ts", 7, "send", false),
+    ]);
     expect(report.items.filter((i) => i.kind === "ui-unreached")).toEqual([
       { kind: "ui-unreached", repo: "app", file: "src/lib/orphan.ts", line: 7, symbol: "send", detail: "POST /api/post: call at src/lib/orphan.ts:7 is not reached from any page" },
     ]);
-    expect(report.summary).toMatchObject({ chains: 1, complete: 0, missingDb: 1, brokenUiApi: 0 });
+    expect(report.summary).toMatchObject({ chains: 1 });
     expect(CheckReportSchema.parse(report)).toEqual(report);
   });
 
-  it("does not list a call reached by an unmatched page chain, a call inside a route handler file, or a third-party call", () => {
-    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {
-      httpCalls: [
-        call("src/app/x/page.tsx", 4, "go"),
-        call("src/pages/api/hook.ts", 5, "handle"),
-        { ...call("src/lib/gh.ts", 2, "stars", '"https://api.github.com/repos"'), path: "/repos" },
-      ],
-      routes: [{ method: "ANY", path: "/api/hook", handler: "handle", handlerFile: "src/pages/api/hook.ts", inline: false, framework: "next-api", at: { file: "src/pages/api/hook.ts", line: 1, symbol: "handle" } }],
-    }));
-    const unmatched = fakeChain({
-      routeKey: "",
-      stops: [{ lane: "ui", kind: "page", repo: "app", file: "src/app/y/page.tsx", line: 1, symbol: "Y", hop: { confidence: "exact" } }],
-      unresolved: [{ at: { repo: "app", file: "src/app/x/page.tsx", line: 4, symbol: "go" }, reason: "no matching route for POST /api/post" }],
+  it("never builds ui-unreached items from chain stops: no facts, no items (a call: chain is not backend)", () => {
+    const callChain = fakeChain({
+      entry: "call:app:src/lib/orphan.ts#send",
+      stops: [{ lane: "ui", kind: "call", repo: "app", file: "src/lib/orphan.ts", line: 7, symbol: "send", op: "POST", label: "/api/post", hop: { confidence: "exact" } }],
     });
-    const report = buildCheckReport([unmatched], fakeWorkspace([app]));
-    expect(report.items.filter((i) => i.kind === "ui-unreached")).toEqual([]);
+    const ws = fakeWorkspace([fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {
+      httpCalls: [{ method: "POST", path: "/api/post", raw: '"/api/post"', resolved: true, client: "fetch", kind: "literal", at: { file: "src/x.ts", line: 2, symbol: "x" } }],
+    }))]);
+    expect(buildCheckReport([callChain], ws).items.filter((i) => i.kind === "ui-unreached")).toEqual([]);
+    expect(buildCheckReport([callChain], ws, [fact("src/lib/orphan.ts", 7, "send", false)]).items.filter((i) => i.kind === "ui-unreached")).toHaveLength(1);
+  });
+
+  it("a route whose only caller is a call-entry chain is not 'no UI caller'", () => {
+    const api = fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api", {
+      routes: [{ method: "GET", path: "/api/x", handler: "h", inline: false, framework: "express", at: { file: "src/r.ts", line: 3, symbol: "<module>" } }],
+    }));
+    expect(buildCheckReport([], fakeWorkspace([api])).items.filter((i) => i.kind === "route-no-caller")).toHaveLength(1);
+    const callChain = fakeChain({
+      entry: "call:web:src/a.ts#a", routeKey: "api:GET /api/x",
+      stops: [
+        { lane: "ui", kind: "call", repo: "web", file: "src/a.ts", line: 2, symbol: "a", op: "GET", label: "/api/x", hop: { confidence: "exact" } },
+        { lane: "api", kind: "route", repo: "api", file: "src/r.ts", line: 3, symbol: "h", op: "GET", label: "GET /api/x", hop: { confidence: "exact" } },
+      ],
+    });
+    expect(buildCheckReport([callChain], fakeWorkspace([api])).items.filter((i) => i.kind === "route-no-caller")).toEqual([]);
   });
 
   it("prints ui-unreached items in their own group", () => {
-    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", { httpCalls: [call("src/lib/orphan.ts", 7, "send")] }));
-    const text = formatCheckText(buildCheckReport([], fakeWorkspace([app])));
+    const text = formatCheckText(buildCheckReport([], fakeWorkspace([app()]), [fact("src/lib/orphan.ts", 7, "send", false)]));
     expect(text).toContain("Calls not reached from any page (1):");
     expect(text).toContain("  app/src/lib/orphan.ts:7 send — POST /api/post: call at src/lib/orphan.ts:7 is not reached from any page");
   });

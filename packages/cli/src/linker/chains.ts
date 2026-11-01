@@ -11,7 +11,7 @@ import { worse } from "./paths.js";
 import type { WorkspaceData } from "../store/read.js";
 import {
   type Chain, type ChainStop, type ChainsFile, type Confidence, type Hop, type Journey, type JourneysFile,
-  JourneysFileSchema, type Unresolved,
+  JourneysFileSchema, type UiReachFact, type Unresolved,
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -371,8 +371,9 @@ export function sortChains(chains: Chain[]): Chain[] {
   return chains.sort((a, b) => compare(a.id, b.id));
 }
 
-export function writeChains(wsRoot: string, chains: Chain[]): boolean {
-  const file: ChainsFile = { version: 1, chains };
+/** `uiReach` (the linker's per-call reach facts, already sorted) is written only when given. */
+export function writeChains(wsRoot: string, chains: Chain[], uiReach?: UiReachFact[]): boolean {
+  const file: ChainsFile = { version: 1, chains, ...(uiReach ? { uiReach } : {}) };
   return writeJsonIfChanged(join(wsRoot, CODELOOM_DIR, FILES.chains), file);
 }
 
