@@ -345,12 +345,45 @@ function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extrac
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
-/** A chained / computed receiver (`prisma.emailLog.create()`, `make().run()`, `o["x"].run()`): no guess.
- * The unique-method fallback is kept only for a simple identifier receiver (`svc.run()`); on a chain the
- * receiver is usually a library object (an ORM delegate, a client), and a same-named method in the repo
- * is a false link. */
-function resolveOther(_ctx: Ctx, _site: CallSite, _callee: Extract<Callee, { kind: "other" }>): ResolvedCall | null {
-  return null;
+/** Where the object a receiver name stands for lives: a local named object literal (`const agent =
+ * {…}` carrying methods or identifier properties), else a default import whose target file has a default
+ * object (`export default {…}` / `module.exports = {…}` / `module.exports = obj`). */
+function receiverObject(ctx: Ctx, file: string, base: string): { file: string; names: string[] } | null {
+  const fi = ctx.index.get(file);
+  if (!fi) return null;
+  const imp = fi.imports.find((i) => i.local === base);
+  if (!imp) {
+    const isLocalObject = fi.objectRefs?.some((r) => r.object === base)
+      || fi.symbols.some((s) => s.kind === "object-method" && s.binding && s.name.startsWith(`${base}.`));
+    return isLocalObject ? { file, names: [base] } : null;
+  }
+  if (imp.kind !== "default") return null;
+  const target = resolveImport(file, imp.from, ctx.files, ctx.aliases);
+  const tfi = target ? ctx.index.get(target) : undefined;
+  return target && tfi ? { file: target, names: objectBases(tfi, "default") } : null;
+}
+
+/** A chained receiver (`agent.Articles.all()`, H3b): the receiver's base object (local or default
+ * import), then one or two identifier properties naming object literals bound in that same file
+ * (`export default { Articles }` / `{ Labels: Tags }`), then the object-method. Any other chained or
+ * computed receiver (`prisma.emailLog.create()`, `make().run()`, `o["x"].run()`) gets no guess: on a
+ * chain the receiver is usually a library object (an ORM delegate, a client), and a same-named method
+ * in the repo is a false link. */
+function resolveOther(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "other" }>): ResolvedCall | null {
+  if (!callee.receiver || callee.prop === undefined) return null;
+  const [base, ...props] = callee.receiver;
+  const start = receiverObject(ctx, file, base!);
+  if (!start) return null;
+  const fi = ctx.index.get(start.file)!;
+  let names = start.names;
+  for (const prop of props) {
+    const ref = fi.objectRefs?.find((r) => names.includes(r.object) && r.prop === prop);
+    if (!ref) return null;
+    names = [ref.local];
+  }
+  const m = fi.symbols.find((s) => s.kind === "object-method" && names.some((n) => s.name === `${n}.${callee.prop}`)
+    && s.binding);
+  return m ? exact(ctx, site, { file: start.file, symbol: m.name, hops: 0 }, "object") : null;
 }
 
 /** A JSX reference (`onSubmit={submitData}`, `<PostDetails />`) resolves like a call, but the function
@@ -370,7 +403,7 @@ function resolveCallee(ctx: Ctx, file: string, site: CallSite): ResolvedCall | n
     case "new-member": return resolveNewMember(ctx, file, site, callee);
     case "this": return resolveThis(ctx, file, site, callee);
     case "this-field": return resolveThisField(ctx, file, site, callee);
-    case "other": return resolveOther(ctx, site, callee);
+    case "other": return resolveOther(ctx, file, site, callee);
   }
 }
 

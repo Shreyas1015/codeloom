@@ -45,7 +45,7 @@ export type Callee =
   | { kind: "new-member"; className: string; prop: string }
   | { kind: "this"; prop: string }
   | { kind: "this-field"; field: string; prop: string }
-  | { kind: "other"; prop?: string };
+  | { kind: "other"; prop?: string; receiver?: string[] };
 
 export interface CallSite {
   caller: string;
@@ -101,6 +101,11 @@ export interface FileCodeIndex {
   defaultObject?: string;
   /** HTTP wrapper functions declared in this file (source order). Absent when none. */
   wrappers?: HttpWrapper[];
+  /** Properties of a named object literal (`export default {…}` -> "default", `module.exports = {…}` ->
+   * "exports", `const x = {…}` -> "x") that are a plain identifier: shorthand `{ Articles }` or
+   * `{ Labels: Tags }`. Lets `agent.Articles.all()` follow the default object to `Articles.all` (H3b).
+   * Source order. Absent when none. */
+  objectRefs?: Array<{ object: string; prop: string; local: string }>;
 }
 
 export type RepoCodeIndex = Map<string, FileCodeIndex>;
@@ -136,6 +141,21 @@ function newExpressionClass(expr: ts.Expression | undefined): string | undefined
   return expr && ts.isNewExpression(expr) && ts.isIdentifier(expr.expression) ? expr.expression.text : undefined;
 }
 
+/** Max property levels followed through objects of objects (`agent.Articles.all()` is one). */
+export const MAX_OBJECT_LEVELS = 2;
+
+/** `a.b` / `a.b.c` (an identifier then 1..MAX_OBJECT_LEVELS plain property names) -> ["a", "b"(, "c")]. */
+function identifierChain(expr: ts.Expression): string[] | undefined {
+  const names: string[] = [];
+  let cur: ts.Expression = expr;
+  while (ts.isPropertyAccessExpression(cur)) {
+    names.unshift(cur.name.text);
+    cur = cur.expression;
+  }
+  if (!ts.isIdentifier(cur) || names.length === 0 || names.length > MAX_OBJECT_LEVELS) return undefined;
+  return [cur.text, ...names];
+}
+
 function classify(expr: ts.Expression): Callee {
   if (ts.isIdentifier(expr)) return { kind: "ident", name: expr.text };
   if (ts.isPropertyAccessExpression(expr)) {
@@ -148,7 +168,8 @@ function classify(expr: ts.Expression): Callee {
     const newClass = newExpressionClass(obj);
     if (newClass) return { kind: "new-member", className: newClass, prop };
     if (ts.isIdentifier(obj)) return { kind: "member", object: obj.text, prop };
-    return { kind: "other", prop };
+    const receiver = identifierChain(obj);
+    return receiver ? { kind: "other", prop, receiver } : { kind: "other", prop };
   }
   if (ts.isElementAccessExpression(expr)) {
     const prop = stringValue(expr.argumentExpression);
@@ -540,6 +561,18 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const className = newExpressionClass(node.initializer);
       if (className) idx.localNews.push({ caller: enclosingSymbol(node), local: node.name.text, className });
+    }
+
+    if (ts.isObjectLiteralExpression(node)) {
+      const object = objectName(node);
+      if (object !== undefined) {
+        for (const p of node.properties) {
+          const ref = ts.isShorthandPropertyAssignment(p) ? { prop: p.name.text, local: p.name.text }
+            : ts.isPropertyAssignment(p) && ts.isIdentifier(p.initializer) && memberName(p.name) !== undefined
+              ? { prop: memberName(p.name)!, local: p.initializer.text } : undefined;
+          if (ref) (idx.objectRefs ??= []).push({ object, ...ref });
+        }
+      }
     }
 
     const jsxRef = jsxRefOf(node);

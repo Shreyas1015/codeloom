@@ -794,3 +794,113 @@ export default function Page() { return <button className={styles.button} /> }
     expect(resolver.callersOf(ref("src/styles.ts", "theme.button"))).toEqual([]);
   });
 });
+
+describe("default-export object calls (H3b)", () => {
+  const AGENT = `
+const requests = { get: (url) => fetch(url) };
+const Articles = {
+  all: (page) => requests.get("/articles"),
+  get: (slug) => requests.get("/articles/" + slug),
+};
+const Auth = { current: () => requests.get("/user") };
+const Tags = { getAll: () => requests.get("/tags") };
+export default {
+  Articles,
+  Auth,
+  Labels: Tags,
+  setToken: (t) => { token = t; },
+};
+`;
+
+  it("agent.Articles.all() resolves to Articles.all in agent.js (shorthand property)", () => {
+    const resolver = resolverOf({
+      "src/agent.js": AGENT,
+      "src/components/Home.js": `
+import agent from "../agent";
+export function load() { return agent.Articles.all(1); }
+`,
+    });
+    expect(siteAt(resolver, "src/components/Home.js", "load")).toMatchObject({
+      target: { file: "src/agent.js", symbol: "Articles.all" }, confidence: "exact", via: "object",
+    });
+  });
+
+  it("a renamed property (`Labels: Tags`) resolves to the bound object", () => {
+    const resolver = resolverOf({
+      "src/agent.js": AGENT,
+      "src/x.js": `
+import api from "./agent";
+export function tags() { return api.Labels.getAll(); }
+`,
+    });
+    expect(siteAt(resolver, "src/x.js", "tags")).toMatchObject({ target: { file: "src/agent.js", symbol: "Tags.getAll" } });
+  });
+
+  it("callersOf Articles.all sees the call through the default object", () => {
+    const resolver = resolverOf({
+      "src/agent.js": AGENT,
+      "src/Home.js": `
+import agent from "./agent";
+export function load() { return agent.Articles.all(1); }
+`,
+    });
+    expect(resolver.callersOf(ref("src/agent.js", "Articles.all")).map((c) => c.from.symbol)).toEqual(["load"]);
+  });
+
+  it("follows two property levels (`export default { v1 }`, `const v1 = { Articles }`)", () => {
+    const resolver = resolverOf({
+      "src/agent.js": `
+const Articles = { all: () => fetch("/a") };
+const v1 = { Articles };
+export default { v1 };
+`,
+      "src/Home.js": `
+import agent from "./agent";
+export function load() { return agent.v1.Articles.all(); }
+`,
+    });
+    expect(siteAt(resolver, "src/Home.js", "load")).toMatchObject({ target: { file: "src/agent.js", symbol: "Articles.all" } });
+  });
+
+  it("a property bound to a non-object (or an unknown prop) does not resolve", () => {
+    const resolver = resolverOf({
+      "src/agent.js": `
+const Articles = { all: () => fetch("/a") };
+const helper = () => 1;
+export default { Articles, helper };
+`,
+      "src/Home.js": `
+import agent from "./agent";
+export function a() { return agent.helper.all(); }
+export function b() { return agent.Missing.all(); }
+export function c() { return agent.Articles.nope(); }
+`,
+    });
+    expect(siteAt(resolver, "src/Home.js", "a")).toBeNull();
+    expect(siteAt(resolver, "src/Home.js", "b")).toBeNull();
+    expect(siteAt(resolver, "src/Home.js", "c")).toBeNull();
+  });
+
+  it("a chained library receiver (`prisma.user.create()`) still resolves to nothing", () => {
+    const resolver = resolverOf({
+      "src/repo.ts": `export const users = { create: () => 1 };`,
+      "src/svc.ts": `
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+export function make() { return prisma.users.create(); }
+`,
+    });
+    expect(siteAt(resolver, "src/svc.ts", "make")).toBeNull();
+  });
+
+  it("a same-file object of objects resolves locally", () => {
+    const resolver = resolverOf({
+      "src/agent.js": `
+const Articles = { all: () => fetch("/a") };
+const agent = { Articles };
+export function load() { return agent.Articles.all(); }
+`,
+    });
+    expect(siteAt(resolver, "src/agent.js", "load")).toMatchObject({ target: { file: "src/agent.js", symbol: "Articles.all" } });
+  });
+});
