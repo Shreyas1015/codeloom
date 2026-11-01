@@ -137,4 +137,33 @@ describe("detectPages", () => {
       ["/ambiguous", undefined],
     ]);
   });
+
+  it("unwraps JSX fragments in route elements, as the element itself or a wrapper's single child", () => {
+    const ctx = ctxWith("react-router-dom");
+    const jsx = `
+      import { Customers } from "./customers";
+      import { Orders } from "./orders";
+      export const App = () => (
+        <Routes>
+          <Route path="/customers" element={<><Customers /></>} />
+          <Route path="/ambiguous" element={<><Customers /><Orders /></>} />
+          <Route path="/nested" element={<RequireAuth><><Orders /></></RequireAuth>} />
+        </Routes>
+      );`;
+    const pages = detectPages(parsed("src/App.tsx", jsx), ctx);
+    expect(pages.map((p) => [p.route, p.component])).toEqual([
+      ["/customers", { name: "Customers", importSource: "./customers" }],
+      ["/ambiguous", undefined],
+      ["/nested", { name: "Orders", importSource: "./orders" }],
+    ]);
+  });
+
+  it("unwraps a single-child wrapper in an object route's element (regression)", () => {
+    const ctx = ctxWith("react-router-dom");
+    const code = `
+      import { X } from "./x";
+      const router = createBrowserRouter([{ path: "/x", element: <Wrap><X /></Wrap> }]);`;
+    const pages = detectPages(parsed("src/router.tsx", code), ctx);
+    expect(pages.map((p) => [p.route, p.component])).toEqual([["/x", { name: "X", importSource: "./x" }]]);
+  });
 });

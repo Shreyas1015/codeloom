@@ -36,19 +36,32 @@ interface RouteInfo {
  * (its own tag name) — a leaf, just like a self-closing element. With exactly one JSX child, unwraps
  * through it recursively, so a wrapper like `<RequireAuth><Customers/></RequireAuth>` resolves to
  * "Customers" at any wrapper depth (an attribute such as `fallback={<Spinner/>}` is not a child, so
- * `<Suspense fallback={<Spinner/>}><Orders/></Suspense>` also resolves to "Orders"). Whitespace-only
- * text children are ignored; anything else — zero vs. multiple real children, or a non-JSX expression
- * such as a call or conditional — is ambiguous -> undefined.
+ * `<Suspense fallback={<Spinner/>}><Orders/></Suspense>` also resolves to "Orders"). A JSX fragment
+ * (`<>...</>`) is unwrapped the same way as a JsxElement's children, whether it's the top-level
+ * `element` expression itself (`element={<><Customers/></>}` -> "Customers") or the single child being
+ * unwrapped (`<RequireAuth><><Orders/></></RequireAuth>` -> "Orders") — it has no tag name of its own,
+ * so it only resolves when it has exactly one real child. Whitespace-only text children are ignored;
+ * expression containers count as real children; anything else — zero vs. multiple real children, or a
+ * non-JSX expression such as a call or conditional — is ambiguous -> undefined.
  */
 function jsxTagName(expr: ts.Expression | undefined): string | undefined {
   if (!expr) return undefined;
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
   if (ts.isJsxSelfClosingElement(expr)) return expr.tagName.getText();
+  if (ts.isJsxFragment(expr)) return unwrapOnlyChild(expr.children);
   if (!ts.isJsxElement(expr)) return undefined;
   const children = expr.children.filter((c) => !(ts.isJsxText(c) && c.text.trim() === ""));
   if (children.length === 0) return expr.openingElement.tagName.getText();
-  const [only] = children;
-  if (children.length === 1 && only && (ts.isJsxElement(only) || ts.isJsxSelfClosingElement(only))) {
+  if (children.length === 1) return unwrapOnlyChild(children);
+  return undefined;
+}
+
+/** Given a JSX children list (already known to hold exactly one real child candidate, or not), resolves
+ * through that single real child when it is itself a JsxElement, self-closing element, or fragment. */
+function unwrapOnlyChild(children: readonly ts.JsxChild[]): string | undefined {
+  const real = children.filter((c) => !(ts.isJsxText(c) && c.text.trim() === ""));
+  const [only] = real;
+  if (real.length === 1 && only && (ts.isJsxElement(only) || ts.isJsxSelfClosingElement(only) || ts.isJsxFragment(only))) {
     return jsxTagName(only);
   }
   return undefined;
