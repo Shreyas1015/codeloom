@@ -3,6 +3,9 @@ import {
   className, commonJsAssignedName, enclosingSymbol, functionLikeName, isModuleExports, lineOf, objectName, stringValue, walk,
 } from "../adapters/ast.js";
 import type { ParsedFile } from "../adapters/types.js";
+import { httpCallShape, superagentReceivers } from "../adapters/http-calls.js";
+import { pathPattern } from "../adapters/ast.js";
+import type { HttpMethod } from "../store/schemas.js";
 
 export interface CodeSymbol {
   name: string;
@@ -52,6 +55,34 @@ export interface CallSite {
    * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
    * handleEmail)` — with their argument position. Absent when none. */
   refArgs?: Array<{ index: number; name: string }>;
+  /** Arguments with literal URL text (`'/user'`, `` `/articles/${slug}` ``), as route patterns, so a call to an
+   * HTTP wrapper (resolved later by the linker) can become an HTTP call. Absent when none. */
+  urlArgs?: UrlArg[];
+}
+
+export interface UrlArg {
+  index: number;
+  path: string;
+  kind: "literal" | "template";
+  resolved: boolean;
+  raw: string;
+  base?: string;
+}
+
+/**
+ * A function whose body makes one HTTP call whose URL is its own parameter, alone or after a base
+ * (`` `${BASE}${url}` `` / `BASE + url`): calls to it with a literal URL argument are HTTP calls (H2).
+ */
+export interface HttpWrapper {
+  symbol: string;
+  /** Index of the parameter carrying the URL. */
+  param: number;
+  method: HttpMethod;
+  client: string;
+  /** Source text of the base expression, when it is not a same-file string constant. */
+  base?: string;
+  /** The base's value when it is a top-level `const X = "<string>"` in the same file. */
+  baseLiteral?: string;
 }
 
 export interface FileCodeIndex {
@@ -64,6 +95,8 @@ export interface FileCodeIndex {
   /** CommonJS `module.exports = obj` / `export = obj` where `obj` is a local object literal: its name,
    * so `require("./x").m()` / a default import's `x.m()` resolve to `obj.m`. */
   defaultObject?: string;
+  /** HTTP wrapper functions declared in this file (source order). Absent when none. */
+  wrappers?: HttpWrapper[];
 }
 
 export type RepoCodeIndex = Map<string, FileCodeIndex>;
@@ -243,11 +276,109 @@ function applyExportMarks(idx: FileCodeIndex, marks: ExportMark[]): void {
   }
 }
 
+
+const WRAPPER_NAME_METHODS: Record<string, HttpMethod> = {
+  get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE",
+};
+
+/** The nearest enclosing named function-like node (the one enclosingSymbol names). */
+function enclosingFunction(node: ts.Node): { node: ts.SignatureDeclaration; name: string } | undefined {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    const name = functionLikeName(cur);
+    if (name !== undefined) return ts.isFunctionLike(cur) ? { node: cur, name } : undefined;
+  }
+  return undefined;
+}
+
+/** Top-level `const X = "<string>"` declarations. */
+function stringConsts(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !(stmt.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      const v = stringValue(d.initializer);
+      if (ts.isIdentifier(d.name) && v !== undefined) out.set(d.name.text, v);
+    }
+  }
+  return out;
+}
+
+/** A base expression a wrapper may put before its URL parameter: a name or a dotted name. */
+function isBaseExpr(e: ts.Expression): boolean {
+  return ts.isIdentifier(e) || (ts.isPropertyAccessExpression(e) && isBaseExpr(e.expression));
+}
+
+/** Split a wrapper URL into (base, parameter name): `p`, `` `${p}` ``, `` `${BASE}${p}` ``, `BASE + p`. */
+function wrapperUrl(e: ts.Expression): { base?: ts.Expression; param: string } | undefined {
+  if (ts.isParenthesizedExpression(e)) return wrapperUrl(e.expression);
+  if (ts.isIdentifier(e)) return { param: e.text };
+  if (ts.isTemplateExpression(e) && e.head.text === "" && e.templateSpans.every((s) => s.literal.text === "")) {
+    const exprs = e.templateSpans.map((s) => s.expression);
+    const last = exprs[exprs.length - 1]!;
+    if (!ts.isIdentifier(last)) return undefined;
+    if (exprs.length === 1) return { param: last.text };
+    if (exprs.length === 2 && isBaseExpr(exprs[0]!)) return { base: exprs[0]!, param: last.text };
+    return undefined;
+  }
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken && ts.isIdentifier(e.right) && isBaseExpr(e.left)) {
+    return { base: e.left, param: e.right.text };
+  }
+  return undefined;
+}
+
+/** If `call` is an HTTP call whose URL is a parameter of its enclosing function, that function as a wrapper. */
+function wrapperCandidate(
+  call: ts.CallExpression, superagent: Set<string>, consts: Map<string, string>,
+): HttpWrapper | undefined {
+  const shape = httpCallShape(call, superagent);
+  if (!shape) return undefined;
+  const url = wrapperUrl(shape.urlExpr);
+  if (!url) return undefined;
+  const fn = enclosingFunction(call);
+  if (!fn) return undefined;
+  const params = fn.node.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : undefined));
+  const param = params.indexOf(url.param);
+  if (param < 0) return undefined;
+  const baseText = url.base?.getText();
+  // The base must not itself be a parameter (then the URL is fully caller-controlled in two parts).
+  if (baseText !== undefined && params.includes(baseText)) return undefined;
+  const ownName = fn.name.slice(fn.name.lastIndexOf(".") + 1).toLowerCase();
+  const method = shape.method ?? WRAPPER_NAME_METHODS[ownName];
+  if (!method) return undefined;
+  const literal = url.base && ts.isIdentifier(url.base) ? consts.get(url.base.text) : undefined;
+  return {
+    symbol: fn.name, param, method, client: shape.client,
+    ...(baseText !== undefined && literal === undefined ? { base: baseText } : {}),
+    ...(literal !== undefined ? { baseLiteral: literal } : {}),
+  };
+}
+
+/** Literal-URL arguments of a call, as route patterns. */
+function urlArgsOf(call: ts.CallExpression): UrlArg[] {
+  const out: UrlArg[] = [];
+  call.arguments.forEach((a, index) => {
+    if (!(ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) || ts.isTemplateExpression(a) || ts.isBinaryExpression(a))) return;
+    const pattern = pathPattern(a);
+    if (!pattern) return;
+    const raw = a.getText();
+    if (!raw.includes("/")) return;
+    out.push({
+      index, path: pattern.path, kind: pattern.kind, resolved: pattern.resolved, raw,
+      ...(pattern.base !== undefined ? { base: pattern.base } : {}),
+    });
+  });
+  return out;
+}
+
 export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const idx: FileCodeIndex = { symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] };
   if (!file.sf) return idx;
   const marks: ExportMark[] = [];
   let defaultCandidate: string | undefined;
+  const superagent = superagentReceivers(file.sf);
+  const consts = stringConsts(file.sf);
+  /** symbol -> its wrapper candidate; null once a second HTTP call in the same symbol makes it ambiguous. */
+  const wrappers = new Map<string, HttpWrapper | null>();
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
@@ -374,11 +505,17 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       const site: CallSite = { caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) };
       const refArgs = node.arguments.flatMap((a, index) => (ts.isIdentifier(a) ? [{ index, name: a.text }] : []));
       if (refArgs.length > 0) site.refArgs = refArgs;
+      const urlArgs = urlArgsOf(node);
+      if (urlArgs.length > 0) site.urlArgs = urlArgs;
       idx.calls.push(site);
+      const w = wrapperCandidate(node, superagent, consts);
+      if (w) wrappers.set(w.symbol, wrappers.has(w.symbol) ? null : w);
     }
   });
 
   applyExportMarks(idx, marks);
+  const found = [...wrappers.values()].filter((w): w is HttpWrapper => w !== null);
+  if (found.length > 0) idx.wrappers = found;
   // Keep only identifier arguments that can name a function: a local function/class or an import.
   const fnNames = new Set([
     ...idx.symbols.filter((s) => s.binding && (s.kind === "function" || s.kind === "class")).map((s) => s.name),

@@ -499,3 +499,77 @@ describe("buildFileCodeIndex — identifier arguments that are not functions", (
     expect(idx.calls).toEqual([{ caller: "f", line: 3, callee: { kind: "ident", name: "run" }, refArgs: [{ index: 1, name: "handler" }] }]);
   });
 });
+
+describe("buildFileCodeIndex — HTTP wrappers (H2)", () => {
+  it("finds the realworld `requests` object: superagent methods on `${API_ROOT}${url}`", () => {
+    const idx = buildFileCodeIndex(parsed("src/agent.js", `
+import superagentPromise from 'superagent-promise';
+import _superagent from 'superagent';
+const superagent = superagentPromise(_superagent, global.Promise);
+const API_ROOT = 'https://conduit.productionready.io/api';
+const responseBody = res => res.body;
+const tokenPlugin = req => {};
+const requests = {
+  del: url =>
+    superagent.del(\`\${API_ROOT}\${url}\`).use(tokenPlugin).then(responseBody),
+  get: url =>
+    superagent.get(\`\${API_ROOT}\${url}\`).use(tokenPlugin).then(responseBody),
+  put: (url, body) =>
+    superagent.put(\`\${API_ROOT}\${url}\`, body).use(tokenPlugin).then(responseBody),
+  post: (url, body) =>
+    superagent.post(\`\${API_ROOT}\${url}\`, body).use(tokenPlugin).then(responseBody)
+};
+const Auth = { current: () => requests.get('/user') };
+`));
+    expect(idx.wrappers).toEqual([
+      { symbol: "requests.del", param: 0, method: "DELETE", client: "superagent", baseLiteral: "https://conduit.productionready.io/api" },
+      { symbol: "requests.get", param: 0, method: "GET", client: "superagent", baseLiteral: "https://conduit.productionready.io/api" },
+      { symbol: "requests.put", param: 0, method: "PUT", client: "superagent", baseLiteral: "https://conduit.productionready.io/api" },
+      { symbol: "requests.post", param: 0, method: "POST", client: "superagent", baseLiteral: "https://conduit.productionready.io/api" },
+    ]);
+    const site = idx.calls.find((c) => c.caller === "Auth.current" && c.callee.kind === "member");
+    expect(site?.urlArgs).toEqual([{ index: 0, path: "/user", kind: "literal", resolved: true, raw: "'/user'" }]);
+  });
+
+  it("finds a plain fetch wrapper with a non-literal base, and `BASE + path` / bare-param forms", () => {
+    const idx = buildFileCodeIndex(parsed("src/api.ts", `
+const API = process.env.NEXT_PUBLIC_API_URL;
+export function apiGet(path: string) { return fetch(\`\${API}\${path}\`); }
+export function apiPost(path: string, body: unknown) { return fetch(API + path, { method: "POST", body: JSON.stringify(body) }); }
+export const raw = (u: string) => fetch(u);
+`));
+    expect(idx.wrappers).toEqual([
+      { symbol: "apiGet", param: 0, method: "GET", client: "fetch", base: "API" },
+      { symbol: "apiPost", param: 0, method: "POST", client: "fetch", base: "API" },
+      { symbol: "raw", param: 0, method: "GET", client: "fetch" },
+    ]);
+  });
+
+  it("takes the method from the wrapper's own name when the inner call's method is a variable", () => {
+    const idx = buildFileCodeIndex(parsed("src/http.ts", `
+const BASE = "/api";
+export const http = {
+  patch: (url: string, m: string) => fetch(\`\${BASE}\${url}\`, { method: m }),
+  send: (url: string, m: string) => fetch(\`\${BASE}\${url}\`, { method: m }),
+};
+`));
+    expect(idx.wrappers).toEqual([{ symbol: "http.patch", param: 0, method: "PATCH", client: "fetch", baseLiteral: "/api" }]);
+  });
+
+  it("does not treat a function that hard-codes its URL as a wrapper", () => {
+    const idx = buildFileCodeIndex(parsed("src/users.ts", `
+const API = "/api";
+export function listUsers(page: number) { return fetch(\`\${API}/users?page=\${page}\`); }
+export function getUser(id: string) { return fetch("/api/users/" + id); }
+export function ping() { return fetch(\`\${API}\${"/ping"}\`); }
+`));
+    expect(idx.wrappers ?? []).toEqual([]);
+  });
+
+  it("does not record non-literal call arguments as url arguments", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+function load(path: string) { return apiGet(path); }
+`));
+    expect(idx.calls[0]?.urlArgs).toBeUndefined();
+  });
+});
