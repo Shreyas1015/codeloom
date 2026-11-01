@@ -36,3 +36,17 @@ Every hop was read from the app's own code, not from codeloom's output:
 - Next `pages/api` methods come from the handler code: a file that never checks `req.method` serves every
   method (`ANY`); `post/[id].ts` serves only `DELETE` (everything else throws).
 - Hops the linker is known to miss stay in the key, so recall is an honest number.
+
+## Scores (2026-11-01, gate: precision ≥ 0.95 counting exact+param hops, recall ≥ 0.80, per app and hop type)
+
+`test/evals.test.ts` fails CI if any app drops below the gate. Cells are found/expected, precision, recall.
+
+| App | ui-api | route-handler | handler-store |
+|---|---|---|---|
+| prisma-rest-nextjs | 4/4, 100%, 100% | 5/5, 100%, 100% | 5/5, 100%, 100% |
+| realworld | 22/22, 100%, 100% | 21/21, 100%, 100% | 32/32, 100%, 100% |
+| realworld-nest | 0/0 (no UI) | 4/4, 100%, 100% | 3/3, 100%, 100% |
+
+Note: realworld's 22 ui-api hops come from call-entry chains (`call:` — the call site that matches the
+route), not from page chains. Its pages reach the calls through class lifecycle methods and Redux dispatch,
+which codeloom does not follow yet, so `codeloom check` lists them as "not reached from any page".
