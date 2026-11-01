@@ -189,6 +189,10 @@ graph instead of ad-hoc reading, with the Data Journey as a first-class feature.
 
 ---
 
+6. **Self-improving eval loop ("codeloom gym")** — author idea 2026-11-01: daily runs of codeloom on categorised,
+   licence-checked open-source repos (by stack and language), weekly report of accuracy and health trends, and each
+   failure pattern turned into a fix with a regression test. Planned after v0.1; details in spec §8a.
+
 ## 8. Author context & preferences
 
 - Works mainly in TypeScript: AdonisJS backends, Next.js frontends, Postgres, RabbitMQ; repos on

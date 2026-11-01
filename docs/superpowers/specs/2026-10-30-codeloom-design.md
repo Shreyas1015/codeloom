@@ -386,7 +386,31 @@ It never changes confidence on its own; it only adds a note.
 | v0.2 | tours (Data Journey, traps, checks), progress with re-walk, Tour + Progress screens |
 | v0.3 | spec + ticket matching, Views via the agent |
 | v0.4 | PR Review Maps + rules (Bitbucket first, then GitHub), notes and labels, ownership |
+| after v0.1 ships (author idea, 2026-11-01) | **Self-improving eval loop ("codeloom gym")** — see §8a |
 | later | service-level map beyond HTTP/queues, OpenTelemetry trace overlay, DB-aware hot queries, weekly quiz, hosted sharing, VS Code extension, dark theme |
+
+## 8a. Self-improving eval loop — "codeloom gym" (planned after v0.1)
+
+Author idea (2026-11-01): keep codeloom the best tool for developers by testing it on a steady stream of real open-source
+repos, and improving it week by week.
+
+- **Corpus:** a scheduled job (daily) picks open-source repos by category (full-stack app, API-only, monorepo, SPA,
+  microservices) and language/stack (Next.js, React Router, Express, NestJS, Adonis, Fastify, Prisma, TypeORM, Drizzle,
+  RabbitMQ; later Python/Go), licence-checked (MIT/Apache) and pinned by commit.
+- **Run:** `codeloom index` + `codeloom check` on each, no AI in the run itself.
+- **Signals (ground truth matters):**
+  1. Answer-key apps (like `fixtures/evals`): precision/recall per hop type — the hard gate.
+  2. Self-check health on every repo: chains complete %, unresolved-call rate, routes with no UI caller, calls reaching
+     no page, guess-link share — tracked as trends (they show coverage gaps without needing a key).
+  3. Optional OTel traces where a repo ships a demo with tracing — confirmed vs missing links.
+  4. New keys: an agent drafts answer keys for sampled repos, a human (or a second agent) reviews before they count.
+- **Weekly report:** scores and trends per category/stack, the top failure patterns (e.g. "wrapper HTTP clients in
+  Vue apps"), new regressions, and a proposed fix list — each pattern turned into an adapter/linker task with a
+  regression test from the real repo.
+- **Guardrails:** thresholds never lowered to pass; every fix lands with a test from the repo that exposed it;
+  repos stored as trimmed, licensed copies or pinned SHAs; runs are offline except the clone step.
+- **Likely shape:** a `codeloom-gym` workspace or CI job (scheduled cloud routine), a `codeloom eval` command, and a
+  committed `evals/history/` of weekly reports.
 
 ## 9. Out of scope for v0.1
 
