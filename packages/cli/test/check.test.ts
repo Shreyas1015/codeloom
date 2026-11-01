@@ -1,8 +1,9 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCheckJson, formatCheckText } from "../src/check/format.js";
-import { buildCheckReport, completePercent } from "../src/check/report.js";
+import { belowFailUnder, buildCheckReport, completePercent } from "../src/check/report.js";
 import { runCheck } from "../src/commands/check.js";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
@@ -490,5 +491,29 @@ describe("buildCheckReport — ui-unreached from reach facts (H3/H3b)", () => {
     const text = formatCheckText(buildCheckReport([], fakeWorkspace([app()]), [fact("src/lib/orphan.ts", 7, "send", false)]));
     expect(text).toContain("Calls not reached from any page (1):");
     expect(text).toContain("  app/src/lib/orphan.ts:7 send — POST /api/post: call at src/lib/orphan.ts:7 is not reached from any page");
+  });
+});
+
+describe("check exit codes (final review item 2)", () => {
+  const summary = { chains: 1000, complete: 946, missingDb: 54, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } };
+
+  it("--fail-under compares the unrounded ratio: 94.6% fails --fail-under 95 though it prints as 95%", () => {
+    const r = { version: 1 as const, summary, items: [] };
+    expect(completePercent(r)).toBe(95);
+    expect(belowFailUnder(r, 95)).toBe(true);
+    expect(belowFailUnder(r, 94)).toBe(false);
+    expect(belowFailUnder({ ...r, summary: { ...summary, complete: 950, missingDb: 50 } }, 95)).toBe(false);
+  });
+
+  it("a folder with no workspace and no git repo is a data error (exit 2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "codeloom-nows-"));
+    try {
+      runCheck(dir, {});
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CodeloomError);
+      expect((err as CodeloomError).message).toMatch(/No codeloom workspace or git repo/);
+      expect((err as CodeloomError).exitCode).toBe(2);
+    }
   });
 });

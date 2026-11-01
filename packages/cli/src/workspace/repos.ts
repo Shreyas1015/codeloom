@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { CodeloomError } from "../errors.js";
+import { CodeloomError, dataError } from "../errors.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
 import { type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
@@ -44,7 +44,8 @@ export function loadWorkspace(start: string): {
   }
   const top = gitToplevel(start);
   if (!top) {
-    throw new CodeloomError(
+    // A usage/data problem, not a crash: exit 2 (codeloom check's contract).
+    throw dataError(
       `No codeloom workspace or git repo found at ${resolve(start)}. Run "codeloom init" in a repo or a folder of repos first.`,
     );
   }

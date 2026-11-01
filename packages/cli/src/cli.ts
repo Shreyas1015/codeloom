@@ -1,5 +1,6 @@
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { runCheck } from "./commands/check.js";
+import { CodeloomError } from "./errors.js";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { VERSION } from "./version.js";
@@ -11,7 +12,9 @@ export function buildProgram(): Command {
   program
     .name("codeloom")
     .description("Map a codebase into user journeys, for you and your AI agent.")
-    .version(VERSION);
+    .version(VERSION)
+    // Throw instead of exiting, so bin.ts maps usage errors to exit 2 (subcommands inherit this).
+    .exitOverride();
 
   program
     .command("init")
@@ -42,4 +45,12 @@ export function buildProgram(): Command {
     });
 
   return program;
+}
+
+/** The process exit code for an error thrown out of the program. Commander's own exits (help, version)
+ * keep their 0; every other commander error is a usage error (unknown option or command, missing option
+ * value): 2. A CodeloomError carries its own code; anything else is unexpected: 1. */
+export function exitCodeFor(err: unknown): number {
+  if (err instanceof CommanderError) return err.exitCode === 0 ? 0 : 2;
+  return err instanceof CodeloomError ? err.exitCode : 1;
 }

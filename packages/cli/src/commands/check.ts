@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { formatCheckJson, formatCheckText } from "../check/format.js";
-import { buildCheckReport, completePercent } from "../check/report.js";
+import { belowFailUnder, buildCheckReport } from "../check/report.js";
 import { dataError } from "../errors.js";
 import { readJson } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -31,6 +31,6 @@ export function runCheck(start: string, opts: CheckOptions): { report: CheckRepo
 
   const report = buildCheckReport(chainsFile.chains, ws, chainsFile.uiReach ?? []);
   const output = opts.json ? formatCheckJson(report) : formatCheckText(report);
-  const exitCode: 0 | 1 = failUnder !== undefined && completePercent(report) < failUnder ? 1 : 0;
+  const exitCode: 0 | 1 = failUnder !== undefined && belowFailUnder(report, failUnder) ? 1 : 0;
   return { report, output, exitCode };
 }

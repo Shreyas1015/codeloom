@@ -196,6 +196,18 @@ export function buildCheckReport(chains: Chain[], ws: WorkspaceData, uiReach: Ui
   };
 }
 
+/** Complete chains as an unrounded percentage (100 when there are no chains). */
+export function completeRatio(r: CheckReport): number {
+  if (r.summary.chains === 0) return 100;
+  return (r.summary.complete / r.summary.chains) * 100;
+}
+
+/** `--fail-under N` fails on the unrounded ratio: 94.6% is below 95 even though it prints as 95%. */
+export function belowFailUnder(r: CheckReport, failUnder: number): boolean {
+  return completeRatio(r) < failUnder;
+}
+
+/** Complete chains as a whole percentage, for display only. */
 export function completePercent(r: CheckReport): number {
   if (r.summary.chains === 0) return 100;
   return Math.round((r.summary.complete / r.summary.chains) * 100);
