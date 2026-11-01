@@ -5,6 +5,10 @@ import ts from "typescript";
 export interface Alias {
   prefix: string;
   targets: string[];
+  /** Set only for aliases derived from a tsconfig/jsconfig's `paths` or `baseUrl`. */
+  kind?: "paths" | "baseUrl";
+  /** The tsconfig/jsconfig's own directory (posix, "" at repo root); used to pick the nearest config. */
+  dir?: string;
 }
 
 const EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte"];
@@ -51,7 +55,15 @@ export function loadAliases(repoAbs: string, files: string[]): Alias[] {
         aliases.push({
           prefix: key.slice(0, -1),
           targets: targets.filter((t) => t.includes("*")).map((t) => posix.normalize(posix.join(baseUrl, t.slice(0, t.indexOf("*"))))),
+          kind: "paths",
+          dir,
         });
+      }
+      // A plain `baseUrl` (no matching `paths` entry) is also a resolution root for bare specifiers:
+      // TypeScript falls back to it for non-relative imports. Packages with no matching file under it
+      // simply stay unresolved. `paths` is tried first (pushed above), so it wins on overlap.
+      if (opts.baseUrl !== undefined) {
+        aliases.push({ prefix: "", targets: [posix.normalize(baseUrl)], kind: "baseUrl", dir });
       }
     }
   }
@@ -65,14 +77,37 @@ function tryFile(base: string, files: Set<string>): string | null {
   return candidates.find((c) => files.has(c)) ?? null;
 }
 
+/**
+ * The tsconfig/jsconfig directory that is the nearest ancestor of `fromRel`, among those that
+ * contributed `paths` or `baseUrl` aliases. Matches TypeScript's "nearest config wins" behaviour
+ * for monorepos with several tsconfig files.
+ */
+function nearestConfigDir(fromRel: string, aliases: Alias[]): string | undefined {
+  const fromDir = posix.dirname(fromRel);
+  let best: string | undefined;
+  for (const a of aliases) {
+    if (a.kind !== "paths" && a.kind !== "baseUrl") continue;
+    const dir = a.dir ?? "";
+    const isAncestor = dir === "" || fromDir === dir || fromDir.startsWith(`${dir}/`);
+    if (!isAncestor) continue;
+    if (best === undefined || dir.length > best.length) best = dir;
+  }
+  return best;
+}
+
 export function resolveImport(fromRel: string, source: string, files: Set<string>, aliases: Alias[]): string | null {
   const bases: string[] = [];
   if (source.startsWith("./") || source.startsWith("../")) {
     bases.push(posix.normalize(posix.join(posix.dirname(fromRel), source)));
   } else {
+    const configDir = nearestConfigDir(fromRel, aliases);
     for (const a of aliases) {
+      if (a.kind === "baseUrl") continue;
+      if (a.kind === "paths" && a.dir !== configDir) continue;
       if (source.startsWith(a.prefix)) bases.push(...a.targets.map((t) => posix.normalize(t + source.slice(a.prefix.length))));
     }
+    const baseUrlAlias = aliases.find((a) => a.kind === "baseUrl" && a.dir === configDir);
+    if (baseUrlAlias) bases.push(...baseUrlAlias.targets.map((t) => posix.normalize(posix.join(t, source))));
   }
   for (const b of bases) {
     const hit = tryFile(b, files);

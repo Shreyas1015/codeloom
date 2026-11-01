@@ -23,7 +23,7 @@ const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 8;
+export const CACHE_FORMAT = 9;
 
 /** The cache is disposable: a corrupt, wrong-shape or old-format file is discarded and rebuilt. */
 function readCache(path: string): Fingerprints | null {

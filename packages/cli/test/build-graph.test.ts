@@ -24,6 +24,46 @@ describe("resolveImport", () => {
     expect(resolveImport("src/lib/api.ts", "./util", files, aliases)).toBe("src/lib/util/index.ts");
     expect(resolveImport("src/lib/api.ts", "react", files, aliases)).toBeNull();
   });
+
+  it("resolves bare imports through tsconfig baseUrl (realworld-nest shape: baseUrl: \"./src\")", () => {
+    const repo = makeRepo({
+      "tsconfig.json": `{ "compilerOptions": { "baseUrl": "./src" } }`,
+      "src/user/user.entity.ts": "",
+      "src/app.module.ts": "",
+    });
+    const files = new Set(["src/user/user.entity.ts", "src/app.module.ts"]);
+    const aliases = loadAliases(repo, ["tsconfig.json", ...files]);
+    expect(resolveImport("src/app.module.ts", "user/user.entity", files, aliases)).toBe("src/user/user.entity.ts");
+    // a package with no matching file under baseUrl stays unresolved
+    expect(resolveImport("src/app.module.ts", "express", files, aliases)).toBeNull();
+  });
+
+  it("prefers tsconfig paths over baseUrl when both could resolve the same bare specifier", () => {
+    const repo = makeRepo({
+      "tsconfig.json": `{ "compilerOptions": { "baseUrl": "./src", "paths": { "user/*": ["./other/*"] } } }`,
+      "src/user/user.entity.ts": "",
+      "src/other/user.entity.ts": "",
+      "src/app.module.ts": "",
+    });
+    const files = new Set(["src/user/user.entity.ts", "src/other/user.entity.ts", "src/app.module.ts"]);
+    const aliases = loadAliases(repo, ["tsconfig.json", ...files]);
+    // both "src/user/user.entity.ts" (via baseUrl) and "src/other/user.entity.ts" (via paths) exist;
+    // paths must win.
+    expect(resolveImport("src/app.module.ts", "user/user.entity", files, aliases)).toBe("src/other/user.entity.ts");
+  });
+
+  it("uses the tsconfig nearest the importing file in a monorepo, not a sibling app's", () => {
+    const repo = makeRepo({
+      "api/tsconfig.json": `{ "compilerOptions": { "baseUrl": "./src" } }`,
+      "ui/tsconfig.json": `{ "compilerOptions": { "baseUrl": "./src" } }`,
+      "api/src/shared/thing.ts": "",
+      "ui/src/shared/thing.ts": "",
+      "api/src/x.ts": "",
+    });
+    const files = new Set(["api/src/shared/thing.ts", "ui/src/shared/thing.ts", "api/src/x.ts"]);
+    const aliases = loadAliases(repo, ["api/tsconfig.json", "ui/tsconfig.json", ...files]);
+    expect(resolveImport("api/src/x.ts", "shared/thing", files, aliases)).toBe("api/src/shared/thing.ts");
+  });
 });
 
 describe("buildGraph", () => {
