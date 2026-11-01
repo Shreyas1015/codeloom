@@ -109,6 +109,36 @@ describe("detectRoutes", () => {
     `, "next")).toEqual(["ANY /api/post/:id -> default [next-api]"]);
   });
 
+  it("does not let a nested function/arrow that rebinds the request name leak its own method checks", () => {
+    // A nested function with its own `req` param shadows the outer request — its checks don't count.
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        function helper(req) {
+          if (req.method === "POST") return true;
+        }
+        return res.json({});
+      }
+    `, "next")).toEqual(["ANY /api/post/:id -> default [next-api]"]);
+
+    // Same shadowing through a callback parameter, not just a named nested function.
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        items.map((req) => {
+          if (req.method === "PUT") return true;
+        });
+        return res.json({});
+      }
+    `, "next")).toEqual(["ANY /api/post/:id -> default [next-api]"]);
+
+    // A nested closure that does NOT shadow `req` should still be scanned.
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        const f = () => req.method === "PATCH";
+        return f() ? res.json({}) : res.end();
+      }
+    `, "next")).toEqual(["PATCH /api/post/:id -> default [next-api]"]);
+  });
+
   it("reads Next.js API routes only directly under the package root", () => {
     const at = (rel: string, ctx = ctxIn("apps/web", "next")) => detectRoutes(parsed(rel, "export async function GET() {}"), ctx).map((r) => r.path);
     expect(at("apps/web/src/app/api/orders/route.ts")).toEqual(["/api/orders"]);

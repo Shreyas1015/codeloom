@@ -396,6 +396,49 @@ function nextApiRoutes(file: ParsedFile, ctx: AdapterContext): Route[] | undefin
 
 const PAGES_API_METHODS = new Set<string>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
+function isFunctionLike(n: ts.Node): n is ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration {
+  return (
+    ts.isFunctionDeclaration(n) ||
+    ts.isFunctionExpression(n) ||
+    ts.isArrowFunction(n) ||
+    ts.isMethodDeclaration(n) ||
+    ts.isGetAccessor(n) ||
+    ts.isSetAccessor(n)
+  );
+}
+
+/** Every name a parameter list binds into its function's scope, including names introduced by
+ * destructuring (`{ method }`, `{ method: m }`, `[a, b]`). */
+function boundParamNames(params: readonly ts.ParameterDeclaration[]): Set<string> {
+  const names = new Set<string>();
+  const collect = (name: ts.BindingName) => {
+    if (ts.isIdentifier(name)) {
+      names.add(name.text);
+      return;
+    }
+    for (const el of name.elements) {
+      if (ts.isOmittedExpression(el)) continue;
+      collect(el.name);
+    }
+  };
+  for (const p of params) collect(p.name);
+  return names;
+}
+
+/** Like `walk`, but does not descend into a nested function/method/arrow whose own parameters
+ * rebind one of `shadowNames` (e.g. the request param name, or its destructured `method` alias) —
+ * such a nested scope's `req`/`method` refers to its own parameter, not the outer request. */
+function walkScoped(node: ts.Node, shadowNames: ReadonlySet<string>, visit: (n: ts.Node) => void): void {
+  visit(node);
+  if (isFunctionLike(node) && shadowNames.size > 0) {
+    const bound = boundParamNames(node.parameters);
+    for (const name of bound) {
+      if (shadowNames.has(name)) return;
+    }
+  }
+  node.forEachChild((child) => walkScoped(child, shadowNames, visit));
+}
+
 /** The default-exported handler of a pages-router API file: a function declaration, or the
  * arrow/function expression that `export default` points to (directly, or via a local binding). */
 function defaultExportHandler(sf: ts.SourceFile): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined {
@@ -442,7 +485,7 @@ function pagesApiMethods(sf: ts.SourceFile): HttpMethod[] {
 
   const aliases = new Set<string>();
   if (reqName) {
-    walk(fn.body, (n) => {
+    walkScoped(fn.body, new Set([reqName]), (n) => {
       if (!ts.isVariableDeclaration(n) || !ts.isObjectBindingPattern(n.name)) return;
       if (!n.initializer || !ts.isIdentifier(n.initializer) || n.initializer.text !== reqName) return;
       for (const el of n.name.elements) {
@@ -466,7 +509,8 @@ function pagesApiMethods(sf: ts.SourceFile): HttpMethod[] {
     if (PAGES_API_METHODS.has(m)) methods.add(m as HttpMethod);
   };
 
-  walk(fn.body, (n) => {
+  const shadowNames = new Set(reqName ? [reqName, ...aliases] : aliases);
+  walkScoped(fn.body, shadowNames, (n) => {
     if (
       ts.isBinaryExpression(n) &&
       (n.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || n.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)
