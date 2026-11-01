@@ -48,6 +48,10 @@ export interface CallSite {
   caller: string;
   line: number;
   callee: Callee;
+  /** Plain-identifier arguments that name a function/class declared in this file or an import binding —
+   * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
+   * handleEmail)` — with their argument position. Absent when none. */
+  refArgs?: Array<{ index: number; name: string }>;
 }
 
 export interface FileCodeIndex {
@@ -367,11 +371,24 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     }
 
     if (ts.isCallExpression(node)) {
-      idx.calls.push({ caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) });
+      const site: CallSite = { caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) };
+      const refArgs = node.arguments.flatMap((a, index) => (ts.isIdentifier(a) ? [{ index, name: a.text }] : []));
+      if (refArgs.length > 0) site.refArgs = refArgs;
+      idx.calls.push(site);
     }
   });
 
   applyExportMarks(idx, marks);
+  // Keep only identifier arguments that can name a function: a local function/class or an import.
+  const fnNames = new Set([
+    ...idx.symbols.filter((s) => s.binding && (s.kind === "function" || s.kind === "class")).map((s) => s.name),
+    ...idx.imports.filter((i) => i.kind !== "namespace").map((i) => i.local),
+  ]);
+  for (const site of idx.calls) {
+    const kept = site.refArgs?.filter((a) => fnNames.has(a.name));
+    if (kept && kept.length > 0) site.refArgs = kept;
+    else delete site.refArgs;
+  }
   // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
   const obj = defaultCandidate;
   if (obj !== undefined && idx.symbols.some((s) => s.kind === "object-method" && s.name.startsWith(`${obj}.`))) {

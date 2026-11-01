@@ -480,3 +480,22 @@ module.exports.Klass = class {};
     expect(defFn.symbols.map((s) => [s.name, s.binding])).toEqual([["default", false]]);
   });
 });
+
+describe("buildFileCodeIndex — identifier arguments", () => {
+  it("records plain identifiers passed by reference, with their position, only when present", () => {
+    const code = ['export async function start(channel) {', '  await channel.consume("emails", handleEmail);', "  channel.ack(1);", "}", "function handleEmail(msg) { return msg; }", ""].join("\n");
+    const idx = buildFileCodeIndex(parsed("src/c.ts", code));
+    expect(idx.calls).toEqual([
+      { caller: "start", line: 2, callee: { kind: "member", object: "channel", prop: "consume" }, refArgs: [{ index: 1, name: "handleEmail" }] },
+      { caller: "start", line: 3, callee: { kind: "member", object: "channel", prop: "ack" } },
+    ]);
+  });
+});
+
+describe("buildFileCodeIndex — identifier arguments that are not functions", () => {
+  it("drops parameters and other plain values", () => {
+    const code = ['import { handler } from "./h.js";', "export function f(id) {", "  run(id, handler);", "}", ""].join("\n");
+    const idx = buildFileCodeIndex(parsed("src/f.ts", code));
+    expect(idx.calls).toEqual([{ caller: "f", line: 3, callee: { kind: "ident", name: "run" }, refArgs: [{ index: 1, name: "handler" }] }]);
+  });
+});

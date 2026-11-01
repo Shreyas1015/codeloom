@@ -1,13 +1,14 @@
 import { symbolAt } from "./code-index.js";
-import type { FileCodeIndex } from "./code-index.js";
+import type { CallSite, FileCodeIndex } from "./code-index.js";
 import type { CallResolver, SymbolRef, WalkStep } from "./resolve-calls.js";
-import { walkCallers } from "./resolve-calls.js";
+import { walkCallers, walkCalls } from "./resolve-calls.js";
 import { joinPaths, pickRoute, worse } from "./paths.js";
 import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
 import type { EffectiveRoute } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Confidence, HttpCall, HttpClient, UiPage } from "../store/schemas.js";
+import type { Confidence, DbAccess, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage } from "../store/schemas.js";
+import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
 
@@ -214,4 +215,365 @@ export function linkUi(input: LinkInput): UiLink[] {
   links.sort((a, b) => compare(a.repo, b.repo) || compare(a.call.at.file, b.call.at.file) || a.call.at.line - b.call.at.line
     || compare(a.call.method, b.call.method) || compare(a.call.path, b.call.path));
   return links;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Backend half (Task 11): route -> handler -> store/queue; queue pairing; consumers; manual links.
+// ---------------------------------------------------------------------------------------------------
+
+export type StoreHit =
+  | { kind: "db"; access: DbAccess; viaPath: WalkStep[] }
+  | { kind: "queue"; op: QueueOp; viaPath: WalkStep[] };
+
+export interface QueuePair {
+  publish: QueueOp; consume: QueueOp; repoFrom: string; repoTo: string; confidence: Confidence; reason?: string;
+}
+
+export interface BackendLink {
+  repo: string;
+  route: EffectiveRoute;
+  handler: SymbolRef | null;
+  handlerConfidence: Confidence;
+  hits: StoreHit[];
+  unresolved: Array<{ at: Loc; reason: string }>;
+}
+
+export interface ConsumerLink {
+  repo: string; consume: QueueOp; handler: SymbolRef; hits: StoreHit[]; unresolved: Array<{ at: Loc; reason: string }>;
+}
+
+export interface ManualLink { from: string; to: string; resolved: boolean; reason?: string }
+
+/** Where a walk starts. `lines` is set for an anonymous inline route callback: it has no symbol of its
+ * own, so its calls and store accesses are joined to it by line range within `ref.file`. `registration`
+ * is the `app.get(...)` call that hands the callback over: it shares the callback's first line but is
+ * not one of its calls. */
+interface HandlerScope {
+  ref: SymbolRef; confidence: Confidence; lines?: [number, number]; registration?: { line: number; method: HttpMethod };
+}
+
+const REGISTRATION_PROPS = new Set(["get", "post", "put", "patch", "delete", "all", "any", "head", "options", "route", "use"]);
+
+function isRegistration(site: CallSite, reg: HandlerScope["registration"]): boolean {
+  if (!reg || site.line !== reg.line) return false;
+  const prop = calleeProp(site.callee)?.toLowerCase();
+  return prop !== undefined && (prop === reg.method.toLowerCase() || REGISTRATION_PROPS.has(prop));
+}
+
+const DEFAULT_PREFIX_RE = /^default(\.|$)/;
+
+/** Strip a leading "default." (or bare "default") and resolve what remains against the file's actual
+ * default-exported function/class, e.g. next-api "default" whose default export is named "handler" ->
+ * "handler"; "default.create" on a default-exported class `Svc` -> "Svc.create". With no default
+ * function/class (e.g. `export default { create() {} }`, indexed as "default.create") it is kept as-is. */
+function handlerSymbolName(idx: FileCodeIndex | undefined, handler: string): string {
+  if (!DEFAULT_PREFIX_RE.test(handler)) return handler;
+  const rest = handler.replace(DEFAULT_PREFIX_RE, "");
+  const def = idx?.symbols.find((s) => s.exportNames?.includes("default"));
+  if (!def) return handler;
+  return rest ? `${def.name}.${rest}` : def.name;
+}
+
+function within(line: number, lines: [number, number]): boolean {
+  return line >= lines[0] && line <= lines[1];
+}
+
+function handlerScope(input: LinkInput, r: EffectiveRoute): HandlerScope | null {
+  const route = r.route;
+  if (!route.handlerFile) return null;
+  const resolver = input.resolvers.get(r.repo);
+  const idx = resolver?.fileIndex(route.handlerFile);
+  const lines = route.handlerLines;
+  if (route.inline && lines) {
+    // A named function expression is its own symbol; anything else found at that line (the module, or a
+    // function that merely registers the routes) is wider than the callback, so use a synthetic symbol.
+    const bySite = idx ? symbolAt(idx, lines[0]) : undefined;
+    if (bySite && bySite.lines[0] >= lines[0] && bySite.lines[1] <= lines[1]) {
+      return { ref: { repo: r.repo, file: route.handlerFile, symbol: bySite.name }, confidence: "exact" };
+    }
+    return {
+      ref: { repo: r.repo, file: route.handlerFile, symbol: route.handler }, confidence: "exact", lines,
+      ...(route.at.file === route.handlerFile ? { registration: { line: route.at.line, method: route.method } } : {}),
+    };
+  }
+  const name = handlerSymbolName(idx, route.handler);
+  if (idx?.symbols.some((s) => s.name === name)) {
+    return { ref: { repo: r.repo, file: route.handlerFile, symbol: name }, confidence: "exact" };
+  }
+  // Not declared in handlerFile under that name: maybe re-exported / aliased from there.
+  const viaExport = resolver?.resolveExport(route.handlerFile, name);
+  if (viaExport) return { ref: viaExport, confidence: "exact" };
+  return { ref: { repo: r.repo, file: route.handlerFile, symbol: name }, confidence: "guess" };
+}
+
+/** route.handlerFile + route.handler ("default" prefix mapped to the real default export); an inline
+ * callback -> the symbol exactly spanning handlerLines, else a synthetic "<route.handler>" symbol (its
+ * calls are joined by line range). Null when the handler file is unknown. A named handler that the code
+ * index does not know is still returned, as a guess. */
+export function findHandler(input: LinkInput, r: EffectiveRoute): { ref: SymbolRef; confidence: Confidence } | null {
+  const scope = handlerScope(input, r);
+  return scope ? { ref: scope.ref, confidence: scope.confidence } : null;
+}
+
+/** The call sites a walk step makes: by caller name, or by line range for a synthetic inline handler. */
+function sitesOf(resolver: CallResolver, ref: SymbolRef, scope: HandlerScope): CallSite[] {
+  const idx = resolver.fileIndex(ref.file);
+  if (!idx) return [];
+  const lines = stepKey(ref) === stepKey(scope.ref) ? scope.lines : undefined;
+  if (!lines) return idx.calls.filter((site) => site.caller === ref.symbol);
+  return idx.calls.filter((site) => within(site.line, lines) && !isRegistration(site, scope.registration));
+}
+
+/** `resolver` with the synthetic inline handler's calls joined by line range (everything else as-is). */
+function scopedResolver(resolver: CallResolver, scope: HandlerScope): CallResolver {
+  if (!scope.lines) return resolver;
+  const key = stepKey(scope.ref);
+  return {
+    ...resolver,
+    callsFrom(ref) {
+      if (stepKey(ref) !== key) return resolver.callsFrom(ref);
+      return sitesOf(resolver, ref, scope)
+        .map((site) => resolver.resolve(ref.file, site))
+        .filter((rc) => rc !== null)
+        .sort((a, b) => a.site.line - b.site.line);
+    },
+  };
+}
+
+function describeCallee(c: CallSite["callee"]): string {
+  switch (c.kind) {
+    case "ident": return `could not resolve "${c.name}(...)"`;
+    case "member": return `could not resolve "${c.object}.${c.prop}(...)"`;
+    case "new-member": return `could not resolve "new ${c.className}().${c.prop}(...)"`;
+    case "this": return `could not resolve "this.${c.prop}(...)"`;
+    case "this-field": return `could not resolve "this.${c.field}.${c.prop}(...)"`;
+    default: return c.prop !== undefined ? `could not resolve ".${c.prop}(...)"` : "could not resolve call";
+  }
+}
+
+type Unresolved = { at: Loc; reason: string };
+
+function sortUnresolved(list: Unresolved[]): Unresolved[] {
+  return list.sort((a, b) => compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.reason, b.reason));
+}
+
+/** Every call site inside a visited symbol that the resolver could not resolve — except a site that is
+ * itself a recognised DbAccess/QueueOp location (`knownAt`): that is the ORM/broker call already turned
+ * into a hit, not a lost call. */
+function collectUnresolved(resolver: CallResolver, steps: WalkStep[], scope: HandlerScope, knownAt: Set<string>): Unresolved[] {
+  const out: Unresolved[] = [];
+  for (const step of steps) {
+    for (const site of sitesOf(resolver, step.ref, scope)) {
+      if (knownAt.has(`${step.ref.file}:${site.line}`)) continue;
+      if (resolver.resolve(step.ref.file, site)) continue;
+      out.push({ at: { file: step.ref.file, line: site.line, symbol: step.ref.symbol }, reason: describeCallee(site.callee) });
+    }
+  }
+  return sortUnresolved(out);
+}
+
+function knownAtKeys(access: DbAccess[], queues: QueueOp[]): Set<string> {
+  return new Set([...access, ...queues].map((x) => `${x.at.file}:${x.at.line}`));
+}
+
+function hitLabel(h: StoreHit): string {
+  return h.kind === "db" ? `${h.access.at.file}:${String(h.access.at.line).padStart(8, "0")}:${h.access.table}:${h.access.op}`
+    : `${h.op.at.file}:${String(h.op.at.line).padStart(8, "0")}:${h.op.queue}`;
+}
+
+/** Store hits reachable from the scope's start symbol (≤6 hops), nearest first. An access counts when
+ * its enclosing symbol was visited, or (synthetic inline handler) when it sits inside the handler's lines. */
+function storeHits(resolver: CallResolver, repoId: string, scope: HandlerScope, access: DbAccess[], queues: QueueOp[]): { steps: WalkStep[]; hits: StoreHit[] } {
+  const steps = walkCalls(scopedResolver(resolver, scope), scope.ref, 6);
+  const visited = new Set(steps.map((s) => stepKey(s.ref)));
+  const startKey = stepKey(scope.ref);
+  const viaPathTo = (at: Loc): WalkStep[] | undefined => {
+    if (scope.lines && at.file === scope.ref.file && within(at.line, scope.lines)) return [steps[0]!];
+    const key = stepKey({ repo: repoId, file: at.file, symbol: at.symbol });
+    return visited.has(key) ? chainTowardStart(steps, key, startKey).reverse() : undefined;
+  };
+  const hits: StoreHit[] = [];
+  for (const a of access) {
+    const viaPath = viaPathTo(a.at);
+    if (viaPath) hits.push({ kind: "db", access: a, viaPath });
+  }
+  for (const q of queues) {
+    if (q.op !== "publish") continue;
+    const viaPath = viaPathTo(q.at);
+    if (viaPath) hits.push({ kind: "queue", op: q, viaPath });
+  }
+  hits.sort((a, b) => a.viaPath.length - b.viaPath.length || compare(hitLabel(a), hitLabel(b)));
+  return { steps, hits };
+}
+
+/** Route -> handler -> walkCalls -> every DbAccess / publish QueueOp reached. */
+export function linkBackend(input: LinkInput): BackendLink[] {
+  const out: BackendLink[] = [];
+  for (const repo of input.ws.repos) {
+    const resolver = input.resolvers.get(repo.ref.id);
+    if (!resolver) continue;
+    const knownAt = knownAtKeys(repo.endpoints.dbAccess, repo.endpoints.queues);
+    for (const er of effectiveRoutes(repo.endpoints)) {
+      const scope = handlerScope(input, er);
+      if (!scope) {
+        out.push({ repo: repo.ref.id, route: er, handler: null, handlerConfidence: "guess", hits: [], unresolved: [] });
+        continue;
+      }
+      const { steps, hits } = storeHits(resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues);
+      out.push({
+        repo: repo.ref.id, route: er, handler: scope.ref, handlerConfidence: scope.confidence,
+        hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt),
+      });
+    }
+  }
+  out.sort((a, b) => compare(a.repo, b.repo) || compare(a.route.effectivePath, b.route.effectivePath)
+    || compare(a.route.route.method, b.route.route.method) || compare(a.route.route.at.file, b.route.route.at.file)
+    || a.route.route.at.line - b.route.route.at.line || compare(a.route.route.handler, b.route.route.handler));
+  return out;
+}
+
+/** AMQP topic match: "*" = exactly one word, "#" = zero or more words. */
+function routingKeyMatches(bindKey: string, pubKey: string): boolean {
+  if (bindKey === pubKey) return true;
+  const match = (b: string[], p: string[]): boolean => {
+    if (b.length === 0) return p.length === 0;
+    const [head, ...rest] = b;
+    if (head === "#") {
+      for (let i = 0; i <= p.length; i++) if (match(rest, p.slice(i))) return true;
+      return false;
+    }
+    if (p.length === 0) return false;
+    return (head === "*" || head === p[0]) && match(rest, p.slice(1));
+  };
+  return match(bindKey.split("."), pubKey.split("."));
+}
+
+function opKey(repo: string, q: QueueOp): string {
+  return `${repo}:${q.at.file}:${String(q.at.line).padStart(8, "0")}:${q.op}:${q.queue}`;
+}
+
+/** Memo (f): sendToQueue <-> consume on the same queue -> exact; exchange publish -> bind(exchange, key)
+ * -> consume(bound queue) -> exact, or param when the binding key has a topic wildcard; no binding ->
+ * consume on a queue named like the routing key or exchange -> guess. */
+export function pairQueues(ws: WorkspaceData): QueuePair[] {
+  const pairs = new Map<string, QueuePair>();
+  const consumers = ws.repos.flatMap((r) => r.endpoints.queues.filter((q) => q.op === "consume").map((q) => ({ repo: r.ref.id, q })));
+  const binds = ws.repos.flatMap((r) => r.endpoints.queues.filter((q) => q.op === "bind").map((q) => ({ repo: r.ref.id, q })));
+  const add = (from: string, publish: QueueOp, to: { repo: string; q: QueueOp }, confidence: Confidence, reason?: string) => {
+    const key = `${opKey(from, publish)}|${opKey(to.repo, to.q)}`;
+    const prev = pairs.get(key);
+    // Several bindings can lead to the same consumer: keep the strongest.
+    if (prev && worse(prev.confidence, confidence) === confidence) return;
+    pairs.set(key, { publish, consume: to.q, repoFrom: from, repoTo: to.repo, confidence, ...(reason !== undefined ? { reason } : {}) });
+  };
+  for (const from of ws.repos) {
+    for (const publish of from.endpoints.queues.filter((q) => q.op === "publish")) {
+      if (publish.exchange === undefined) {
+        for (const c of consumers.filter((c) => c.q.queue === publish.queue)) add(from.ref.id, publish, c, "exact");
+        continue;
+      }
+      const matches = binds.filter((b) => b.q.exchange === publish.exchange && routingKeyMatches(b.q.routingKey ?? "", publish.routingKey ?? ""));
+      if (matches.length > 0) {
+        for (const b of matches) {
+          const confidence: Confidence = /[*#]/.test(b.q.routingKey ?? "") ? "param" : "exact";
+          for (const c of consumers.filter((c) => c.q.queue === b.q.queue)) add(from.ref.id, publish, c, confidence);
+        }
+        continue;
+      }
+      for (const c of consumers.filter((c) => c.q.queue === publish.routingKey || c.q.queue === publish.exchange)) {
+        add(from.ref.id, publish, c, "guess", "no binding found; matched by exchange/routing-key heuristic");
+      }
+    }
+  }
+  return [...pairs.entries()].sort(([a], [b]) => compare(a, b)).map(([, p]) => p);
+}
+
+const CONSUME_ARG = 1;
+
+function calleeProp(c: CallSite["callee"]): string | undefined {
+  return c.kind === "ident" ? undefined : c.prop;
+}
+
+/** The consume callback's own symbol: `channel.consume("q", handleEmail)` -> whatever `handleEmail`
+ * binds to in that file (local function or import). QueueOp records only the consume() call site, and a
+ * callback passed by reference is never *called* there, so it is read from the call site's recorded
+ * identifier arguments. Inline / unresolvable callback -> the consume() call's own enclosing symbol. */
+function consumeHandlerRef(resolver: CallResolver, repoId: string, q: QueueOp): SymbolRef {
+  const site = resolver.fileIndex(q.at.file)?.calls.find((s) => s.line === q.at.line && calleeProp(s.callee) === "consume");
+  const name = site?.refArgs?.find((a) => a.index === CONSUME_ARG)?.name;
+  const resolved = name !== undefined ? resolver.resolveName(q.at.file, name) : null;
+  return resolved ?? { repo: repoId, file: q.at.file, symbol: q.at.symbol };
+}
+
+/** Every `consume` op -> its handler -> walkCalls -> store hits; each consumer starts its own chain. */
+export function linkConsumers(input: LinkInput): ConsumerLink[] {
+  const out: ConsumerLink[] = [];
+  for (const repo of input.ws.repos) {
+    const resolver = input.resolvers.get(repo.ref.id);
+    if (!resolver) continue;
+    const knownAt = knownAtKeys(repo.endpoints.dbAccess, repo.endpoints.queues);
+    for (const q of repo.endpoints.queues) {
+      if (q.op !== "consume") continue;
+      const scope: HandlerScope = { ref: consumeHandlerRef(resolver, repo.ref.id, q), confidence: "exact" };
+      const { steps, hits } = storeHits(resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues);
+      out.push({ repo: repo.ref.id, consume: q, handler: scope.ref, hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt) });
+    }
+  }
+  out.sort((a, b) => compare(opKey(a.repo, a.consume), opKey(b.repo, b.consume)));
+  return out;
+}
+
+export type LinkRef =
+  | { kind: "symbol"; repo: string; file: string; symbol: string }
+  | { kind: "route"; repo: string; method: HttpMethod; path: string }
+  | { kind: "queue"; repo: string; queue: string };
+
+/** "<repo>:<file>#<symbol>" | "route:<repo>:<METHOD> <path>" | "queue:<repo>:<queue>". Route/queue
+ * prefixes are checked first. */
+export function parseLinkRef(s: string): LinkRef | null {
+  let m = s.match(/^route:([^:]+):([A-Z]+) (\S+)$/);
+  if (m) {
+    const method = HttpMethodSchema.safeParse(m[2]);
+    return method.success ? { kind: "route", repo: m[1]!, method: method.data, path: m[3]! } : null;
+  }
+  m = s.match(/^queue:([^:]+):(.+)$/);
+  if (m) return { kind: "queue", repo: m[1]!, queue: m[2]! };
+  m = s.match(/^([^:#]+):([^#]+)#(.+)$/);
+  if (m) return { kind: "symbol", repo: m[1]!, file: m[2]!, symbol: m[3]! };
+  return null;
+}
+
+function refExists(input: LinkInput, ref: LinkRef): boolean {
+  const repo = input.ws.repos.find((r) => r.ref.id === ref.repo);
+  if (!repo) return false;
+  if (ref.kind === "symbol") return !!input.resolvers.get(ref.repo)?.fileIndex(ref.file)?.symbols.some((s) => s.name === ref.symbol);
+  if (ref.kind === "route") return effectiveRoutes(repo.endpoints).some((er) => er.route.method === ref.method && er.effectivePath === ref.path);
+  return repo.endpoints.queues.some((q) => q.queue === ref.queue);
+}
+
+/** Validate every workspace `links` entry against the repos/symbols/routes/queues that actually exist.
+ * Kept in workspace-file order (the author's order). */
+export function resolveManualLinks(input: LinkInput): ManualLink[] {
+  return input.ws.links.map((l) => {
+    const from = parseLinkRef(l.from);
+    const to = parseLinkRef(l.to);
+    if (!from || !to) return { from: l.from, to: l.to, resolved: false, reason: "could not parse link reference" };
+    if (!refExists(input, from)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.from}" was not found` };
+    if (!refExists(input, to)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.to}" was not found` };
+    return { from: l.from, to: l.to, resolved: true };
+  });
+}
+
+export interface LinkResult {
+  ui: UiLink[]; backend: BackendLink[]; consumers: ConsumerLink[]; queuePairs: QueuePair[]; manual: ManualLink[];
+}
+
+export function linkAll(input: LinkInput): LinkResult {
+  return {
+    ui: linkUi(input),
+    backend: linkBackend(input),
+    consumers: linkConsumers(input),
+    queuePairs: pairQueues(input.ws),
+    manual: resolveManualLinks(input),
+  };
 }
