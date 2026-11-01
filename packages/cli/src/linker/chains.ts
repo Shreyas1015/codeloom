@@ -341,6 +341,7 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
 }
 
 const MANUAL = "manual link";
+const NO_HANDLER_LINK = "route has no handler link";
 
 /** A resolved manual link with its parsed ends. `i` is its position in the workspace `links` list. */
 interface Manual { i: number; link: ManualLink; from: LinkRef; to: LinkRef }
@@ -385,15 +386,20 @@ function sameStop(a: ChainStop, b: ChainStop): boolean {
  * confidence. A symbol target (walked like a handler) is inserted at the end of the `from` stop's segment
  * (its paired consumers go to the chain's end); a route target (route, handler, stores, paired consumers)
  * and a queue target (the queue's consumers) are appended at the chain's end. One level: stops added by a
- * manual link are never matched by another link. A target already in the chain is not added again. */
+ * manual link are never matched by another link. A target already in the chain is not added again.
+ * symbol -> route links are skipped here (see linkUnmatchedCalls), so a route block never follows a call
+ * it is not that call's target. A route target with no backend link is broken ("route has no handler link"). */
 function applyManualLinks(
-  ctx: Ctx, manual: Manual[], backend: BackendLink[], used: Set<number>, stops: ChainStop[], unresolved: Unresolved[],
+  ctx: Ctx, manual: Manual[], backend: BackendLink[], used: Set<number>, broken: Map<number, string>,
+  stops: ChainStop[], unresolved: Unresolved[],
 ): { stops: ChainStop[]; unresolved: Unresolved[] } {
   const own = new Set(stops);
   let out = [...stops];
   const tail: ChainStop[] = [];
   const extra: Unresolved[] = [];
   for (const m of manual) {
+    // symbol -> route links are only ever applied to the one unmatched call they name (linkUnmatchedCalls).
+    if (m.from.kind === "symbol" && m.to.kind === "route") continue;
     let at = -1;
     out.forEach((s, j) => {
       if (own.has(s) && matchesRef(m.from, s)) at = j;
@@ -415,7 +421,10 @@ function applyManualLinks(
       extra.push(...target.unresolved.map((u) => toUnresolved(target.handler.repo, u)));
     } else if (to.kind === "route") {
       const b = backendFor(backend, to);
-      if (!b) continue;
+      if (!b) {
+        broken.set(m.i, NO_HANDLER_LINK);
+        continue;
+      }
       const block = [routeStop(ctx.ws, b.route, manualHop), ...backendStops(ctx, b, manualHop)];
       used.add(m.i);
       if ([...out, ...tail].some((s) => sameStop(s, block[0]!))) continue;
@@ -434,22 +443,35 @@ function applyManualLinks(
   return { stops: [...out, ...tail], unresolved: [...unresolved, ...extra] };
 }
 
-/** A UI call that matched no route, whose call symbol is a manual link's `from` and whose `to` is a route:
- * the link supplies the route (exact, "manual link"), as if codeloom had matched it. */
-function linkUnmatchedCalls(ui: UiLink[], manual: Manual[], backend: BackendLink[], used: Set<number>): UiLink[] {
-  return ui.map((l) => {
-    if (l.target.kind === "route") return l;
-    const at = l.call.at;
-    for (const m of manual) {
-      if (m.from.kind !== "symbol" || m.to.kind !== "route") continue;
-      if (m.from.repo !== l.repo || m.from.file !== at.file || m.from.symbol !== at.symbol) continue;
-      const b = backendFor(backend, m.to);
-      if (!b) continue;
-      used.add(m.i);
-      return { ...l, target: { kind: "route" as const, route: b.route, confidence: "exact" as const, reason: MANUAL } };
+/** A symbol -> route manual link applies only to an internal UI call in that function that matched no
+ * route (never a third-party call, never one that matched a route at any confidence), and only when the
+ * function has exactly one such call: the link then supplies that call's route (exact, "manual link"), as
+ * if codeloom had matched it. Two or more such calls: the link is ambiguous — broken, nothing linked. */
+function linkUnmatchedCalls(
+  ui: UiLink[], manual: Manual[], backend: BackendLink[], used: Set<number>, broken: Map<number, string>,
+): UiLink[] {
+  const relinked = new Map<UiLink, UiLink>();
+  for (const m of manual) {
+    if (m.from.kind !== "symbol" || m.to.kind !== "route") continue;
+    const from = m.from;
+    const calls = ui.filter((l) => l.target.kind === "unresolved"
+      && l.repo === from.repo && l.call.at.file === from.file && l.call.at.symbol === from.symbol);
+    if (calls.length === 0) continue;
+    if (calls.length > 1) {
+      broken.set(m.i, `ambiguous: ${calls.length} unmatched calls in ${from.symbol}`);
+      continue;
     }
-    return l;
-  });
+    const call = calls[0]!;
+    if (relinked.has(call)) continue;
+    const b = backendFor(backend, m.to);
+    if (!b) {
+      broken.set(m.i, NO_HANDLER_LINK);
+      continue;
+    }
+    used.add(m.i);
+    relinked.set(call, { ...call, target: { kind: "route" as const, route: b.route, confidence: "exact" as const, reason: MANUAL } });
+  }
+  return ui.map((l) => relinked.get(l) ?? l);
 }
 
 /** One chain per (entry, routeKey), memo (g) as amended:
@@ -482,9 +504,10 @@ export function buildChainsAndLinks(
     return from && to ? [{ i, link, from, to }] : [];
   });
   const used = new Set<number>();
+  const broken = new Map<number, string>();
   const links: LinkResult = {
     ...rawLinks, backend: backendLinks, consumers: rawLinks.consumers.map(dropUnlabeledDb),
-    ui: linkUnmatchedCalls(rawLinks.ui, manual, backendLinks, used),
+    ui: linkUnmatchedCalls(rawLinks.ui, manual, backendLinks, used, broken),
   };
   const pairs = new Map<string, QueuePair[]>();
   for (const p of links.queuePairs) {
@@ -501,7 +524,7 @@ export function buildChainsAndLinks(
   const byId = new Map<string, Chain>();
   const add = (c: Chain) => {
     if (byId.has(c.id)) return;
-    const withLinks = applyManualLinks(ctx, manual, links.backend, used, c.stops, c.unresolved);
+    const withLinks = applyManualLinks(ctx, manual, links.backend, used, broken, c.stops, c.unresolved);
     byId.set(c.id, withLinks.stops === c.stops ? c : {
       ...c, stops: withLinks.stops, unresolved: sortUnresolved(withLinks.unresolved),
       confidence: worstConfidence(withLinks.stops), complete: isComplete(withLinks.stops),
@@ -580,7 +603,9 @@ export function buildChainsAndLinks(
 
   const manualLinks: ManualLinkStatus[] = rawLinks.manual.map((l, i) => {
     if (!l.resolved) return { from: l.from, to: l.to, status: "broken", ...(l.reason !== undefined ? { reason: l.reason } : {}) };
-    return { from: l.from, to: l.to, status: used.has(i) ? "used" : "unused" };
+    if (used.has(i)) return { from: l.from, to: l.to, status: "used" };
+    const reason = broken.get(i);
+    return reason !== undefined ? { from: l.from, to: l.to, status: "broken", reason } : { from: l.from, to: l.to, status: "unused" };
   });
   return { chains: [...byId.values()], manualLinks };
 }

@@ -273,3 +273,25 @@ describe("handler-store hops carry the worst confidence of their path (final rev
     expect(stores.map((f) => f.confidence)).toEqual(["guess"]);
   }, 60_000);
 });
+
+describe("hopsFromChains: ui-api only to the call's own route", () => {
+  const s = (kind: ChainStop["kind"], extra: Partial<ChainStop> = {}): ChainStop => ({
+    lane: kind === "route" ? "api" : "ui", kind, repo: kind === "route" ? "api" : "web", file: "f.ts", line: 1,
+    symbol: "S", hop: { confidence: "exact" }, ...extra,
+  });
+  it("an unmatched call followed by an unrelated manual route block invents no ui-api hop", () => {
+    const chain = fakeChain({
+      routeKey: "",
+      stops: [s("page"), s("call", { op: "POST", label: "/api/v0/x" }),
+        s("route", { op: "POST", label: "POST /api/y", hop: { confidence: "exact", reason: "manual link" } })],
+    });
+    expect(hopsFromChains([chain]).filter((f) => f.hop.type === "ui-api")).toEqual([]);
+  });
+  it("a call whose own route follows it still records the ui-api hop", () => {
+    const chain = fakeChain({
+      routeKey: "api:POST /api/x",
+      stops: [s("page"), s("call", { op: "POST", label: "/api/x" }), s("route", { op: "POST", label: "POST /api/x" })],
+    });
+    expect(hopsFromChains([chain]).filter((f) => f.hop.type === "ui-api")).toHaveLength(1);
+  });
+});
