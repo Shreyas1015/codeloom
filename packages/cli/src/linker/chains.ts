@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
 import { stepKey, uiReachKey } from "./link.js";
-import type { BackendLink, ConsumerLink, LinkResult, PageReach, StoreHit, UiLink } from "./link.js";
+import type { BackendLink, ConsumerLink, LinkResult, PageReach, QueuePair, StoreHit, UiLink } from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
 import type { EffectiveRoute } from "./mounts.js";
 import { routeKey } from "./mounts.js";
@@ -11,7 +11,7 @@ import { worse } from "./paths.js";
 import type { WorkspaceData } from "../store/read.js";
 import {
   type Chain, type ChainStop, type ChainsFile, type Confidence, type Hop, type Journey, type JourneysFile,
-  JourneysFileSchema, type UiReachFact, type Unresolved,
+  JourneysFileSchema, type QueueOp, type UiReachFact, type Unresolved,
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -58,8 +58,22 @@ function graphOf(ws: WorkspaceData, repoId: string): KnowledgeGraph {
 /** First line of a symbol in the linker's code index (`CodeSymbol.lines[0]`), when it knows the symbol. */
 export type SymbolLineLookup = (repo: string, file: string, symbol: string) => number | undefined;
 
-/** Per-build context: the workspace plus the code index's symbol lines. */
-interface Ctx { ws: WorkspaceData; symbolLine: SymbolLineLookup }
+/** A queue op's identity: repo + site + op + queue. */
+function queueKey(repo: string, q: QueueOp): string {
+  return [repo, q.at.file, String(q.at.line), q.op, q.queue].join("\0");
+}
+
+/** Per-build context: the workspace, the code index's symbol lines, and the queue pairs (by publish op,
+ * in pairQueues' sorted order) with the consumer links they lead to (by consume op). */
+interface Ctx {
+  ws: WorkspaceData; symbolLine: SymbolLineLookup;
+  pairs: Map<string, QueuePair[]>; consumers: Map<string, ConsumerLink>;
+}
+
+/** Whether a publish stop continues into its paired consumers. `null`: it does not (a stop inside an
+ * already-appended consumer: one level only, so no cycles). `skip`: a consume op not to append (a consumer
+ * chain's own consume, when its handler publishes back to its own queue). */
+type QueueFollow = { skip?: string } | null;
 
 /** A stop for a bare SymbolRef (no Loc of its own). Line: `line` when given (the page stop's
  * UiPage.line, an inline handler's first line), else the symbol's own first line from the code index,
@@ -143,10 +157,12 @@ function hopFromStep(step: WalkStep): Hop {
 }
 
 /** Intermediate "function" stops for every hit's viaPath (deduped by symbol across all of a link's
- * hits), then each hit's own terminal db/publish stop. `emitted` starts containing the entry symbol
+ * hits), then each hit's own terminal db/publish stop; then, when `follow` allows, each publish hit's
+ * paired consumers (consume, handler, its stores), in hit order then pairQueues order. `emitted` starts containing the entry symbol
  * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
-function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence): ChainStop[] {
+function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence, follow: QueueFollow): ChainStop[] {
   const stops: ChainStop[] = [];
+  const paired: ChainStop[] = [];
   for (const hit of hits) {
     for (const step of hit.viaPath.slice(1)) {
       const key = stepKey(step.ref);
@@ -155,9 +171,32 @@ function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>
       stops.push(refStop(ctx, "code", "function", step.ref, hopFromStep(step)));
     }
     const h = storeHop(base, hit);
-    stops.push(hit.kind === "db" ? dbStop(repo, hit, h) : publishStop(repo, hit, h));
+    if (hit.kind === "db") {
+      stops.push(dbStop(repo, hit, h));
+      continue;
+    }
+    stops.push(publishStop(repo, hit, h));
+    if (!follow) continue;
+    // Publish hits continue into every paired consumer, in pairQueues' sorted order.
+    for (const pair of ctx.pairs.get(queueKey(repo, hit.op)) ?? []) {
+      const consumeKey = queueKey(pair.repoTo, pair.consume);
+      const consumer = ctx.consumers.get(consumeKey);
+      if (!consumer || consumeKey === follow.skip) continue;
+      paired.push(...consumerStops(ctx, consumer, pairedHop(h.confidence, pair), null));
+    }
   }
-  return stops;
+  // Paired consumers go after all of this link's own stops, so each consume stop past the first starts a
+  // block that runs to the next one (or the end) — the scorer keys those stores to the consumer.
+  return [...stops, ...paired];
+}
+
+/** The hop into a paired consumer: the pair's own confidence (exact; param for a topic-wildcard binding;
+ * guess for the no-binding heuristic), folded with the publish stop's — never better than either. */
+function pairedHop(publish: Confidence, pair: QueuePair): Hop {
+  const c = worse(publish, pair.confidence);
+  if (c === "exact") return hop("exact");
+  if (c !== pair.confidence) return hop(c, "worst hop on the path to this consumer");
+  return hop(c, pair.reason ?? "topic wildcard binding");
 }
 
 /** A handler the code index could not place (BackendLink.handlerConfidence "guess") is still shown, as a
@@ -172,25 +211,28 @@ function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop): ChainStop[] {
     ? link.route.route.handlerLines?.[0] : undefined;
   const stops: ChainStop[] = [refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine)];
   const base = worse(routeHop.confidence, handlerHop.confidence);
-  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)]), base));
+  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)]), base, {}));
   return stops;
 }
 
-function consumerStops(ctx: Ctx, link: ConsumerLink): ChainStop[] {
+/** Consume stop, handler stop (unless the callback is inline), then its store stops. `entryHop` is exact
+ * for a consumer chain's own entry, or the pair's hop when appended after a publish (see pairedHop); every
+ * stop of an appended consumer carries at most that confidence. */
+function consumerStops(ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: QueueFollow): ChainStop[] {
   const graph = graphOf(ctx.ws, link.repo);
   const consumeRef: SymbolRef = { repo: link.repo, file: link.consume.at.file, symbol: link.consume.at.symbol };
   const stops: ChainStop[] = [withoutUndefined({
     lane: "queue" as const, kind: "consume" as const, repo: link.repo,
     nodeId: nearestNodeId(graph, consumeRef.file, consumeRef.symbol),
     file: consumeRef.file, line: link.consume.at.line, symbol: consumeRef.symbol,
-    op: "consume", label: link.consume.queue, hop: hop("exact"),
+    op: "consume", label: link.consume.queue, hop: entryHop,
   })];
   const emitted = new Set([stepKey(consumeRef)]);
   if (stepKey(link.handler) !== stepKey(consumeRef)) {
-    stops.push(refStop(ctx, "code", "handler", link.handler, hop("exact")));
+    stops.push(refStop(ctx, "code", "handler", link.handler, entryHop));
     emitted.add(stepKey(link.handler));
   }
-  stops.push(...hitStops(ctx, link.repo, link.hits, emitted, "exact"));
+  stops.push(...hitStops(ctx, link.repo, link.hits, emitted, entryHop.confidence, follow));
   return stops;
 }
 
@@ -219,8 +261,11 @@ function worstConfidence(stops: ChainStop[]): Confidence {
  * matched no route: "POST /api/x (unmatched) · NewXPage". */
 export function defaultChainName(c: Pick<Chain, "entry" | "stops">): string {
   if (c.entry.startsWith("consumer:")) {
-    const consume = c.stops.find((s) => s.kind === "consume");
-    const handler = c.stops.find((s) => s.kind === "handler") ?? consume;
+    // Only the chain's own consumer: stops after a second consume belong to a paired (appended) consumer.
+    const next = c.stops.findIndex((s, i) => i > 0 && s.kind === "consume");
+    const own = next === -1 ? c.stops : c.stops.slice(0, next);
+    const consume = own.find((s) => s.kind === "consume");
+    const handler = own.find((s) => s.kind === "handler") ?? consume;
     return `consume ${consume?.label ?? ""} · ${handler?.symbol ?? ""}`;
   }
   const route = c.stops.find((s) => s.kind === "route");
@@ -303,10 +348,16 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
  * Inputs from linkAll are sorted, so when two sources produce the same id the first one wins.
  * `symbolLine` (from runLinker's code index) gives function/handler stops their own first line. */
 export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine: SymbolLineLookup = () => undefined): Chain[] {
-  const ctx: Ctx = { ws, symbolLine };
   const links: LinkResult = {
     ...rawLinks, backend: rawLinks.backend.map(dropUnlabeledDb), consumers: rawLinks.consumers.map(dropUnlabeledDb),
   };
+  const pairs = new Map<string, QueuePair[]>();
+  for (const p of links.queuePairs) {
+    const key = queueKey(p.repoFrom, p.publish);
+    pairs.set(key, [...(pairs.get(key) ?? []), p]);
+  }
+  const consumers = new Map(links.consumers.map((c) => [queueKey(c.repo, c.consume), c]));
+  const ctx: Ctx = { ws, symbolLine, pairs, consumers };
   const uiTargets = links.ui.flatMap((l) => (l.target.kind === "route" ? [l.target.route] : []));
   const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
   const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
@@ -383,7 +434,8 @@ export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine:
 
   for (const c of links.consumers) {
     const entry = `consumer:${c.repo}:${c.consume.queue}#${c.handler.file}#${c.handler.symbol}`;
-    add(makeChain(entry, "", consumerStops(ctx, c), c.unresolved.map((u) => toUnresolved(c.repo, u))));
+    const stops = consumerStops(ctx, c, hop("exact"), { skip: queueKey(c.repo, c.consume) });
+    add(makeChain(entry, "", stops, c.unresolved.map((u) => toUnresolved(c.repo, u))));
   }
 
   return [...byId.values()];

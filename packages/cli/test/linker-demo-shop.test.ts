@@ -49,7 +49,8 @@ describe("the linker on demo-shop", () => {
     // UI -> billing: only matches through the /billing mount + the billingApi axios instance
     expect(byEntry["page:web:/invoices/new"]).toMatchObject({ routeKey: "billing:POST /billing/invoices", complete: true, confidence: "exact" });
 
-    expect(byEntry["route:billing:POST /billing/invoices/:id/pay"]).toMatchObject({ complete: true, confidence: "exact" });
+    // param: the pay route's publish continues into the "emails" consumer through the invoice.* wildcard binding
+    expect(byEntry["route:billing:POST /billing/invoices/:id/pay"]).toMatchObject({ complete: true, confidence: "param" });
     expect(byEntry["route:billing:GET /health"]).toMatchObject({ complete: false }); // no db/queue hit: check's "no-store"
     // the inline handler's stop points at its own first line, not line 1 of the file
     expect((byEntry["route:billing:GET /health"] as { stops: Stop[] }).stops[1]).toMatchObject({ kind: "handler", symbol: "GET /health", line: 10 });
@@ -112,7 +113,28 @@ describe("the linker on demo-shop", () => {
     expect(pay.stops.filter((s) => s.lane === "db" || s.kind === "publish").map((s) => `${s.op} ${s.label}`)).toEqual([
       "publish billing:invoice.paid",
       "update invoices",
+      "insert email_logs", // the paired consumer's store (final review batch 2, item A)
     ]);
+  });
+
+  it("publish stops continue into their paired consumers (final review batch 2, item A)", async () => {
+    const root = workspace();
+    await runIndex(root);
+    const { chains } = readChains(root);
+    const stopsOf = (entry: string) => (chains.find((c) => c.entry === entry)! as { stops: Stop[] }).stops;
+    const brief = (stops: Stop[]) => stops.map((s) => `${s.kind}:${(s.label as string | undefined) ?? s.symbol}:${s.hop.confidence}`);
+    // topic wildcard: billing/invoice.paid -> bind(emails, billing, "invoice.*") -> consume emails = param
+    const pay = stopsOf("route:billing:POST /billing/invoices/:id/pay");
+    expect(brief(pay.slice(pay.findIndex((s) => s.kind === "consume")))).toEqual([
+      "consume:emails:param",
+      "handler:handleEmail:param",
+      "db:email_logs:param",
+    ]);
+    expect(pay.find((s) => s.kind === "consume")!.hop.reason).toBe("topic wildcard binding");
+    // exact: sendToQueue("invoice.created") -> consume("invoice.created", inline ack) — no handler stop, no store
+    const invoices = stopsOf("page:web:/invoices/new");
+    expect(brief(invoices.slice(invoices.findIndex((s) => s.kind === "consume")))).toEqual(["consume:invoice.created:exact"]);
+    expect(chains.find((c) => c.entry === "page:web:/invoices/new")).toMatchObject({ confidence: "exact", complete: true });
   });
 
   it("creates an empty journeys.json alongside chains.json", async () => {
