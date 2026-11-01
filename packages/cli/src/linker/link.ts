@@ -111,7 +111,7 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
 
 /** Hosts named in any repo's apiBase (entries may be env var names, bare hosts, or full URLs). */
-function apiBaseHosts(repos: RepoData[]): Set<string> {
+export function apiBaseHosts(repos: RepoData[]): Set<string> {
   const out = new Set<string>();
   for (const r of repos) {
     for (const entry of r.ref.apiBase ?? []) {
@@ -166,17 +166,27 @@ export function callPathWithClient(call: HttpCall, clients: HttpClient[]): strin
   return client?.baseLiteral ? joinPaths(client.baseLiteral, call.path) : call.path;
 }
 
+/** A hardcoded absolute URL (no stripped `base` expression) names its host outright. A wrapper-derived
+ * call's literal base host plays the same role (its path already carries the base path). */
+function ownHostOf(call: LinkedCall): string | undefined {
+  return call.host ?? (call.base === undefined ? absoluteHost(call.raw) : undefined);
+}
+
+/** The third-party host a call goes to, or undefined when it targets the workspace's own backends. The
+ * call's own absolute URL wins, else its client's literal baseURL; loopback / apiBase hosts are ours. */
+export function externalHost(call: LinkedCall, clients: HttpClient[], knownHosts: Set<string>): string | undefined {
+  const host = ownHostOf(call) ?? clients.find((c) => c.name === call.client)?.baseHost;
+  return host !== undefined && !isInternalHost(host, knownHosts) ? host : undefined;
+}
+
 function resolveTarget(
   call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
   knownHosts: Set<string>,
 ): UiLink["target"] {
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
-  // A hardcoded absolute URL (no stripped `base` expression) names its host outright; otherwise the
-  // client's literal baseURL may. Loopback / apiBase hosts are ours (strip and match), others external.
-  // A wrapper-derived call's literal base host plays the same role (its path already carries the base path).
-  const ownHost = call.host ?? (call.base === undefined ? absoluteHost(call.raw) : undefined);
-  const host = ownHost ?? clients.find((c) => c.name === call.client)?.baseHost;
-  if (host !== undefined && !isInternalHost(host, knownHosts)) return { kind: "external", base: host };
+  const external = externalHost(call, clients, knownHosts);
+  if (external !== undefined) return { kind: "external", base: external };
+  const ownHost = ownHostOf(call);
   if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };
   // An absolute URL on the call itself overrides any client baseURL (axios/ky semantics).
   const path = ownHost !== undefined ? call.path : callPathWithClient(call, clients);

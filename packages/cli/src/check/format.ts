@@ -13,6 +13,7 @@ const GROUPS: Group[] = [
   { label: "UI calls that match no route", match: (i) => i.kind === "ui-no-route" },
   { label: "Routes whose handler could not be found", match: (i) => i.kind === "handler-not-found" },
   { label: "Routes or consumers that reach no database table or queue", match: (i) => i.kind === "no-store" },
+  { label: "Calls not reached from any page", match: (i) => i.kind === "ui-unreached" },
   { label: "URLs that could not be read", match: (i) => i.kind === "unresolved-url" },
   { label: "Routes with no UI caller", match: (i) => i.kind === "route-no-caller" },
   { label: "Hops matched only by a guess", match: (i) => i.kind === "guess-link" },

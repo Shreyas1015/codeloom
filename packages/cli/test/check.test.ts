@@ -440,3 +440,53 @@ describe("runCheck", () => {
     }
   });
 });
+
+describe("buildCheckReport — ui-unreached (H3)", () => {
+  const call = (file: string, line: number, symbol: string, raw = '"/api/post"') => ({
+    method: "POST" as const, path: "/api/post", raw, resolved: true, client: "fetch", kind: "literal" as const, at: { file, line, symbol },
+  });
+  const pageChain = (file: string, line: number, symbol: string) => fakeChain({
+    stops: [
+      { lane: "ui", kind: "page", repo: "app", file: "src/app/create/page.tsx", line: 1, symbol: "Draft", hop: { confidence: "exact" } },
+      { lane: "ui", kind: "call", repo: "app", file, line, symbol, op: "POST", label: "/api/post", hop: { confidence: "exact" } },
+    ],
+  });
+
+  it("lists an HTTP call no page reaches, without changing the chain buckets", () => {
+    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {
+      httpCalls: [call("src/app/create/page.tsx", 3, "submitData"), call("src/lib/orphan.ts", 7, "send")],
+    }));
+    const chains = [pageChain("src/app/create/page.tsx", 3, "submitData")];
+    const report = buildCheckReport(chains, fakeWorkspace([app]));
+    expect(report.items.filter((i) => i.kind === "ui-unreached")).toEqual([
+      { kind: "ui-unreached", repo: "app", file: "src/lib/orphan.ts", line: 7, symbol: "send", detail: "POST /api/post: call at src/lib/orphan.ts:7 is not reached from any page" },
+    ]);
+    expect(report.summary).toMatchObject({ chains: 1, complete: 0, missingDb: 1, brokenUiApi: 0 });
+    expect(CheckReportSchema.parse(report)).toEqual(report);
+  });
+
+  it("does not list a call reached by an unmatched page chain, a call inside a route handler file, or a third-party call", () => {
+    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", {
+      httpCalls: [
+        call("src/app/x/page.tsx", 4, "go"),
+        call("src/pages/api/hook.ts", 5, "handle"),
+        { ...call("src/lib/gh.ts", 2, "stars", '"https://api.github.com/repos"'), path: "/repos" },
+      ],
+      routes: [{ method: "ANY", path: "/api/hook", handler: "handle", handlerFile: "src/pages/api/hook.ts", inline: false, framework: "next-api", at: { file: "src/pages/api/hook.ts", line: 1, symbol: "handle" } }],
+    }));
+    const unmatched = fakeChain({
+      routeKey: "",
+      stops: [{ lane: "ui", kind: "page", repo: "app", file: "src/app/y/page.tsx", line: 1, symbol: "Y", hop: { confidence: "exact" } }],
+      unresolved: [{ at: { repo: "app", file: "src/app/x/page.tsx", line: 4, symbol: "go" }, reason: "no matching route for POST /api/post" }],
+    });
+    const report = buildCheckReport([unmatched], fakeWorkspace([app]));
+    expect(report.items.filter((i) => i.kind === "ui-unreached")).toEqual([]);
+  });
+
+  it("prints ui-unreached items in their own group", () => {
+    const app = fakeRepoData({ id: "app", path: "app" }, fakeEndpoints("app", { httpCalls: [call("src/lib/orphan.ts", 7, "send")] }));
+    const text = formatCheckText(buildCheckReport([], fakeWorkspace([app])));
+    expect(text).toContain("Calls not reached from any page (1):");
+    expect(text).toContain("  app/src/lib/orphan.ts:7 send — POST /api/post: call at src/lib/orphan.ts:7 is not reached from any page");
+  });
+});

@@ -306,6 +306,7 @@ export const CheckItemKindSchema = z.enum([
   "unresolved-url",
   "route-no-caller",
   "guess-link",
+  "ui-unreached",
 ]);
 export type CheckItemKind = z.infer<typeof CheckItemKindSchema>;
 
