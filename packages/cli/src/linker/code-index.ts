@@ -51,6 +51,10 @@ export interface CallSite {
   caller: string;
   line: number;
   callee: Callee;
+  /** Absent for a real call. `"jsx-ref"`: not a call but a function handed to JSX (H3) — a JSX attribute
+   * value that is a plain name / `this.x` / `obj.x` (`<form onSubmit={submitData}>`), or a component
+   * tag (`<PostDetails />`). Resolved like a call, but at best "param" (it may never run). */
+  kind?: "jsx-ref";
   /** Plain-identifier arguments that name a function/class declared in this file or an import binding —
    * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
    * handleEmail)` — with their argument position. Absent when none. */
@@ -382,6 +386,31 @@ function urlArgsOf(call: ts.CallExpression): UrlArg[] {
   return out;
 }
 
+/** A JSX attribute value or tag that names a function by reference: a plain name, `this.x` or `obj.x`
+ * (dotted names one level deep). Anything else (literals, calls, inline arrows) is not a reference. */
+function isJsxRefExpr(e: ts.Node): e is ts.Identifier | ts.PropertyAccessExpression {
+  if (ts.isIdentifier(e)) return true;
+  return ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.name) &&
+    (ts.isIdentifier(e.expression) || e.expression.kind === ts.SyntaxKind.ThisKeyword);
+}
+
+/** The expression a JSX node hands over by reference, if any: `onX={handler}` attribute values, and
+ * component tags (`<PostDetails …>` / `<Layout.Footer …>`; lower-case intrinsic tags like `<div>` are
+ * not functions). Expression children (`{handler}`) are never references. */
+function jsxRefOf(node: ts.Node): ts.Identifier | ts.PropertyAccessExpression | undefined {
+  if (ts.isJsxAttribute(node)) {
+    const init = node.initializer;
+    if (init && ts.isJsxExpression(init) && init.expression && isJsxRefExpr(init.expression)) return init.expression;
+    return undefined;
+  }
+  if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+    const tag = node.tagName;
+    if (ts.isIdentifier(tag)) return /^[A-Z]/.test(tag.text) ? tag : undefined;
+    return isJsxRefExpr(tag) ? tag : undefined;
+  }
+  return undefined;
+}
+
 export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const idx: FileCodeIndex = { symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] };
   if (!file.sf) return idx;
@@ -513,6 +542,9 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       if (className) idx.localNews.push({ caller: enclosingSymbol(node), local: node.name.text, className });
     }
 
+    const jsxRef = jsxRefOf(node);
+    if (jsxRef) idx.calls.push({ caller: enclosingSymbol(node), line: lineOf(node), kind: "jsx-ref", callee: classify(jsxRef) });
+
     if (ts.isCallExpression(node)) {
       const site: CallSite = { caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) };
       const refArgs = node.arguments.flatMap((a, index) => (ts.isIdentifier(a) ? [{ index, name: a.text }] : []));
@@ -538,6 +570,8 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     if (kept && kept.length > 0) site.refArgs = kept;
     else delete site.refArgs;
   }
+  // A plain-name JSX reference (`value={title}`) counts only when the name can be a function.
+  idx.calls = idx.calls.filter((c) => c.kind !== "jsx-ref" || c.callee.kind !== "ident" || fnNames.has(c.callee.name));
   // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
   const obj = defaultCandidate;
   if (obj !== undefined && idx.symbols.some((s) => s.kind === "object-method" && s.name.startsWith(`${obj}.`))) {

@@ -608,3 +608,70 @@ apiGet(\`x\${id}\`);
     expect(idx.calls.flatMap((c) => c.urlArgs ?? []).map((u) => u.raw)).toEqual(["\"/ok\"", "`/t/${id}`"]);
   });
 });
+
+describe("buildFileCodeIndex — JSX references (H3)", () => {
+  const jsx = (code: string) => buildFileCodeIndex(parsed("src/app/create/page.tsx", code)).calls.filter((c) => c.kind === "jsx-ref");
+
+  it("records an identifier handed to a JSX attribute as a jsx-ref from the enclosing component", () => {
+    // Shape of prisma-rest-nextjs src/app/create/page.tsx.
+    const refs = jsx(`
+export default function Draft() {
+  const submitData = async (e: unknown) => {
+    await fetch("/api/post", { method: "POST" })
+  }
+  return (
+    <form onSubmit={submitData}>
+      <input onChange={(e) => setTitle(e.target.value)} value={title} />
+    </form>
+  )
+}
+`);
+    expect(refs).toEqual([{ caller: "Draft", line: 7, kind: "jsx-ref", callee: { kind: "ident", name: "submitData" } }]);
+  });
+
+  it("records this.x and obj.x attribute values, and component tags", () => {
+    const refs = jsx(`import PostDetails from "../components/PostDetails";
+class Editor extends React.Component {
+  save() {}
+  render() {
+    return <div>
+      <button onClick={this.save}>s</button>
+      <button onClick={actions.reset}>r</button>
+      <PostDetails {...post} />
+      <Layout.Footer />
+      <span />
+    </div>;
+  }
+}
+`);
+    expect(refs).toEqual([
+      { caller: "Editor.render", line: 6, kind: "jsx-ref", callee: { kind: "this", prop: "save" } },
+      { caller: "Editor.render", line: 7, kind: "jsx-ref", callee: { kind: "member", object: "actions", prop: "reset" } },
+      { caller: "Editor.render", line: 8, kind: "jsx-ref", callee: { kind: "ident", name: "PostDetails" } },
+      { caller: "Editor.render", line: 9, kind: "jsx-ref", callee: { kind: "member", object: "Layout", prop: "Footer" } },
+    ]);
+  });
+
+  it("does not record plain {handler} children, string attributes, or non-JSX references", () => {
+    const refs = jsx(`
+export default function Page() {
+  const handle = () => fetch("/api/x");
+  const alias = handle;
+  items.forEach(handle);
+  return <div className="x" title={"t"}>{handle}</div>;
+}
+`);
+    expect(refs).toEqual([]);
+  });
+
+  it("an inline arrow attribute that calls a handler stays an ordinary call from the component", () => {
+    const calls = buildFileCodeIndex(parsed("src/components/PostDetails.tsx", `
+export default function PostDetails({ id }: { id: number }) {
+  async function destroy(id: number) { await fetch(\`/api/post/\${id}\`, { method: "DELETE" }) }
+  return <button onClick={() => destroy(id)}>Delete</button>
+}
+`)).calls;
+    expect(calls.find((c) => c.callee.kind === "ident" && c.callee.name === "destroy")).toMatchObject({ caller: "PostDetails", line: 4 });
+    expect(calls.some((c) => c.kind === "jsx-ref")).toBe(false);
+  });
+});

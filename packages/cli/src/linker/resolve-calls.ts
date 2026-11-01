@@ -13,9 +13,10 @@ export interface SymbolRef {
 export interface ResolvedCall {
   site: CallSite;
   target: SymbolRef;
-  /** "exact" for import/new/this/DI/object; "guess" for the unique-method fallback. */
+  /** "exact" for import/new/this/DI/object; "guess" for the unique-method fallback; "param" for a
+   * JSX reference (`via: "jsx-ref"`). */
   confidence: Confidence;
-  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method";
+  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref";
 }
 
 export interface RepoResolveInput {
@@ -352,7 +353,16 @@ function resolveOther(_ctx: Ctx, _site: CallSite, _callee: Extract<Callee, { kin
   return null;
 }
 
+/** A JSX reference (`onSubmit={submitData}`, `<PostDetails />`) resolves like a call, but the function
+ * is only handed over, so the hop is at best "param"; a guessed target is dropped (precision first:
+ * `className={styles.button}` must never land on some `x.button` method). */
 function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {
+  const rc = resolveCallee(ctx, file, site);
+  if (!rc || site.kind !== "jsx-ref") return rc;
+  return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: "jsx-ref" };
+}
+
+function resolveCallee(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {
   const callee = site.callee;
   switch (callee.kind) {
     case "ident": return resolveIdent(ctx, file, site, callee);

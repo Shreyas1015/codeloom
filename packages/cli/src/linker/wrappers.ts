@@ -53,6 +53,8 @@ export function wrapperCalls(resolver: CallResolver): LinkedCall[] {
   const out: LinkedCall[] = [];
   for (const file of resolver.indexedFiles()) {
     for (const site of resolver.fileIndex(file)?.calls ?? []) {
+      // A wrapper handed to JSX (`onClick={apiGet}`) is not called here, with no URL argument.
+      if (site.kind === "jsx-ref") continue;
       const rc = resolver.resolve(file, site);
       if (!rc) continue;
       const wrapper = resolver.fileIndex(rc.target.file)?.wrappers?.find((w) => w.symbol === rc.target.symbol);

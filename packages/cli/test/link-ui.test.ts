@@ -580,3 +580,78 @@ export default { Articles, Auth, Comments };
     expect(links).toEqual([]);
   });
 });
+
+describe("linkUi — handlers reached through JSX (H3)", () => {
+  // Shapes copied from prisma-rest-nextjs (src/app/create/page.tsx, src/components/PostDetails.tsx, src/app/p/[id]/page.tsx).
+  const draft = (jsx: string) => [
+    "export default function Draft() {",
+    "  const submitData = async (e: unknown) => {",
+    "    await fetch(`/api/post`, { method: 'POST' })",
+    "  }",
+    `  return ${jsx}`,
+    "}",
+    "",
+  ].join("\n");
+  const submitCall: HttpCall = {
+    method: "POST", path: "/api/post", raw: "`/api/post`", resolved: true, client: "fetch",
+    at: { file: "src/app/create/page.tsx", line: 3, symbol: "submitData" }, kind: "literal",
+  };
+  const createPage = { route: "/create", file: "src/app/create/page.tsx", line: 1, framework: "next-app" as const };
+
+  function linkDraft(jsx: string) {
+    const web = repo("app", { pages: [createPage], httpCalls: [submitCall] });
+    return linkUi({ ws: ws([web]), resolvers: new Map([["app", resolverFor({ "src/app/create/page.tsx": draft(jsx) }, "app")]]) });
+  }
+
+  it("a handler passed as onSubmit reaches its page, at param", () => {
+    const links = linkDraft("<form onSubmit={submitData}><input type=\"submit\" /></form>");
+    expect(links[0]!.pages).toHaveLength(1);
+    expect(links[0]!.pages[0]!.confidence).toBe("param");
+    expect(links[0]!.pages[0]!.path.map((s) => [s.symbol, s.confidence])).toEqual([["Draft", "param"], ["submitData", "exact"]]);
+  });
+
+  it("a handler referenced only outside JSX, or as a plain {child}, is not reached", () => {
+    expect(linkDraft("(() => { const h = submitData; return <form>{submitData}</form> })()")[0]!.pages).toEqual([]);
+  });
+
+  it("an inline arrow prop calling a named handler, in a component rendered by the page, reaches it", () => {
+    const files = {
+      "src/components/PostDetails.tsx": [
+        "export default function PostDetails({ id }: { id: number }) {",
+        "  async function destroy(id: number) {",
+        "    await fetch(`/api/post/${id}`, { method: 'DELETE' })",
+        "  }",
+        "  return <button onClick={() => destroy(id)}>Delete</button>",
+        "}",
+        "",
+      ].join("\n"),
+      "src/app/p/[id]/page.tsx": [
+        "import PostDetails from '../../../components/PostDetails'",
+        "export default async function Post() {",
+        "  return <PostDetails {...post} />",
+        "}",
+        "",
+      ].join("\n"),
+    };
+    const call: HttpCall = {
+      method: "DELETE", path: "/api/post/:id", raw: "`/api/post/${id}`", resolved: true, client: "fetch",
+      at: { file: "src/components/PostDetails.tsx", line: 3, symbol: "destroy" }, kind: "template",
+    };
+    const web = repo("app", { pages: [{ route: "/p/:id", file: "src/app/p/[id]/page.tsx", line: 2, framework: "next-app" }], httpCalls: [call] });
+    const links = linkUi({ ws: ws([web]), resolvers: new Map([["app", resolverFor(files, "app")]]) });
+    expect(links[0]!.pages.map((p) => p.path.map((s) => [s.symbol, s.confidence]))).toEqual([
+      [["Post", "param"], ["PostDetails", "exact"], ["destroy", "exact"]],
+    ]);
+    expect(links[0]!.pages[0]!.confidence).toBe("param");
+  });
+
+  it("a wrapper handed to JSX is not a call to the wrapper", () => {
+    const files = {
+      "src/http.ts": "export function apiGet(path: string) { return fetch(path, { method: 'GET' }); }\n",
+      "src/page.tsx": "import { apiGet } from './http';\nexport default function P() { return <Btn onClick={apiGet} />; }\n",
+    };
+    const web = repo("app", { pages: [{ route: "/", file: "src/page.tsx", line: 2, framework: "next-app" }] });
+    const links = linkUi({ ws: ws([web]), resolvers: new Map([["app", resolverFor(files, "app")]]) });
+    expect(links).toEqual([]);
+  });
+});

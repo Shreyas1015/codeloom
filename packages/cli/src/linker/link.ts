@@ -414,7 +414,8 @@ function collectUnresolved(resolver: CallResolver, steps: WalkStep[], scope: Han
   const out: Unresolved[] = [];
   for (const step of steps) {
     for (const site of sitesOf(resolver, step.ref, scope)) {
-      if (resolver.resolve(step.ref.file, site)) continue;
+      // A JSX reference is not a call: an unresolved one (`<ReactMarkdown>`) is no lost call.
+      if (site.kind === "jsx-ref" || resolver.resolve(step.ref.file, site)) continue;
       if (knownAt.has(`${step.ref.file}:${site.line}`) && isStoreCall(site)) continue;
       out.push({ at: { file: step.ref.file, line: site.line, symbol: step.ref.symbol }, reason: describeCallee(site.callee) });
     }

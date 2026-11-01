@@ -754,3 +754,43 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
     expect(siteAt(resolver, "b.ts", "run")).toBeNull();
   });
 });
+
+describe("JSX references (H3)", () => {
+  it("resolves a jsx-ref like a call, at most param, via jsx-ref, and callersOf follows it", () => {
+    const resolver = resolverOf({
+      "src/app/create/page.tsx": `
+export default function Draft() {
+  const submitData = async () => { await fetch("/api/post", { method: "POST" }) }
+  return <form onSubmit={submitData} />
+}
+`,
+    });
+    const callers = resolver.callersOf(ref("src/app/create/page.tsx", "submitData"));
+    expect(callers).toHaveLength(1);
+    expect(callers[0]!.from.symbol).toBe("Draft");
+    expect(callers[0]!.call).toMatchObject({ confidence: "param", via: "jsx-ref" });
+  });
+
+  it("follows a component tag to an imported component (param)", () => {
+    const resolver = resolverOf({
+      "src/components/PostDetails.tsx": `export default function PostDetails() { return null }`,
+      "src/app/p/page.tsx": `
+import PostDetails from "../../components/PostDetails";
+export default async function Post() { return <PostDetails {...post} /> }
+`,
+    });
+    const steps = walkCallers(resolver, ref("src/components/PostDetails.tsx", "PostDetails"));
+    expect(steps.map((s) => [s.ref.symbol, s.via?.confidence])).toEqual([["PostDetails", undefined], ["Post", "param"]]);
+  });
+
+  it("never guesses a jsx-ref onto a same-named method elsewhere", () => {
+    const resolver = resolverOf({
+      "src/styles.ts": `export const theme = { button() { return 1 } }`,
+      "src/page.tsx": `
+import styles from "./Post.module.css";
+export default function Page() { return <button className={styles.button} /> }
+`,
+    });
+    expect(resolver.callersOf(ref("src/styles.ts", "theme.button"))).toEqual([]);
+  });
+});
