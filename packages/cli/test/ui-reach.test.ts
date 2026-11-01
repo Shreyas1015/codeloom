@@ -320,3 +320,48 @@ describe("call-entry chains and reach facts are deterministic (H3b)", () => {
     expect(readFileSync(path, "utf8")).toBe(first);
   }, 60_000);
 });
+
+describe("backend reach ignores guessed edges and role-ui repos (final review item 3)", () => {
+  const agentJs = [
+    "export const Articles = {",
+    "  all: () => fetch('/api/articles'),",
+    "};",
+    "",
+  ].join("\n");
+  const serverJs = [
+    "export function getY(req, res) {",
+    "  return res.json(cache.all());",
+    "}",
+    "",
+  ].join("\n");
+  const homeJs = "export default function Home() { return null; }\n";
+  const articlesRoute: Route = {
+    method: "GET", path: "/api/articles", handler: "getY", inline: false, framework: "express",
+    at: { file: "src/routes.js", line: 1, symbol: "<module>" }, handlerFile: "src/server.js",
+  };
+
+  it("a backend handler's guessed call into UI code does not make that UI call backend", () => {
+    const app = repo("app", {
+      pages: [{ route: "/", file: "src/pages/Home.js", line: 1, framework: "react-router", component: { name: "Home", importSource: "./pages/Home" } }],
+      routes: [articlesRoute],
+      httpCalls: [fetchCall("src/agent.js", 2, "Articles.all", "GET", "/api/articles")],
+    });
+    const files = { "src/agent.js": agentJs, "src/server.js": serverJs, "src/pages/Home.js": homeJs };
+    // Sanity: the guess edge really exists, so the old walk would have followed it.
+    const resolver = resolverFor(files, "app");
+    expect(resolver.callersOf({ repo: "app", file: "src/agent.js", symbol: "Articles.all" })
+      .map(({ from, call }) => `${from.symbol}@${call.confidence}`)).toEqual(["getY@guess"]);
+
+    const { links, chains } = link([app], { app: files });
+    expect(links.uiReach.map((f) => `${f.symbol}:${f.reached}`)).toEqual(["Articles.all:false"]);
+    expect(chains.filter((c) => c.entry.startsWith("call:")).map((c) => c.entry)).toEqual(["call:app:src/agent.js#Articles.all"]);
+  });
+
+  it("a role-ui repo with no detected pages keeps its calls as UI calls", () => {
+    const ui = repo("ui", { httpCalls: [fetchCall("src/agent.js", 2, "Articles.all", "GET", "/api/articles")] }, { role: "ui" });
+    const api = repo("api", { routes: [{ ...articlesRoute, handler: "GET /api/articles", inline: true, handlerFile: undefined }] }, { role: "api" });
+    const { links, chains } = link([ui, api], { ui: { "src/agent.js": agentJs } });
+    expect(links.uiReach.map((f) => `${f.repo}:${f.symbol}:${f.reached}`)).toEqual(["ui:Articles.all:false"]);
+    expect(chains.filter((c) => c.entry.startsWith("call:")).map((c) => c.entry)).toEqual(["call:ui:src/agent.js#Articles.all"]);
+  });
+});

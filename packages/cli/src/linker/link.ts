@@ -643,16 +643,19 @@ function backendEntries(input: LinkInput, backend: BackendLink[], consumers: Con
   return out;
 }
 
-/** A call is backend code when its repo has no UI pages, when it sits inside an inline route callback,
- * or when walking its callers (≤6 hops) reaches a route handler or a consumer handler. */
+/** A call is backend code when its repo has no UI pages (unless the repo is declared `role: "ui"`), when
+ * it sits inside an inline route callback, or when walking its callers (≤6 hops) reaches a route handler
+ * or a consumer handler. The walk never crosses a guessed (unique-method) edge: a backend `cache.all()`
+ * that only guess-resolves to UI code must not turn that UI call into backend code. */
 function isBackendCall(input: LinkInput, repo: RepoData, call: LinkedCall, entries: BackendEntry[], handlerKeys: Set<string>): boolean {
-  if (repo.endpoints.pages.length === 0) return true;
+  if (repo.endpoints.pages.length === 0 && repo.ref.role !== "ui") return true;
   const id = repo.ref.id;
   if (entries.some((e) => e.ref.repo === id && e.lines && e.ref.file === call.at.file && within(call.at.line, e.lines))) return true;
   const resolver = input.resolvers.get(id);
   const start: SymbolRef = { repo: id, file: call.at.file, symbol: call.at.symbol };
   if (handlerKeys.has(stepKey(start))) return true;
-  return !!resolver && walkCallers(resolver, start, 6).some((s) => handlerKeys.has(stepKey(s.ref)));
+  return !!resolver && walkCallers(resolver, start, 6, (c) => c.confidence !== "guess")
+    .some((s) => handlerKeys.has(stepKey(s.ref)));
 }
 
 /** Reach facts (a UI-side call: readable URL, not third-party, not backend; reached by ≥1 page?) for every UI-side call, from linkUi's results (never from deduplicated chains). Skipped:

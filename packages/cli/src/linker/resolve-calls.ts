@@ -505,6 +505,9 @@ export function walkCalls(resolver: CallResolver, start: SymbolRef, maxDepth = M
   return walk((ref) => resolver.callsFrom(ref).map((call) => ({ target: call.target, call })), start, maxDepth);
 }
 
-export function walkCallers(resolver: CallResolver, start: SymbolRef, maxDepth = MAX_DEPTH): WalkStep[] {
-  return walk((ref) => resolver.callersOf(ref).map(({ from, call }) => ({ target: from, call })), start, maxDepth);
+/** `follow` (default: every edge) decides which caller edges the walk may cross. */
+export function walkCallers(
+  resolver: CallResolver, start: SymbolRef, maxDepth = MAX_DEPTH, follow: (call: ResolvedCall) => boolean = () => true,
+): WalkStep[] {
+  return walk((ref) => resolver.callersOf(ref).filter(({ call }) => follow(call)).map(({ from, call }) => ({ target: from, call })), start, maxDepth);
 }
