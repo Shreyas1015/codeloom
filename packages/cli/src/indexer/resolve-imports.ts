@@ -34,8 +34,52 @@ function firstString(value: unknown): string | undefined {
   return undefined;
 }
 
+type CompilerOpts = { baseUrl?: string; paths?: Record<string, string[]> };
+
+interface TsConfigLevel {
+  dir: string;
+  opts: CompilerOpts;
+}
+
+const MAX_EXTENDS_DEPTH = 5;
+
+/**
+ * Walks a tsconfig/jsconfig's `extends` chain, child first, following only a relative-path
+ * `extends` ("./..." or "../..."). A package-name extends (e.g. `"@tsconfig/node20"`) is left
+ * unresolved here — following it would require node_modules resolution, which is out of scope —
+ * so it is treated as if there were no `extends` and the chain stops at the config itself.
+ * Stops on a cycle, or once MAX_EXTENDS_DEPTH configs have been collected, matching tsc's own
+ * circularity/depth guard.
+ */
+function loadConfigChain(repoAbs: string, startRel: string, fileSet: Set<string>): TsConfigLevel[] {
+  const chain: TsConfigLevel[] = [];
+  const visited = new Set<string>();
+  let currentRel: string | undefined = startRel;
+  while (currentRel !== undefined && chain.length < MAX_EXTENDS_DEPTH && !visited.has(currentRel)) {
+    visited.add(currentRel);
+    const config = readJsonLoose(join(repoAbs, currentRel));
+    if (!config) break;
+    const dir: string = posix.dirname(currentRel) === "." ? "" : posix.dirname(currentRel);
+    chain.push({ dir, opts: (config.compilerOptions ?? {}) as CompilerOpts });
+    const extendsValue = config.extends;
+    currentRel =
+      typeof extendsValue === "string" && (extendsValue.startsWith("./") || extendsValue.startsWith("../"))
+        ? resolveExtendsTarget(dir, extendsValue, fileSet)
+        : undefined;
+  }
+  return chain;
+}
+
+function resolveExtendsTarget(dir: string, extendsValue: string, fileSet: Set<string>): string | undefined {
+  const joined = posix.normalize(posix.join(dir, extendsValue));
+  if (fileSet.has(joined)) return joined;
+  if (fileSet.has(`${joined}.json`)) return `${joined}.json`;
+  return undefined;
+}
+
 export function loadAliases(repoAbs: string, files: string[]): Alias[] {
   const aliases: Alias[] = [];
+  const fileSet = new Set(files);
   for (const rel of files) {
     const base = posix.basename(rel);
     const dir = posix.dirname(rel) === "." ? "" : posix.dirname(rel);
@@ -48,9 +92,21 @@ export function loadAliases(repoAbs: string, files: string[]): Alias[] {
       }
     }
     if (base === "tsconfig.json" || base === "jsconfig.json") {
-      const opts = (readJsonLoose(join(repoAbs, rel))?.compilerOptions ?? {}) as { baseUrl?: string; paths?: Record<string, string[]> };
-      const baseUrl = posix.join(dir, opts.baseUrl ?? ".");
-      for (const [key, targets] of Object.entries(opts.paths ?? {})) {
+      // Resolve `baseUrl`/`paths` across the `extends` chain: the nearest (most child-ward) config
+      // in the chain that declares a given key wins, and it is resolved relative to the directory
+      // of the config file that declared it — matching TypeScript's own `extends` + baseUrl
+      // resolution. `paths` targets (wherever declared) are always joined against the single
+      // effective `baseUrl`, since `paths` entries are plain paths relative to `baseUrl`.
+      const chain = loadConfigChain(repoAbs, rel, fileSet);
+      let baseUrlDecl: { value: string; dir: string } | undefined;
+      let pathsDecl: { value: Record<string, string[]>; dir: string } | undefined;
+      for (const level of chain) {
+        if (baseUrlDecl === undefined && level.opts.baseUrl !== undefined) baseUrlDecl = { value: level.opts.baseUrl, dir: level.dir };
+        if (pathsDecl === undefined && level.opts.paths !== undefined) pathsDecl = { value: level.opts.paths, dir: level.dir };
+      }
+      const baseUrlDir = baseUrlDecl?.dir ?? pathsDecl?.dir ?? dir;
+      const baseUrl = posix.normalize(posix.join(baseUrlDir, baseUrlDecl?.value ?? "."));
+      for (const [key, targets] of Object.entries(pathsDecl?.value ?? {})) {
         if (!key.endsWith("*")) continue;
         aliases.push({
           prefix: key.slice(0, -1),
@@ -62,8 +118,15 @@ export function loadAliases(repoAbs: string, files: string[]): Alias[] {
       // A plain `baseUrl` (no matching `paths` entry) is also a resolution root for bare specifiers:
       // TypeScript falls back to it for non-relative imports. Packages with no matching file under it
       // simply stay unresolved. `paths` is tried first (pushed above), so it wins on overlap.
-      if (opts.baseUrl !== undefined) {
-        aliases.push({ prefix: "", targets: [posix.normalize(baseUrl)], kind: "baseUrl", dir });
+      //
+      // Deliberate: when the effective `baseUrl` is "." (repo/package root), this makes ANY local
+      // folder whose name matches a real package specifier shadow that package — e.g. a local
+      // `express/` folder makes `import "express"` resolve to `express/index.ts` instead of staying
+      // unresolved as the npm package. This matches tsc's own module resolution (baseUrl is tried
+      // before node_modules resolution), so codeloom keeps it rather than special-casing real
+      // package names.
+      if (baseUrlDecl !== undefined) {
+        aliases.push({ prefix: "", targets: [baseUrl], kind: "baseUrl", dir });
       }
     }
   }

@@ -64,6 +64,125 @@ describe("resolveImport", () => {
     const aliases = loadAliases(repo, ["api/tsconfig.json", "ui/tsconfig.json", ...files]);
     expect(resolveImport("api/src/x.ts", "shared/thing", files, aliases)).toBe("api/src/shared/thing.ts");
   });
+
+  it("uses the nearest package's own `paths` in a monorepo, not a sibling's", () => {
+    // Documents behaviour that already fell out of nearestConfigDir scoping both `paths` and
+    // `baseUrl` (see h4-report.md review notes) but was never asserted directly for `paths`.
+    const repo = makeRepo({
+      "api/tsconfig.json": `{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }`,
+      "ui/tsconfig.json": `{ "compilerOptions": { "paths": { "@/*": ["./other-src/*"] } } }`,
+      "api/src/thing.ts": "",
+      "ui/other-src/thing.ts": "",
+      "api/src/x.ts": "",
+      "ui/other-src/y.ts": "",
+    });
+    const files = new Set(["api/src/thing.ts", "ui/other-src/thing.ts", "api/src/x.ts", "ui/other-src/y.ts"]);
+    const aliases = loadAliases(repo, ["api/tsconfig.json", "ui/tsconfig.json", ...files]);
+    expect(resolveImport("api/src/x.ts", "@/thing", files, aliases)).toBe("api/src/thing.ts");
+    expect(resolveImport("ui/other-src/y.ts", "@/thing", files, aliases)).toBe("ui/other-src/thing.ts");
+  });
+
+  it('lets a local folder shadow a same-named package when baseUrl is "." (matches tsc\'s own resolution order)', () => {
+    // Deliberate: baseUrl "." makes the whole repo root a resolution root for bare specifiers, same
+    // as tsc. A local `express/` folder therefore resolves before the real npm package would. This
+    // is not a bug to special-case — it is exactly what `tsc` itself does.
+    const repo = makeRepo({
+      "tsconfig.json": `{ "compilerOptions": { "baseUrl": "." } }`,
+      "express/index.ts": "",
+      "src/app.ts": "",
+    });
+    const files = new Set(["express/index.ts", "src/app.ts"]);
+    const aliases = loadAliases(repo, ["tsconfig.json", ...files]);
+    expect(resolveImport("src/app.ts", "express", files, aliases)).toBe("express/index.ts");
+  });
+
+  it("follows a relative tsconfig `extends` and inherits baseUrl from the base config", () => {
+    const repo = makeRepo({
+      "tsconfig.base.json": `{ "compilerOptions": { "baseUrl": "./src" } }`,
+      "tsconfig.json": `{ "extends": "./tsconfig.base.json" }`,
+      "src/user/user.entity.ts": "",
+      "src/app.module.ts": "",
+    });
+    const files = new Set(["src/user/user.entity.ts", "src/app.module.ts"]);
+    const aliases = loadAliases(repo, ["tsconfig.base.json", "tsconfig.json", ...files]);
+    expect(resolveImport("src/app.module.ts", "user/user.entity", files, aliases)).toBe("src/user/user.entity.ts");
+  });
+
+  it("follows a multi-level `extends` chain, skipping an intermediate config that declares nothing itself", () => {
+    const repo = makeRepo({
+      "pkg/tsconfig.root.json": `{ "compilerOptions": { "baseUrl": "./root-src" } }`,
+      "pkg/tsconfig.mid.json": `{ "extends": "./tsconfig.root.json" }`,
+      "pkg/tsconfig.json": `{ "extends": "./tsconfig.mid.json" }`,
+      "pkg/root-src/shared.ts": "",
+      "pkg/x.ts": "",
+    });
+    const files = new Set(["pkg/root-src/shared.ts", "pkg/x.ts"]);
+    const aliases = loadAliases(repo, ["pkg/tsconfig.root.json", "pkg/tsconfig.mid.json", "pkg/tsconfig.json", ...files]);
+    expect(resolveImport("pkg/x.ts", "shared", files, aliases)).toBe("pkg/root-src/shared.ts");
+  });
+
+  it("uses the child's own baseUrl/paths instead of the extended base's when the child declares its own", () => {
+    const repo = makeRepo({
+      "pkg/tsconfig.base.json": `{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./base-src/*"] } } }`,
+      "pkg/tsconfig.json": `{ "extends": "./tsconfig.base.json", "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"] } } }`,
+      "pkg/base-src/thing.ts": "",
+      "pkg/src/thing.ts": "",
+      "pkg/x.ts": "",
+    });
+    const files = new Set(["pkg/base-src/thing.ts", "pkg/src/thing.ts", "pkg/x.ts"]);
+    const aliases = loadAliases(repo, ["pkg/tsconfig.base.json", "pkg/tsconfig.json", ...files]);
+    expect(resolveImport("pkg/x.ts", "@/thing", files, aliases)).toBe("pkg/src/thing.ts");
+  });
+
+  it("stops following a circular `extends` without throwing or looping forever", () => {
+    const repo = makeRepo({
+      "tsconfig.json": `{ "extends": "./tsconfig.b.json", "compilerOptions": { "baseUrl": "./a-src" } }`,
+      "tsconfig.b.json": `{ "extends": "./tsconfig.json" }`,
+      "a-src/thing.ts": "",
+      "x.ts": "",
+    });
+    const files = new Set(["a-src/thing.ts", "x.ts"]);
+    expect(() => loadAliases(repo, ["tsconfig.json", "tsconfig.b.json", ...files])).not.toThrow();
+    const aliases = loadAliases(repo, ["tsconfig.json", "tsconfig.b.json", ...files]);
+    expect(resolveImport("x.ts", "thing", files, aliases)).toBe("a-src/thing.ts");
+  });
+
+  it("stops following `extends` after 5 levels", () => {
+    const repo = makeRepo({
+      "tsconfig.json": `{ "extends": "./tsconfig.1.json" }`,
+      "tsconfig.1.json": `{ "extends": "./tsconfig.2.json" }`,
+      "tsconfig.2.json": `{ "extends": "./tsconfig.3.json" }`,
+      "tsconfig.3.json": `{ "extends": "./tsconfig.4.json" }`,
+      "tsconfig.4.json": `{ "extends": "./tsconfig.5.json" }`,
+      "tsconfig.5.json": `{ "compilerOptions": { "baseUrl": "./src" } }`,
+      "src/thing.ts": "",
+      "x.ts": "",
+    });
+    const files = new Set(["src/thing.ts", "x.ts"]);
+    const aliases = loadAliases(repo, [
+      "tsconfig.json",
+      "tsconfig.1.json",
+      "tsconfig.2.json",
+      "tsconfig.3.json",
+      "tsconfig.4.json",
+      "tsconfig.5.json",
+      ...files,
+    ]);
+    // tsconfig.json -> .1 -> .2 -> .3 -> .4 is 5 configs; tsconfig.5.json (the 6th, holding baseUrl)
+    // is never reached, so the bare specifier stays unresolved.
+    expect(resolveImport("x.ts", "thing", files, aliases)).toBeNull();
+  });
+
+  it("ignores a package-name `extends` (not a relative path) and still uses the config's own compilerOptions", () => {
+    const repo = makeRepo({
+      "tsconfig.json": `{ "extends": "@tsconfig/node20/tsconfig.json", "compilerOptions": { "baseUrl": "./src" } }`,
+      "src/thing.ts": "",
+      "x.ts": "",
+    });
+    const files = new Set(["src/thing.ts", "x.ts"]);
+    const aliases = loadAliases(repo, ["tsconfig.json", ...files]);
+    expect(resolveImport("x.ts", "thing", files, aliases)).toBe("src/thing.ts");
+  });
 });
 
 describe("buildGraph", () => {
