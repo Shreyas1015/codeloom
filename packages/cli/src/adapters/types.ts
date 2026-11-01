@@ -1,6 +1,6 @@
 import type ts from "typescript";
 import type {
-  DbAccess, HttpCall, HttpClient, ModelDef, Mount, QueueOp, Route, TableDef, UiPage,
+  DbAccess, HttpCall, HttpClient, ModelDef, Mount, QueueOp, Route, RouterDef, TableDef, UiPage,
 } from "../store/schemas.js";
 
 /** A route as an adapter sees it: `handlerImport` is the raw module specifier of an imported
@@ -9,7 +9,11 @@ export type RouteDraft = Route & { handlerImport?: string };
 
 /** A mount as an adapter sees it: `targetImport` is the raw module specifier of an imported router/plugin,
  * resolved to `target.file` by `finalizeEndpoints` (which knows every file and alias) and then dropped. */
-export type MountDraft = Mount & { targetImport?: string };
+export type MountDraft = Mount & {
+  targetImport?: string;
+  /** Raw specifier of an imported `on` receiver; resolved to `onFile` by `finalizeEndpoints`. */
+  onImport?: string;
+};
 
 export interface ParsedFile {
   rel: string;
@@ -45,6 +49,7 @@ export interface EndpointsPart {
   httpClients: HttpClient[];
   routes: RouteDraft[];
   mounts: MountDraft[];
+  routers: RouterDef[];
   dbAccess: DbAccess[];
   tables: TableDef[];
   models: ModelDef[];
@@ -53,7 +58,7 @@ export interface EndpointsPart {
 
 export function emptyPart(): EndpointsPart {
   return {
-    pages: [], httpCalls: [], httpClients: [], routes: [], mounts: [], dbAccess: [], tables: [], models: [],
+    pages: [], httpCalls: [], httpClients: [], routes: [], mounts: [], routers: [], dbAccess: [], tables: [], models: [],
     queues: [],
   };
 }

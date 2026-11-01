@@ -7,7 +7,7 @@ import { detectDb } from "./db.js";
 import { detectHttpCalls, detectHttpClients } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
-import { detectMounts, detectRoutes } from "./routes.js";
+import { detectMounts, detectRouters, detectRoutes } from "./routes.js";
 import { type AdapterContext, type EndpointsPart, emptyPart, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
@@ -63,6 +63,7 @@ export function runAdapters(rel: string, content: string, ctx: AdapterContext): 
   part.httpClients.push(...detectHttpClients(file));
   part.routes.push(...detectRoutes(file, ctx));
   part.mounts.push(...detectMounts(file, ctx));
+  part.routers.push(...detectRouters(file, ctx));
   const db = detectDb(file, ctx);
   part.dbAccess.push(...db.dbAccess);
   part.tables.push(...db.tables);
@@ -82,17 +83,25 @@ function resolveHandler(draft: RouteDraft, resolve?: ImportResolver): Route {
   return route;
 }
 
-/** Turn a draft mount's targetImport into target.file, and drop the internal field. Mirrors
- * resolveHandler. Task 1 only wires the plumbing; nothing produces a MountDraft with targetImport
- * set until Task 3 (detectMounts), so this is exercised there. */
-function resolveMount(draft: MountDraft, resolve?: ImportResolver): Mount {
-  const { targetImport, ...mount } = draft;
+/** Turn a draft mount's targetImport into target.file and its onImport into onFile, and drop the internal
+ * fields. A mount onto an imported receiver that resolves to no repo file (`i18n.use(...)` with i18n from a
+ * package) is not a router mount: it is dropped, unless the receiver is a top-level name (app/server). */
+function resolveMount(draft: MountDraft, resolve?: ImportResolver): Mount | undefined {
+  const { targetImport, onImport, ...mount } = draft;
   if (targetImport && !mount.target.file && resolve) {
     const file = resolve(mount.at.file, targetImport);
     if (file) mount.target = { ...mount.target, file };
   }
+  if (onImport !== undefined) {
+    const file = resolve?.(mount.at.file, onImport);
+    if (file) return { ...mount, onFile: file };
+    const { onExport: _unused, ...rest } = mount;
+    return TOP_LEVEL_NAMES.has(mount.on) ? rest : undefined;
+  }
   return mount;
 }
+
+const TOP_LEVEL_NAMES = new Set(["app", "server", "fastify"]);
 
 const byLoc = <T extends { at: { file: string; line: number } }>(a: T, b: T) =>
   compare(a.at.file, b.at.file) || a.at.line - b.at.line;
@@ -101,7 +110,8 @@ const byHttpClient = (a: HttpClient, b: HttpClient) =>
   compare(a.file, b.file) || a.line - b.line || compare(a.name, b.name);
 
 const byMount = (a: Mount, b: Mount) =>
-  compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.prefix, b.prefix);
+  compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.prefix, b.prefix) || compare(a.on, b.on) ||
+  compare(a.target.name ?? "", b.target.name ?? "") || compare(a.target.file ?? "", b.target.file ?? "");
 
 const byQueue = (a: QueueOp, b: QueueOp) =>
   byLoc(a, b) || compare(a.op, b.op) || compare(a.exchange ?? "", b.exchange ?? "") || compare(a.routingKey ?? "", b.routingKey ?? "");
@@ -141,7 +151,8 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
     httpCalls: all.httpCalls.sort(byLoc),
     httpClients: all.httpClients.sort(byHttpClient),
     routes: all.routes.map((r) => resolveHandler(r, resolveImport)).sort(byLoc),
-    mounts: all.mounts.map((m) => resolveMount(m, resolveImport)).sort(byMount),
+    mounts: all.mounts.map((m) => resolveMount(m, resolveImport)).filter((m): m is Mount => m !== undefined).sort(byMount),
+    routers: all.routers.sort((a, b) => compare(a.file, b.file) || compare(a.name, b.name)),
     dbAccess: dbAccess.sort(byLoc),
     tables: [...tables.values()].sort((a, b) => compare(a.name, b.name)),
     models: all.models.sort((a, b) => compare(a.model, b.model)),

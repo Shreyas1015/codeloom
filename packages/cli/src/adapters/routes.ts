@@ -1,6 +1,11 @@
 import ts from "typescript";
 import type { HttpMethod, Route } from "../store/schemas.js";
-import { enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, stringValue, walk } from "./ast.js";
+import type { RouterDef } from "../store/schemas.js";
+import { compare } from "../util.js";
+import {
+  APP_FACTORY_RE, enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, routerFactoryRoot,
+  stringValue, unwrapRouterChain, walk,
+} from "./ast.js";
 import { type AdapterContext, packageRelative, type MountDraft, type ParsedFile, type RouteDraft } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
@@ -172,6 +177,88 @@ function groupPrefix(node: ts.Node): string {
  * call (scope-aware), or it is a generic router name in a file that imports a backend framework. */
 type IsRouter = (node: ts.Node, name: string) => boolean;
 
+/** The outermost call of the method chain `expr` sits in: from `Router()` in `Router().use(a).use(b)`,
+ * climbs to the whole expression. */
+function chainTop(expr: ts.Expression): ts.Expression {
+  let cur: ts.Expression = expr;
+  for (;;) {
+    let up: ts.Node = cur.parent;
+    while (ts.isParenthesizedExpression(up)) up = up.parent;
+    if (ts.isPropertyAccessExpression(up) && ts.isCallExpression(up.parent) && up.parent.expression === up) cur = up.parent;
+    else return cur;
+  }
+}
+
+/** `module.exports = <expr>` -> "default"; `exports.x = <expr>` / `module.exports.x = <expr>` -> "x". */
+function commonJsExportName(target: ts.Expression): string | undefined {
+  const text = target.getText();
+  if (text === "module.exports") return "default";
+  if (ts.isPropertyAccessExpression(target)) {
+    const base = target.expression.getText();
+    if (base === "exports" || base === "module.exports") return target.name.text;
+  }
+  return undefined;
+}
+
+/** Name of the router a factory-rooted chain creates: the variable it is assigned to, or "default" when
+ * it is the default export (`export default Router()...` / `module.exports = Router()...`). */
+function chainBindingName(top: ts.Expression): string | undefined {
+  let n: ts.Node = top;
+  while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  const p = n.parent;
+  if (ts.isVariableDeclaration(p) && p.initializer === n && ts.isIdentifier(p.name)) return p.name.text;
+  if (ts.isExportAssignment(p) && p.expression === n) return "default";
+  if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.right === n && commonJsExportName(p.left) === "default") {
+    return "default";
+  }
+  return undefined;
+}
+
+/** The router a call receiver denotes: a router identifier (`router`), or a self-returning chain on one
+ * (`router.use(a)`, `Router().use(a)` -> the variable/default export the chain is bound to). */
+function receiverRouter(recv: ts.Expression, isRouter: IsRouter): string | undefined {
+  const root = unwrapRouterChain(recv);
+  if (ts.isIdentifier(root)) return isRouter(root, root.text) ? root.text : undefined;
+  if (routerFactoryRoot(root)) return chainBindingName(chainTop(recv));
+  return undefined;
+}
+
+/** Where top-level binding `name` is imported from, and under which exported name ("default" for a default
+ * import, `import x = require()` or `const x = require()`; undefined export for a namespace import). */
+function importBinding(sf: ts.SourceFile, name: string): { spec: string; export?: string } | undefined {
+  for (const st of sf.statements) {
+    if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
+      const c = st.importClause;
+      const spec = st.moduleSpecifier.text;
+      if (c?.name?.text === name) return { spec, export: "default" };
+      const b = c?.namedBindings;
+      if (b && ts.isNamespaceImport(b) && b.name.text === name) return { spec };
+      if (b && ts.isNamedImports(b)) {
+        const el = b.elements.find((e) => e.name.text === name);
+        if (el) return { spec, export: (el.propertyName ?? el.name).text };
+      }
+    }
+    if (ts.isImportEqualsDeclaration(st) && st.name.text === name && ts.isExternalModuleReference(st.moduleReference)) {
+      const spec = stringValue(st.moduleReference.expression);
+      return spec ? { spec, export: "default" } : undefined;
+    }
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || d.name.text !== name || !d.initializer) continue;
+        const spec = requireSpec(d.initializer);
+        return spec ? { spec, export: "default" } : undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** `require("x")` -> "x". */
+function requireSpec(expr: ts.Expression): string | undefined {
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === "require") return stringValue(expr.arguments[0]);
+  return undefined;
+}
+
 function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFile, framework: Framework): RouteDraft | undefined {
   if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
   const name = node.expression.name.text;
@@ -199,6 +286,11 @@ function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFil
     if (node.arguments.length < 2) return undefined;
     path = pathPattern(node.arguments[0]!)?.path;
     router = recv.text;
+  } else if (ts.isCallExpression(recv) && receiverRouter(recv, isRouter) !== undefined) {
+    // A route on a self-returning chain: `Router().use(a).get("/x", h)` / `router.use(a).get("/x", h)`.
+    if (node.arguments.length < 2) return undefined;
+    path = pathPattern(node.arguments[0]!)?.path;
+    router = receiverRouter(recv, isRouter);
   } else if (
     ts.isCallExpression(recv) &&
     ts.isPropertyAccessExpression(recv.expression) &&
@@ -317,29 +409,127 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[
   return out;
 }
 
+/** `<router>.use(prefix?, ...middleware, target)` as a mount, or undefined when it is not one. The receiver
+ * is a router (factory-made, generic name in a backend file, a self-returning chain on one) or a binding
+ * imported from another file (the linker checks that file really exports a router there). The prefix is
+ * a string literal first argument, or "" for a single-argument `use(target)`; the target is an identifier
+ * or an inline `require("x")`. */
+function useMount(node: ts.CallExpression, recv: ts.Expression, isRouter: IsRouter, sf: ts.SourceFile): Omit<MountDraft, "at"> | undefined {
+  const local = receiverRouter(recv, isRouter);
+  const onImp = ts.isIdentifier(recv) && !isRouterName(node, recv.text) ? importBinding(sf, recv.text) : undefined;
+  const on = local ?? (onImp && ts.isIdentifier(recv) ? recv.text : undefined);
+  if (on === undefined) return undefined;
+  let prefix: string | undefined;
+  if (node.arguments.length === 1) prefix = "";
+  else if (node.arguments.length >= 2) prefix = stringValue(node.arguments[0]);
+  if (prefix === undefined) return undefined;
+  const targetArg = node.arguments[node.arguments.length - 1]!;
+  let target: MountDraft["target"];
+  let targetImport: string | undefined;
+  if (ts.isIdentifier(targetArg)) {
+    target = { name: targetArg.text };
+    const imp = importBinding(sf, targetArg.text);
+    if (imp) {
+      targetImport = imp.spec;
+      if (imp.export !== undefined) target.export = imp.export;
+    } else {
+      const loc = locateName(sf, targetArg.text);
+      if (loc.handlerImport) targetImport = loc.handlerImport;
+    }
+  } else {
+    const spec = requireSpec(targetArg);
+    if (spec === undefined) return undefined;
+    target = { export: "default" };
+    targetImport = spec;
+  }
+  return {
+    prefix: prefix === "" ? "" : normalizePath(prefix), kind: "express-use", on, target,
+    ...(targetImport ? { targetImport } : {}),
+    ...(onImp ? { onImport: onImp.spec, ...(onImp.export !== undefined ? { onExport: onImp.export } : {}) } : {}),
+  };
+}
+
+/** Routers this file exports, plus every app/server it creates with express()/fastify(). */
+export function detectRouters(file: ParsedFile, ctx: AdapterContext): RouterDef[] {
+  if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
+  if (!file.sf) return [];
+  const sf = file.sf;
+  const generic = new Set<string>(hasBackendImport(sf) ? ROUTER_NAMES : []);
+  const isRouter: IsRouter = (node, name) => generic.has(name) || isRouterName(node, name);
+  const defs = new Map<string, { exports: Set<string>; app: boolean }>();
+  const def = (name: string) => {
+    let d = defs.get(name);
+    if (!d) defs.set(name, (d = { exports: new Set(), app: false }));
+    return d;
+  };
+  /** `expr` exported as `as`: a router identifier, or a factory-rooted chain (bound to `anonName`). */
+  const exportExpr = (expr: ts.Expression, as: string, anonName: string) => {
+    const root = unwrapRouterChain(expr);
+    if (ts.isIdentifier(root) && root === expr) {
+      if (isRouter(root, root.text)) def(root.text).exports.add(as);
+    } else if (routerFactoryRoot(expr)) {
+      def(anonName).exports.add(as);
+    }
+  };
+
+  walk(sf, (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const root = routerFactoryRoot(n.initializer);
+      if (root && APP_FACTORY_RE.test(root.expression.getText())) def(n.name.text).app = true;
+    }
+    if (ts.isExportAssignment(n)) {
+      const root = routerFactoryRoot(n.expression);
+      if (root && APP_FACTORY_RE.test(root.expression.getText())) def("default").app = true;
+    }
+  });
+
+  for (const st of sf.statements) {
+    if (ts.isVariableStatement(st) && (ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && isRouter(d.name, d.name.text)) def(d.name.text).exports.add(d.name.text);
+      }
+    } else if (ts.isExportAssignment(st)) {
+      exportExpr(st.expression, "default", "default");
+    } else if (ts.isExportDeclaration(st) && !st.moduleSpecifier && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      for (const el of st.exportClause.elements) {
+        const local = (el.propertyName ?? el.name).text;
+        if (isRouter(st, local)) def(local).exports.add(el.name.text);
+      }
+    } else if (
+      ts.isExpressionStatement(st) &&
+      ts.isBinaryExpression(st.expression) &&
+      st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      const as = commonJsExportName(st.expression.left);
+      if (as !== undefined) exportExpr(st.expression.right, as, as === "default" ? "default" : as);
+    }
+  }
+
+  return [...defs.entries()]
+    .filter(([, d]) => d.app || d.exports.size > 0)
+    .map(([name, d]): RouterDef => ({ name, file: file.rel, exports: [...d.exports].sort(), ...(d.app ? { app: true } : {}) }))
+    .sort((a, b) => compare(a.name, b.name));
+}
+
 export function detectMounts(file: ParsedFile, ctx: AdapterContext): MountDraft[] {
   if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
   if (!file.sf) return [];
   const generic = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
   const isRouter: IsRouter = (node, name) => generic.has(name) || isRouterName(node, name);
-  const out: MountDraft[] = [];
+  // Ordered by the position of the `.use`/`.register` name, so a chain `Router().use(a).use(b)` (whose
+  // outer call is walked first) lists a before b.
+  const found: Array<{ pos: number; mount: MountDraft }> = [];
+  const add = (node: ts.CallExpression, mount: MountDraft) =>
+    found.push({ pos: ts.isPropertyAccessExpression(node.expression) ? node.expression.name.getStart() : node.getStart(), mount });
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
     const method = node.expression.name.text;
     const recv = node.expression.expression;
     const at = { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) };
 
-    if (method === "use" && ts.isIdentifier(recv) && isRouter(node, recv.text) && node.arguments.length >= 2) {
-      const prefix = stringValue(node.arguments[0]);
-      if (prefix === undefined) return;
-      const targetArg = node.arguments[node.arguments.length - 1]!;
-      if (!ts.isIdentifier(targetArg)) return;
-      const loc = locateName(file.sf!, targetArg.text);
-      out.push({
-        prefix: normalizePath(prefix), kind: "express-use", on: recv.text, target: { name: targetArg.text },
-        ...(loc.handlerImport ? { targetImport: loc.handlerImport } : {}),
-        at,
-      });
+    if (method === "use") {
+      const mount = useMount(node, recv, isRouter, file.sf!);
+      if (mount) add(node, { ...mount, at: { ...at, line: lineOf(node.expression.name) } });
       return;
     }
 
@@ -350,7 +540,7 @@ export function detectMounts(file: ParsedFile, ctx: AdapterContext): MountDraft[
       const prefix = opts && stringValue(prop(opts, "prefix"));
       if (prefix === undefined) return;
       const loc = locateName(file.sf!, pluginArg.text);
-      out.push({
+      add(node, {
         prefix: normalizePath(prefix), kind: "fastify-register", on: recv.text, target: { name: pluginArg.text },
         ...(loc.handlerImport ? { targetImport: loc.handlerImport } : {}),
         at,
@@ -361,8 +551,8 @@ export function detectMounts(file: ParsedFile, ctx: AdapterContext): MountDraft[
     if (method === "setGlobalPrefix" && ctx.deps.has("@nestjs/core")) {
       const prefix = stringValue(node.arguments[0]);
       if (prefix === undefined) return;
-      out.push({ prefix: normalizePath(prefix), kind: "nest-global", on: "", target: {}, at });
+      add(node, { prefix: normalizePath(prefix), kind: "nest-global", on: "", target: {}, at });
     }
   });
-  return out;
+  return found.sort((a, b) => a.pos - b.pos).map((f) => f.mount);
 }

@@ -264,12 +264,12 @@ describe("detectMounts", () => {
     expect(mounts("src/x.ts", `app.use("/billing", billing);`, "react")).toEqual([]);
   });
 
-  it("finds nothing when register/use is missing its prefix argument", () => {
+  it("reads a prefix-less use(router) as a mount with an empty prefix (H1)", () => {
     expect(mounts("src/server.ts", `
       import express from "express";
       const app = express();
       const billing = express.Router();
       app.use(billing);
-    `, "express")).toEqual([]);
+    `, "express")).toEqual(["express-use  on=app target=billing"]);
   });
 });

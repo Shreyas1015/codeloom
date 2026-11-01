@@ -87,10 +87,32 @@ export const MountSchema = z.object({
   /** What gets the prefix. name = local identifier passed (router var / plugin fn); file = repo-relative
    * file it resolves to when imported (set by finalizeEndpoints from the draft's import specifier).
    * Both absent for nest-global (applies to every nest route in the repo). */
-  target: z.object({ name: z.string().optional(), file: z.string().optional() }),
+  target: z.object({
+    name: z.string().optional(),
+    file: z.string().optional(),
+    /** The name the target was imported under from `file`: "default" for a default import / require(),
+     * else the named export. When set, only the router exported under this name in `file` gets the prefix. */
+    export: z.string().optional(),
+  }),
+  /** When `on` is a router imported from another repo file: that file, and the name it is exported
+   * under there. The mount then applies on that file's router, not on a local `on`. */
+  onFile: z.string().optional(),
+  onExport: z.string().optional(),
   at: LocSchema,
 });
 export type Mount = z.infer<typeof MountSchema>;
+
+/** A router (express/fastify) that its file exports, or an app/server created by express()/fastify(). */
+export const RouterDefSchema = z.object({
+  /** Local identifier; "default" for an anonymous default-exported router (`export default Router().use(...)`). */
+  name: z.string(),
+  file: z.string(),
+  /** Names it is exported under ("default" for export default / module.exports), sorted; [] when not exported. */
+  exports: z.array(z.string()),
+  /** True for an app/server (express(), fastify()): a top-level receiver, never mounted itself. */
+  app: z.boolean().optional(),
+});
+export type RouterDef = z.infer<typeof RouterDefSchema>;
 
 export const DbOpSchema = z.enum(["read", "insert", "update", "delete"]);
 export type DbOp = z.infer<typeof DbOpSchema>;
@@ -140,6 +162,8 @@ export const EndpointsFileSchema = z.object({
   httpClients: z.array(HttpClientSchema),
   routes: z.array(RouteSchema),
   mounts: z.array(MountSchema),
+  /** Exported routers and apps, sorted by file then name. Optional so older v2 files still read. */
+  routers: z.array(RouterDefSchema).optional(),
   dbAccess: z.array(DbAccessSchema),
   tables: z.array(TableDefSchema),
   models: z.array(ModelDefSchema),

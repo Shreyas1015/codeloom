@@ -16,8 +16,38 @@ export function parseSource(file: string, content: string): ts.SourceFile {
 /** Calls that create a router/server (express(), express.Router(), Router(), fastify(), Fastify()). */
 export const ROUTER_FACTORY_RE = /^(express|express\.Router|Router|fastify|Fastify)$/;
 
+/** Factories that create a whole app/server rather than a mountable sub-router. */
+export const APP_FACTORY_RE = /^(express|fastify|Fastify)$/;
+
+/** Methods that return the router itself, so `Router().use(a).get(...)` is still that router. */
+const ROUTER_CHAIN_METHODS = new Set(["use", "get", "post", "put", "patch", "delete", "del", "all", "options", "head"]);
+
+/** Strips `.use(...)` / `.get(...)`-style self-returning calls off `expr`: `Router().use(a).use(b)` -> `Router()`,
+ * `router.use(a)` -> `router`. Anything else is returned unchanged. */
+export function unwrapRouterChain(expr: ts.Expression): ts.Expression {
+  let cur = expr;
+  while (ts.isParenthesizedExpression(cur)) cur = cur.expression;
+  while (
+    ts.isCallExpression(cur) &&
+    ts.isPropertyAccessExpression(cur.expression) &&
+    ROUTER_CHAIN_METHODS.has(cur.expression.name.text) &&
+    !ROUTER_FACTORY_RE.test(cur.expression.getText())
+  ) {
+    cur = cur.expression.expression;
+    while (ts.isParenthesizedExpression(cur)) cur = cur.expression;
+  }
+  return cur;
+}
+
+/** The router-factory call at the root of `expr` (`Router()` in `Router().use(a)`), if there is one. */
+export function routerFactoryRoot(expr: ts.Expression | undefined): ts.CallExpression | undefined {
+  if (!expr) return undefined;
+  const root = unwrapRouterChain(expr);
+  return ts.isCallExpression(root) && ROUTER_FACTORY_RE.test(root.expression.getText()) ? root : undefined;
+}
+
 function isRouterFactoryCall(expr: ts.Expression | undefined): boolean {
-  return !!expr && ts.isCallExpression(expr) && ROUTER_FACTORY_RE.test(expr.expression.getText());
+  return routerFactoryRoot(expr) !== undefined;
 }
 
 /** Parameters of a function-like node, or undefined when `node` isn't one. */
