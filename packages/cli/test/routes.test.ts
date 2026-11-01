@@ -63,6 +63,52 @@ describe("detectRoutes", () => {
       .toEqual(["ANY /api/health -> default [next-api]"]);
   });
 
+  it("detects pages-router API methods from req.method checks", () => {
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        if (req.method === "DELETE") return handleDelete(req, res);
+      }
+    `, "next")).toEqual(["DELETE /api/post/:id -> default [next-api]"]);
+
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        switch (req.method) {
+          case "GET":
+            return handleGet(req, res);
+          case "DELETE":
+            return handleDelete(req, res);
+          default:
+            res.status(405).end();
+        }
+      }
+    `, "next")).toEqual([
+      "DELETE /api/post/:id -> default [next-api]",
+      "GET /api/post/:id -> default [next-api]",
+    ]);
+
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        if (req.method !== "POST") {
+          return res.status(405).end();
+        }
+        return create(req, res);
+      }
+    `, "next")).toEqual(["POST /api/post/:id -> default [next-api]"]);
+
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        const { method } = req;
+        if (method === "PUT") return update(req, res);
+      }
+    `, "next")).toEqual(["PUT /api/post/:id -> default [next-api]"]);
+
+    expect(show("pages/api/post/[id].ts", `
+      export default async function handle(req, res) {
+        return res.json({});
+      }
+    `, "next")).toEqual(["ANY /api/post/:id -> default [next-api]"]);
+  });
+
   it("reads Next.js API routes only directly under the package root", () => {
     const at = (rel: string, ctx = ctxIn("apps/web", "next")) => detectRoutes(parsed(rel, "export async function GET() {}"), ctx).map((r) => r.path);
     expect(at("apps/web/src/app/api/orders/route.ts")).toEqual(["/api/orders"]);
