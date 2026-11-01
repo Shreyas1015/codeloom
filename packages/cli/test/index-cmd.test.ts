@@ -18,11 +18,13 @@ describe("codeloom index on demo-shop", () => {
     const result = await runIndex(workspace());
     const ep = Object.fromEntries(result.repos.map((r) => [r.id, r.endpoints]));
 
-    expect(ep.web!.pages.map((p) => p.route)).toEqual(["/customers/:id", "/customers/new"]);
-    expect(ep.web!.httpCalls.map((c) => `${c.method} ${c.path} @${c.at.symbol}`)).toEqual([
+    expect(ep.web!.pages.map((p) => p.route)).toEqual(["/customers/:id", "/customers/new", "/invoices/new"]);
+    expect(ep.web!.httpCalls).toHaveLength(3);
+    expect(ep.web!.httpCalls.map((c) => `${c.method} ${c.path} @${c.at.symbol}`)).toEqual(expect.arrayContaining([
       "GET /api/customers/:id @getCustomer",
       "POST /api/customers @useCreateCustomer",
-    ]);
+      "POST /billing/invoices @createInvoice",
+    ]));
 
     expect(ep.api!.routes.map((r) => `${r.method} ${r.path} -> ${r.handler}`)).toEqual([
       "POST /api/customers -> CustomersController.store",
@@ -37,12 +39,25 @@ describe("codeloom index on demo-shop", () => {
 
     expect(ep.billing!.routes.map((r) => `${r.method} ${r.path} -> ${r.handler}`)).toEqual([
       "POST /invoices -> createInvoice",
+      "POST /invoices/:id/pay -> payInvoice",
       "GET /health -> GET /health",
     ]);
-    expect(ep.billing!.dbAccess.map((a) => `${a.op} ${a.table} @${a.at.symbol}`)).toEqual(["insert invoices @createInvoice"]);
-    expect(ep.billing!.queues.map((q) => `${q.op} ${q.queue}`)).toEqual(["publish invoice.created", "consume invoice.created"]);
-    // Plain code-point order (not locale order): uppercase ASCII sorts before lowercase.
-    expect(ep.billing!.tables.map((t) => t.name)).toEqual(["Payment", "invoices"]);
+    expect(ep.billing!.dbAccess).toHaveLength(3);
+    expect(ep.billing!.dbAccess.map((a) => `${a.op} ${a.table} @${a.at.symbol}`)).toEqual(expect.arrayContaining([
+      "insert invoices @invoiceService.create",
+      "update invoices @invoiceService.markPaid",
+      "insert email_logs @handleEmail",
+    ]));
+    expect(ep.billing!.queues).toHaveLength(5);
+    expect(ep.billing!.queues.map((q) => `${q.op} ${q.queue}`)).toEqual(expect.arrayContaining([
+      "publish invoice.created",
+      "consume invoice.created",
+      "publish billing:invoice.paid",
+      "bind emails",
+      "consume emails",
+    ]));
+    // Plain code-point order (not locale order): uppercase ASCII, then lowercase "e", then lowercase "i".
+    expect(ep.billing!.tables.map((t) => t.name)).toEqual(["Payment", "email_logs", "invoices"]);
   });
 
   it("links files through package.json import aliases", async () => {
@@ -66,15 +81,26 @@ describe("codeloom index on demo-shop", () => {
     const invoice = routes.billing!.find((r) => r.handler === "createInvoice")!;
     expect(invoice.handlerFile).toBe("src/invoices.ts");
     expect(invoice.handlerLines).toBeUndefined();
+    const pay = routes.billing!.find((r) => r.handler === "payInvoice")!;
+    expect(pay.handlerFile).toBe("src/invoices.ts");
     const health = routes.billing!.find((r) => r.path === "/health")!;
-    expect(health).toMatchObject({ inline: true, handlerFile: "src/server.ts", handlerLines: [9, 11] });
+    expect(health).toMatchObject({ inline: true, handlerFile: "src/server.ts", handlerLines: [10, 12] });
     for (const r of [...routes.api!, ...routes.billing!]) expect(r).not.toHaveProperty("handlerImport");
   });
 
-  it("prints a readable summary", async () => {
-    const text = formatIndexSummary(await runIndex(workspace()));
+  it("prints a readable summary, including the linker's chain count", async () => {
+    const result = await runIndex(workspace());
+    const text = formatIndexSummary(result);
     expect(text).toContain("api");
     expect(text).toMatch(/routes/);
     expect(text).toMatch(/3 repos indexed/);
+    expect(text).toMatch(/7 chains \(\d+ complete\) written to \.codeloom\/chains\.json/);
+  });
+
+  it("returns a linker summary alongside each repo's stats", async () => {
+    const result = await runIndex(workspace());
+    expect(result.linker.chains).toBe(7);
+    expect(result.linker.wrote).toBe(true);
+    expect(result.linker.orphanedJourneys).toBe(0);
   });
 });

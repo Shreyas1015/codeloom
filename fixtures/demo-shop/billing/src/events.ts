@@ -6,6 +6,12 @@ export async function publishInvoiceCreated(id: number) {
   channel.sendToQueue("invoice.created", Buffer.from(JSON.stringify({ id })));
 }
 
+export async function publishInvoicePaid(id: number) {
+  const conn = await amqp.connect(process.env.AMQP_URL ?? "amqp://localhost");
+  const channel = await conn.createChannel();
+  channel.publish("billing", "invoice.paid", Buffer.from(JSON.stringify({ id })));
+}
+
 export async function startConsumer() {
   const conn = await amqp.connect(process.env.AMQP_URL ?? "amqp://localhost");
   const channel = await conn.createChannel();

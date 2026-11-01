@@ -8,3 +8,10 @@ model Invoice {
 model Payment {
   id Int @id @default(autoincrement())
 }
+
+model EmailLog {
+  id        Int @id @default(autoincrement())
+  invoiceId Int
+
+  @@map("email_logs")
+}

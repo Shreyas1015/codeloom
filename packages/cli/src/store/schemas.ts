@@ -209,3 +209,61 @@ export const FingerprintsSchema = z.object({
   ),
 });
 export type Fingerprints = z.infer<typeof FingerprintsSchema>;
+
+// ---------------------------------------------------------------------------------------------------
+// chains.json (linker-only) and journeys.json (agent/user; the indexer only creates it and flips status).
+// ---------------------------------------------------------------------------------------------------
+
+export const LaneSchema = z.enum(["ui", "api", "code", "db", "queue"]);
+export type Lane = z.infer<typeof LaneSchema>;
+
+export const StopKindSchema = z.enum(["page", "call", "route", "handler", "function", "db", "publish", "consume"]);
+export type StopKind = z.infer<typeof StopKindSchema>;
+
+export const HopSchema = z.object({ confidence: ConfidenceSchema, reason: z.string().optional() });
+export type Hop = z.infer<typeof HopSchema>;
+
+export const ChainStopSchema = z.object({
+  lane: LaneSchema,
+  kind: StopKindSchema,
+  repo: z.string(),
+  nodeId: z.string().optional(),
+  file: z.string(),
+  line: z.number().int().positive(),
+  symbol: z.string(),
+  op: z.string().optional(),
+  label: z.string().optional(),
+  hop: HopSchema,
+});
+export type ChainStop = z.infer<typeof ChainStopSchema>;
+
+export const UnresolvedSchema = z.object({ at: LocSchema.extend({ repo: z.string() }), reason: z.string() });
+export type Unresolved = z.infer<typeof UnresolvedSchema>;
+
+export const ChainSchema = z.object({
+  id: z.string().regex(/^ch_[0-9a-f]{12}$/),
+  entry: z.string(),
+  routeKey: z.string(),
+  name: z.string(),
+  stops: z.array(ChainStopSchema),
+  unresolved: z.array(UnresolvedSchema),
+  confidence: ConfidenceSchema,
+  complete: z.boolean(),
+});
+export type Chain = z.infer<typeof ChainSchema>;
+
+export const ChainsFileSchema = z.object({ version: z.literal(1), chains: z.array(ChainSchema) });
+export type ChainsFile = z.infer<typeof ChainsFileSchema>;
+
+export const JourneySchema = z.object({
+  id: z.string().regex(/^j_[0-9a-f]{12}$/),
+  name: z.string(),
+  area: z.string(),
+  note: z.string(),
+  chainIds: z.array(z.string()),
+  status: z.enum(["ok", "orphaned"]),
+});
+export type Journey = z.infer<typeof JourneySchema>;
+
+export const JourneysFileSchema = z.object({ version: z.literal(1), journeys: z.array(JourneySchema) });
+export type JourneysFile = z.infer<typeof JourneysFileSchema>;
