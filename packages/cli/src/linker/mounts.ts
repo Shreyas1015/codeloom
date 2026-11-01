@@ -20,9 +20,40 @@ function routerDef(routers: Routers, file: string, name: string): RouterDef | un
   return routers.get(`${file}#${name}`);
 }
 
-/** A receiver that is an app/server: a top-level name, or created by express()/fastify() in its file. */
+/** A receiver that is an app/server: a top-level name, or created by express()/fastify() in its file.
+ * This only identifies "is this an app" — it does NOT by itself mean a mount chain should stop here. An
+ * app can itself be a sub-app mounted under another app (`const admin = express(); app.use("/admin",
+ * admin)`), so callers must still check `mountsFor` before treating it as a chain terminator. */
 function isTopLevelReceiver(routers: Routers, file: string, name: string): boolean {
   return TOP_LEVEL_RECEIVERS.has(name) || routerDef(routers, file, name)?.app === true;
+}
+
+/** True when nothing exports `name` from `file`: no outside code could even reference it to mount it
+ * elsewhere, so an app with no visible mount is trivially the whole program's entry point. */
+function isUnexported(routers: Routers, file: string, name: string): boolean {
+  return (routerDef(routers, file, name)?.exports.length ?? 0) === 0;
+}
+
+/** True when `name`/`file` is the only express()/fastify() app codeloom found anywhere in this repo (or
+ * when it isn't backed by a RouterDef at all — a bare `app`/`server`/`fastify` name codeloom couldn't
+ * resolve to a declaration). We have no `.listen()`/handler-start signal to work with here (RouterDef
+ * only records the `app` flag, not call sites), so "the only app in the repo" is the next best proxy:
+ * with exactly one, it has to be the program's root, exported or not. */
+function isOnlyApp(routers: Routers, file: string, name: string): boolean {
+  if (routerDef(routers, file, name)?.app !== true) return true;
+  let apps = 0;
+  for (const r of routers.values()) if (r.app === true) apps++;
+  return apps <= 1;
+}
+
+/** An app/server receiver with no mount anyone can see still ends its route chain `known` when it isn't
+ * exported (nothing outside its file could mount it, so this has to be the real prefix) or it is the
+ * only app in the repo (presumably the entry point, exported only for tests/supertest — see the
+ * "keeps an exported express() app's own routes known" test). An exported app that is not the only one
+ * in the repo is most likely a sub-app whose real mount lives in code codeloom didn't index (conditional,
+ * dynamic, etc.); reporting its bare path as `exact` would be a lie, so it comes back `unknown` instead. */
+function unmountedAppKnown(routers: Routers, file: string, name: string): boolean {
+  return isUnexported(routers, file, name) || isOnlyApp(routers, file, name);
 }
 
 /** Mounts (excluding nest-global) that place `routerName`, declared in `file`, under a prefix. A mount whose
@@ -77,10 +108,20 @@ function resolveChains(mounts: Mount[], routers: Routers, file: string, routerNa
   const matches = mountsFor(mounts, routers, file, routerName);
   const out: Chain[] = [];
   for (const m of matches) {
-    const on = outerRouter(routers, m);
-    if (m.on === "" || (on !== undefined && isTopLevelReceiver(routers, on.file, on.name)) || (m.onFile === undefined && isTopLevelReceiver(routers, m.at.file, m.on))) {
+    if (m.on === "") {
       out.push({ prefix: m.prefix, mounts: [m], incomplete: false });
       continue;
+    }
+    const on = outerRouter(routers, m);
+    if (on !== undefined && isTopLevelReceiver(routers, on.file, on.name)) {
+      // `on` is an app/server. It only ends the chain here when nothing mounts it any further out; if
+      // something does, it is itself a sub-app and must compose through that outer mount like any other
+      // router (this was the H1 regression: an app receiver ended the chain unconditionally).
+      const appMounts = mountsFor(mounts, routers, on.file, on.name);
+      if (appMounts.length === 0) {
+        out.push({ prefix: m.prefix, mounts: [m], incomplete: !unmountedAppKnown(routers, on.file, on.name) });
+        continue;
+      }
     }
     const outer = on === undefined ? [] : resolveChains(mounts, routers, on.file, on.name, seen, depth + 1);
     const bases: Chain[] = outer.length > 0 ? outer : UNRESOLVED;
@@ -110,14 +151,16 @@ export function effectiveRoutes(endpoints: EndpointsFile): EffectiveRoute[] {
     }
     const chains = route.router === undefined ? [] : resolveChains(nonNestMounts, routers, route.at.file, route.router, new Set(), 0);
     if (chains.length === 0) {
-      // Unmounted: known only for a route with no router (adonis/next), one on an app/server itself, or
-      // — in a repo with no mounts at all — one on a router its file keeps private. A router its file
-      // exports is meant to be mounted somewhere; with no mount codeloom can see, its prefix is unknown.
-      const exported = route.router !== undefined && (routerDef(routers, route.at.file, route.router)?.exports.length ?? 0) > 0;
+      // Unmounted: known only for a route with no router (adonis/next), one on an app/server itself that
+      // `unmountedAppKnown` accepts (see its comment), or — in a repo with no mounts at all — one on a
+      // router its file keeps private. A router its file exports is meant to be mounted somewhere; with
+      // no mount codeloom can see, its prefix is unknown.
+      const exported = route.router !== undefined && !isUnexported(routers, route.at.file, route.router);
       const known =
         route.router === undefined ||
-        isTopLevelReceiver(routers, route.at.file, route.router) ||
-        (nonNestMounts.length === 0 && !exported);
+        (isTopLevelReceiver(routers, route.at.file, route.router)
+          ? unmountedAppKnown(routers, route.at.file, route.router)
+          : nonNestMounts.length === 0 && !exported);
       out.push({ repo: endpoints.repo, route, effectivePath: route.path, mountsKnown: known, mounts: [] });
       continue;
     }

@@ -279,6 +279,8 @@ describe("effectiveRoutes: router-level mounts across files", () => {
   });
 
   it("keeps an exported express() app's own routes known (exported only for tests)", () => {
+    // The only express() app codeloom finds anywhere in this repo, so it has to be the entry point
+    // regardless of the (test-only) export.
     expect(effective({
       "src/app.ts": `
         import express from 'express';
@@ -287,5 +289,52 @@ describe("effectiveRoutes: router-level mounts across files", () => {
         export default server;
       `,
     })).toEqual(["GET /health known"]);
+  });
+
+  it("composes an express sub-app's own mount under the app it is in turn mounted onto (H1 regression)", () => {
+    // admin is itself an express() app; r is mounted onto it at /x, and admin is mounted onto the main
+    // app at /admin. The route must resolve through both mounts to /admin/x/stats, not stop at admin's
+    // own /x — admin is an app receiver, but something does mount it further out.
+    expect(effective({
+      "src/server.ts": `
+        import express from 'express';
+        import { Router } from 'express';
+        const app = express();
+        const admin = express();
+        const r = Router();
+        r.get('/stats', (req, res) => res.json({}));
+        admin.use('/x', r);
+        app.use('/admin', admin);
+      `,
+    })).toEqual(["GET /admin/x/stats known"]);
+  });
+
+  it("marks an exported express() sub-app that is never mounted as unknown, even though it is an app", () => {
+    // Two express() apps exist in this repo: "app" (unexported, has its own route) and "admin"
+    // (exported but never mounted anywhere). admin is not the only app and is exported, so it looks
+    // like a sub-app whose real mount codeloom can't see; its own route must not be reported known.
+    expect(effective({
+      "src/main.ts": `
+        import express from 'express';
+        const app = express();
+        app.get('/', (req, res) => res.json({}));
+      `,
+      "src/admin.ts": `
+        import express from 'express';
+        const admin = express();
+        admin.get('/stats', (req, res) => res.json({}));
+        export default admin;
+      `,
+    })).toEqual(["GET / known", "GET /stats unknown"]);
+  });
+
+  it("marks a default-imported router unknown when nothing mounts it (negative twin of the prefix-less case)", () => {
+    expect(effective({
+      "src/server.ts": `
+        import express from 'express';
+        const app = express();
+      `,
+      "src/router.ts": TAGS,
+    })).toEqual(["GET /tags unknown"]);
   });
 });
