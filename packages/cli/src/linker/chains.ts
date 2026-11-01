@@ -55,11 +55,20 @@ function graphOf(ws: WorkspaceData, repoId: string): KnowledgeGraph {
   return ws.repos.find((r) => r.ref.id === repoId)?.graph ?? EMPTY_GRAPH;
 }
 
-/** A stop for a bare SymbolRef (no Loc of its own): nodeId/line come from the nearest graph node,
- * unless `line` is given directly (the page stop, which has a real UiPage.line). */
-function refStop(graph: KnowledgeGraph, lane: ChainStop["lane"], kind: "function" | "handler" | "page", ref: SymbolRef, hop: Hop, line?: number): ChainStop {
+/** First line of a symbol in the linker's code index (`CodeSymbol.lines[0]`), when it knows the symbol. */
+export type SymbolLineLookup = (repo: string, file: string, symbol: string) => number | undefined;
+
+/** Per-build context: the workspace plus the code index's symbol lines. */
+interface Ctx { ws: WorkspaceData; symbolLine: SymbolLineLookup }
+
+/** A stop for a bare SymbolRef (no Loc of its own). Line: `line` when given (the page stop's
+ * UiPage.line, an inline handler's first line), else the symbol's own first line from the code index,
+ * else the nearest graph node's line (the graph has no method nodes, so that may be the class or file). */
+function refStop(ctx: Ctx, lane: ChainStop["lane"], kind: "function" | "handler" | "page", ref: SymbolRef, hop: Hop, line?: number): ChainStop {
+  const graph = graphOf(ctx.ws, ref.repo);
   const nodeId = nearestNodeId(graph, ref.file, ref.symbol);
-  return withoutUndefined({ lane, kind, repo: ref.repo, nodeId, file: ref.file, line: line ?? nodeLine(graph, nodeId), symbol: ref.symbol, hop });
+  const at = line ?? ctx.symbolLine(ref.repo, ref.file, ref.symbol) ?? nodeLine(graph, nodeId);
+  return withoutUndefined({ lane, kind, repo: ref.repo, nodeId, file: ref.file, line: at, symbol: ref.symbol, hop });
 }
 
 /** Drop `undefined` optional fields so serialized stops have one stable shape. */
@@ -73,13 +82,13 @@ function hop(confidence: Confidence, reason?: string): Hop {
 
 /** Page, intermediate functions, then the HTTP call. `PageReach.path[i].confidence` is the confidence of
  * path[i]'s call to path[i+1], so it is the hop *into* stop i+1 (the page itself is the entry: exact). */
-function uiStops(ws: WorkspaceData, link: UiLink, page: PageReach): ChainStop[] {
-  const graph = graphOf(ws, link.repo);
+function uiStops(ctx: Ctx, link: UiLink, page: PageReach): ChainStop[] {
+  const graph = graphOf(ctx.ws, link.repo);
   const stops: ChainStop[] = page.path.map((ref, i) => {
     const sym: SymbolRef = { repo: ref.repo, file: ref.file, symbol: ref.symbol };
     return i === 0
-      ? refStop(graph, "ui", "page", sym, hop("exact"), page.page.line)
-      : refStop(graph, "ui", "function", sym, hop(page.path[i - 1]!.confidence));
+      ? refStop(ctx, "ui", "page", sym, hop("exact"), page.page.line)
+      : refStop(ctx, "ui", "function", sym, hop(page.path[i - 1]!.confidence));
   });
   stops.push(withoutUndefined({
     lane: "ui" as const, kind: "call" as const, repo: link.repo,
@@ -123,15 +132,14 @@ function hopFromStep(step: WalkStep): Hop {
 /** Intermediate "function" stops for every hit's viaPath (deduped by symbol across all of a link's
  * hits), then each hit's own terminal db/publish stop. `emitted` starts containing the entry symbol
  * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
-function hitStops(ws: WorkspaceData, repo: string, hits: StoreHit[], emitted: Set<string>): ChainStop[] {
-  const graph = graphOf(ws, repo);
+function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>): ChainStop[] {
   const stops: ChainStop[] = [];
   for (const hit of hits) {
     for (const step of hit.viaPath.slice(1)) {
       const key = stepKey(step.ref);
       if (emitted.has(key)) continue;
       emitted.add(key);
-      stops.push(refStop(graph, "code", "function", step.ref, hopFromStep(step)));
+      stops.push(refStop(ctx, "code", "function", step.ref, hopFromStep(step)));
     }
     stops.push(hit.kind === "db" ? dbStop(repo, hit) : publishStop(repo, hit));
   }
@@ -140,22 +148,21 @@ function hitStops(ws: WorkspaceData, repo: string, hits: StoreHit[], emitted: Se
 
 /** A handler the code index could not place (BackendLink.handlerConfidence "guess") is still shown, as a
  * guessed hop; a route with no handler file at all stops at the route (check's "handler-not-found"). */
-function backendStops(ws: WorkspaceData, link: BackendLink): ChainStop[] {
+function backendStops(ctx: Ctx, link: BackendLink): ChainStop[] {
   if (!link.handler) return [];
-  const graph = graphOf(ws, link.repo);
   const handlerHop = link.handlerConfidence === "exact"
     ? hop("exact")
     : hop(link.handlerConfidence, `handler "${link.handler.symbol}" not found in ${link.handler.file}`);
   // An inline callback has no graph node of its own: point at its first line instead of the file's.
   const inlineLine = link.route.route.inline && link.handler.file === link.route.route.handlerFile
     ? link.route.route.handlerLines?.[0] : undefined;
-  const stops: ChainStop[] = [refStop(graph, "code", "handler", link.handler, handlerHop, inlineLine)];
-  stops.push(...hitStops(ws, link.repo, link.hits, new Set([stepKey(link.handler)])));
+  const stops: ChainStop[] = [refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine)];
+  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)])));
   return stops;
 }
 
-function consumerStops(ws: WorkspaceData, link: ConsumerLink): ChainStop[] {
-  const graph = graphOf(ws, link.repo);
+function consumerStops(ctx: Ctx, link: ConsumerLink): ChainStop[] {
+  const graph = graphOf(ctx.ws, link.repo);
   const consumeRef: SymbolRef = { repo: link.repo, file: link.consume.at.file, symbol: link.consume.at.symbol };
   const stops: ChainStop[] = [withoutUndefined({
     lane: "queue" as const, kind: "consume" as const, repo: link.repo,
@@ -165,10 +172,10 @@ function consumerStops(ws: WorkspaceData, link: ConsumerLink): ChainStop[] {
   })];
   const emitted = new Set([stepKey(consumeRef)]);
   if (stepKey(link.handler) !== stepKey(consumeRef)) {
-    stops.push(refStop(graph, "code", "handler", link.handler, hop("exact")));
+    stops.push(refStop(ctx, "code", "handler", link.handler, hop("exact")));
     emitted.add(stepKey(link.handler));
   }
-  stops.push(...hitStops(ws, link.repo, link.hits, emitted));
+  stops.push(...hitStops(ctx, link.repo, link.hits, emitted));
   return stops;
 }
 
@@ -192,12 +199,14 @@ function worstConfidence(stops: ChainStop[]): Confidence {
 }
 
 /** "POST /api/customers · NewCustomerPage" (page); "POST /billing/invoices/:id/pay" (route-only, uses the
- * route stop's label); "consume invoice.created" (consumer, uses the consume stop's label); a page chain
- * whose call matched no route: "POST /api/x (unmatched) · NewXPage". */
+ * route stop's label); "consume emails · handleEmail" (consumer: the consume stop's label, then the
+ * handler stop's symbol, or the consume stop's own symbol for an inline callback); a page chain whose call
+ * matched no route: "POST /api/x (unmatched) · NewXPage". */
 export function defaultChainName(c: Pick<Chain, "entry" | "stops">): string {
   if (c.entry.startsWith("consumer:")) {
     const consume = c.stops.find((s) => s.kind === "consume");
-    return `consume ${consume?.label ?? ""}`;
+    const handler = c.stops.find((s) => s.kind === "handler") ?? consume;
+    return `consume ${consume?.label ?? ""} · ${handler?.symbol ?? ""}`;
   }
   const route = c.stops.find((s) => s.kind === "route");
   if (c.entry.startsWith("page:")) {
@@ -220,35 +229,73 @@ function makeChain(entry: string, rKey: string, stops: ChainStop[], unresolved: 
 
 type RouteTarget = Extract<UiLink["target"], { kind: "route" }>;
 
-/** One chain per (entry, routeKey), memo (g):
+/** A route's identity: repo + where it is registered + method + effective path. Two routers that both
+ * register `GET /:id` share a routeKey but never an identity. */
+function routeIdentity(er: EffectiveRoute): string {
+  return [er.repo, er.route.at.file, String(er.route.at.line), er.route.method, er.effectivePath].join("\0");
+}
+
+/** Chain route key per route identity (author-approved amendment to memo (g)): the plain routeKey when
+ * no other route shares it; otherwise `<routeKey>@<at.file>#<n>`, n = 1-based position of the route
+ * among the colliding routes ordered by (at.file, at.line). */
+function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
+  const byIdentity = new Map<string, EffectiveRoute>();
+  for (const er of routes) if (!byIdentity.has(routeIdentity(er))) byIdentity.set(routeIdentity(er), er);
+  const groups = new Map<string, EffectiveRoute[]>();
+  for (const er of byIdentity.values()) {
+    const key = routeKey(er);
+    groups.set(key, [...(groups.get(key) ?? []), er]);
+  }
+  const out = new Map<string, string>();
+  for (const [key, group] of groups) {
+    if (group.length === 1) {
+      out.set(routeIdentity(group[0]!), key);
+      continue;
+    }
+    group.sort((a, b) => compare(a.route.at.file, b.route.at.file) || a.route.at.line - b.route.at.line
+      || compare(routeIdentity(a), routeIdentity(b)));
+    group.forEach((er, i) => out.set(routeIdentity(er), `${key}@${er.route.at.file}#${i + 1}`));
+  }
+  return out;
+}
+
+/** One chain per (entry, routeKey), memo (g) as amended:
  * - each page reaching a call that targets a route -> `page:<repo>:<route>` chain;
  * - each page reaching a call that matches no route -> a partial `page:` chain with routeKey "" carrying
  *   one unresolved entry per unmatched call (calls with no literal URL text are left to check's
  *   "unresolved-url"; external calls are third-party, not broken);
- * - each route that no page chain covers -> `route:<routeKey>` chain;
- * - each consumer -> `consumer:<repo>:<queue>` chain.
- * Inputs from linkAll are sorted, so when two sources produce the same id the first one wins. */
-export function buildChains(ws: WorkspaceData, links: LinkResult): Chain[] {
-  const backendByRouteKey = new Map(links.backend.map((b) => [routeKey(b.route), b] as const));
+ * - each route that no page chain covers -> `route:<chain route key>` chain (see chainRouteKeys);
+ * - each consumer -> `consumer:<repo>:<queue>#<handler file>#<handler symbol>` chain, so two consumers of
+ *   one queue in one repo are two chains.
+ * The backend half of a page chain is looked up by route identity, never by routeKey alone.
+ * Inputs from linkAll are sorted, so when two sources produce the same id the first one wins.
+ * `symbolLine` (from runLinker's code index) gives function/handler stops their own first line. */
+export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: SymbolLineLookup = () => undefined): Chain[] {
+  const ctx: Ctx = { ws, symbolLine };
+  const uiTargets = links.ui.flatMap((l) => (l.target.kind === "route" ? [l.target.route] : []));
+  const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
+  const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
+  const backendByIdentity = new Map<string, BackendLink>();
+  for (const b of links.backend) if (!backendByIdentity.has(routeIdentity(b.route))) backendByIdentity.set(routeIdentity(b.route), b);
   const byId = new Map<string, Chain>();
   const add = (c: Chain) => {
     if (!byId.has(c.id)) byId.set(c.id, c);
   };
-  const pageRouteKeys = new Set<string>();
+  const pageRoutes = new Set<string>();
 
   for (const uiLink of links.ui) {
     if (uiLink.target.kind !== "route") continue;
     const target: RouteTarget = uiLink.target;
-    const rKey = routeKey(target.route);
-    const backend = backendByRouteKey.get(rKey);
+    const rKey = keyOf(target.route);
+    const backend = backendByIdentity.get(routeIdentity(target.route));
     for (const page of uiLink.pages) {
       const entry = `page:${uiLink.repo}:${page.page.route}`;
       const stops = [
-        ...uiStops(ws, uiLink, page),
+        ...uiStops(ctx, uiLink, page),
         routeStop(ws, target.route, hop(target.confidence, target.reason)),
-        ...(backend ? backendStops(ws, backend) : []),
+        ...(backend ? backendStops(ctx, backend) : []),
       ];
-      pageRouteKeys.add(rKey);
+      pageRoutes.add(routeIdentity(target.route));
       add(makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
     }
   }
@@ -268,22 +315,22 @@ export function buildChains(ws: WorkspaceData, links: LinkResult): Chain[] {
         }
         continue;
       }
-      add(makeChain(entry, "", uiStops(ws, uiLink, page), [u]));
+      add(makeChain(entry, "", uiStops(ctx, uiLink, page), [u]));
     }
   }
 
   for (const b of links.backend) {
-    const rKey = routeKey(b.route);
-    if (pageRouteKeys.has(rKey)) continue;
+    if (pageRoutes.has(routeIdentity(b.route))) continue;
+    const rKey = keyOf(b.route);
     const entry = `route:${rKey}`;
     const routeHop = b.route.mountsKnown ? hop("exact") : hop("guess", "mount prefix unknown");
-    const stops = [routeStop(ws, b.route, routeHop), ...backendStops(ws, b)];
+    const stops = [routeStop(ws, b.route, routeHop), ...backendStops(ctx, b)];
     add(makeChain(entry, rKey, stops, b.unresolved.map((u) => toUnresolved(b.repo, u))));
   }
 
   for (const c of links.consumers) {
-    const entry = `consumer:${c.repo}:${c.consume.queue}`;
-    add(makeChain(entry, "", consumerStops(ws, c), c.unresolved.map((u) => toUnresolved(c.repo, u))));
+    const entry = `consumer:${c.repo}:${c.consume.queue}#${c.handler.file}#${c.handler.symbol}`;
+    add(makeChain(entry, "", consumerStops(ctx, c), c.unresolved.map((u) => toUnresolved(c.repo, u))));
   }
 
   return [...byId.values()];

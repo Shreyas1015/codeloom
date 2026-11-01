@@ -136,10 +136,10 @@ describe("buildChains", () => {
     expect(health.complete).toBe(false); // no db/queue hits: check's "no-store"
     expect(health.name).toBe("GET /health");
 
-    const consumer = chains.find((c) => c.entry === "consumer:api2:jobs")!;
+    const consumer = chains.find((c) => c.entry === "consumer:api2:jobs#src/worker.ts#handleJob")!;
     expect(consumer.routeKey).toBe("");
     expect(consumer.complete).toBe(true);
-    expect(consumer.name).toBe("consume jobs");
+    expect(consumer.name).toBe("consume jobs · handleJob");
     expect(consumer.stops[0]).toMatchObject({ lane: "queue", kind: "consume", label: "jobs" });
   });
 
@@ -149,7 +149,7 @@ describe("buildChains", () => {
   });
 
   it("defaultChainName covers page, route-only and consumer chains", () => {
-    expect(defaultChainName({ entry: "consumer:b:q", stops: [{ lane: "queue", kind: "consume", repo: "b", file: "f", line: 1, symbol: "s", label: "q", hop: { confidence: "exact" } }] })).toBe("consume q");
+    expect(defaultChainName({ entry: "consumer:b:q", stops: [{ lane: "queue", kind: "consume", repo: "b", file: "f", line: 1, symbol: "s", label: "q", hop: { confidence: "exact" } }] })).toBe("consume q · s");
     expect(defaultChainName({ entry: "route:b:GET /x", stops: [{ lane: "api", kind: "route", repo: "b", file: "f", line: 1, symbol: "s", label: "GET /x", hop: { confidence: "exact" } }] })).toBe("GET /x");
   });
 });
@@ -222,7 +222,7 @@ describe("buildChains — edge cases", () => {
     const { ws, links } = scenario();
     links.ui[0]!.pages = [];
     const chains = buildChains(ws, links);
-    expect(chains.map((c) => c.entry).sort()).toEqual(["consumer:api2:jobs", "route:api2:GET /health", "route:api:POST /api/items"]);
+    expect(chains.map((c) => c.entry).sort()).toEqual(["consumer:api2:jobs#src/worker.ts#handleJob", "route:api2:GET /health", "route:api:POST /api/items"]);
   });
 
   it("a UI call that matches no route becomes a partial page chain with routeKey \"\" and an unresolved entry", () => {
@@ -255,6 +255,82 @@ describe("buildChains — edge cases", () => {
     const chains = buildChains(ws, links);
     expect(new Set(chains.map((c) => c.id)).size).toBe(chains.length);
     expect(chains.find((c) => c.entry === "page:web:/items/new")!.stops.find((s) => s.kind === "call")!.line).toBe(3);
+  });
+});
+
+describe("buildChains — distinct ids (Task 12 review fixes 2-4)", () => {
+  it("two consumers of one queue in one repo give two chains, each with its own store", () => {
+    const { ws, links } = scenario();
+    const otherRef = { repo: "api2", file: "src/other-worker.ts", symbol: "handleOther" };
+    links.consumers.push({
+      repo: "api2", consume: { queue: "jobs", op: "consume", at: { file: "src/other-worker.ts", line: 2, symbol: "startOther" } }, handler: otherRef,
+      hits: [{ kind: "db", access: { table: "other_log", op: "insert", via: "prisma", at: { file: "src/other-worker.ts", line: 6, symbol: "handleOther" } }, viaPath: [{ ref: otherRef, depth: 0 }] }],
+      unresolved: [],
+    });
+    const consumers = buildChains(ws, links).filter((c) => c.entry.startsWith("consumer:"));
+    expect(consumers.map((c) => [c.entry, c.name, c.stops.filter((s) => s.kind === "db").map((s) => s.label)])).toEqual([
+      ["consumer:api2:jobs#src/worker.ts#handleJob", "consume jobs · handleJob", ["jobs_log"]],
+      ["consumer:api2:jobs#src/other-worker.ts#handleOther", "consume jobs · handleOther", ["other_log"]],
+    ]);
+    expect(new Set(consumers.map((c) => c.id)).size).toBe(2);
+  });
+
+  it("an inline consumer (handler = the consume call's own symbol) is named after that symbol", () => {
+    const { ws, links } = scenario();
+    links.consumers[0]!.handler = { repo: "api2", file: "src/worker.ts", symbol: "startWorker" };
+    const c = buildChains(ws, links).find((x) => x.entry.startsWith("consumer:"))!;
+    expect(c.entry).toBe("consumer:api2:jobs#src/worker.ts#startWorker");
+    expect(c.name).toBe("consume jobs · startWorker");
+  });
+
+  function twoRouters(): { ws: WorkspaceData; links: LinkResult } {
+    const { ws, links } = scenario();
+    const mk = (file: string, handler: string, table: string): BackendLink => {
+      const route: Route = { method: "GET", path: "/:id", handler, inline: false, framework: "express", at: { file, line: 4, symbol: "<module>" }, handlerFile: file };
+      const ref = { repo: "api", file, symbol: handler };
+      return {
+        repo: "api", route: { repo: "api", route, effectivePath: "/:id", mountsKnown: true, mounts: [] }, handler: ref, handlerConfidence: "exact",
+        hits: [{ kind: "db", access: { table, op: "read", via: "prisma", at: { file, line: 9, symbol: handler } }, viaPath: [{ ref, depth: 0 }] }],
+        unresolved: [],
+      };
+    };
+    // linkBackend sorts by effectivePath, method, at.file: the "b" router first would still number second.
+    links.backend.push(mk("src/users.ts", "getUser", "users"), mk("src/orders.ts", "getOrder", "orders"));
+    return { ws, links };
+  }
+
+  it("two routers with the same METHOD path give two route chains, each with its own hits", () => {
+    const { ws, links } = twoRouters();
+    const routes = buildChains(ws, links).filter((c) => c.routeKey.startsWith("api:GET /:id"));
+    expect(routes.map((c) => [c.entry, c.routeKey, c.stops.filter((s) => s.kind === "db").map((s) => s.label)]).sort()).toEqual([
+      ["route:api:GET /:id@src/orders.ts#1", "api:GET /:id@src/orders.ts#1", ["orders"]],
+      ["route:api:GET /:id@src/users.ts#2", "api:GET /:id@src/users.ts#2", ["users"]],
+    ]);
+    expect(routes.every((c) => c.name === "GET /:id")).toBe(true);
+  });
+
+  it("a page call to one of two colliding routes gets only that route's handler and hits", () => {
+    const { ws, links } = twoRouters();
+    const users = links.backend.find((b) => b.route.route.at.file === "src/users.ts")!;
+    // linkUi builds its own EffectiveRoute objects: match by identity, not by object reference.
+    links.ui[0]!.target = { kind: "route", route: structuredClone(users.route), confidence: "exact" };
+    const chains = buildChains(ws, links);
+    const page = chains.find((c) => c.entry === "page:web:/items/new")!;
+    expect(page.routeKey).toBe("api:GET /:id@src/users.ts#2");
+    expect(page.stops.filter((s) => s.kind === "handler").map((s) => s.symbol)).toEqual(["getUser"]);
+    expect(page.stops.filter((s) => s.kind === "db").map((s) => s.label)).toEqual(["users"]);
+    // users is covered by the page chain; orders still gets its route-entry chain.
+    expect(chains.filter((c) => c.entry.startsWith("route:api:GET /:id")).map((c) => c.entry)).toEqual(["route:api:GET /:id@src/orders.ts#1"]);
+  });
+
+  it("function and handler stops take the symbol's own first line when a lookup is given", () => {
+    const { ws, links } = scenario();
+    const lines: Record<string, number> = { "api:app/controllers/items_controller.ts#ItemsController.store": 7 };
+    const page = buildChains(ws, links, (repo, file, symbol) => lines[`${repo}:${file}#${symbol}`])
+      .find((c) => c.entry === "page:web:/items/new")!;
+    expect(page.stops.find((s) => s.kind === "handler")!.line).toBe(7);
+    // no lookup hit: falls back to the nearest graph node (the class, lines [2, 10])
+    expect(buildChains(ws, links).find((c) => c.entry === "page:web:/items/new")!.stops.find((s) => s.kind === "handler")!.line).toBe(2);
   });
 });
 
