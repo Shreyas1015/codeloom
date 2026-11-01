@@ -265,6 +265,83 @@ describe("linkUi", () => {
       const links = linkUi({ ws: ws([spa]), resolvers: new Map([["spa", resolverFor(spaFiles, "spa")]]) });
       expect(links[0]!.pages).toEqual([]);
     });
+
+    it("resolves a page component reached through a barrel re-export", () => {
+      const barrelFiles = {
+        "src/App.tsx": [
+          'import { Customers } from "./customers-index";',
+          "export function App() {",
+          "  return (",
+          "    <Routes>",
+          '      <Route path="/customers" element={<Customers />} />',
+          "    </Routes>",
+          "  );",
+          "}",
+          "",
+        ].join("\n"),
+        "src/customers-index.ts": 'export { default as Customers } from "./customers";\n',
+        "src/customers.tsx": [
+          'import { useCustomers } from "./hooks";',
+          "export default function Customers() {",
+          "  const list = useCustomers();",
+          "  return null;",
+          "}",
+          "",
+        ].join("\n"),
+        "src/hooks.ts": [
+          "export function useCustomers() {",
+          '  return fetch("/api/customers");',
+          "}",
+          "",
+        ].join("\n"),
+      };
+      const custCall: HttpCall = { method: "GET", path: "/api/customers", raw: '"/api/customers"', resolved: true, client: "fetch", at: { file: "src/hooks.ts", line: 2, symbol: "useCustomers" }, kind: "literal" };
+      const spa = repo("spa", {
+        pages: [{ route: "/customers", file: "src/App.tsx", line: 5, framework: "react-router", component: { name: "Customers", importSource: "./customers-index" } }],
+        httpCalls: [custCall],
+      });
+      const links = linkUi({ ws: ws([spa]), resolvers: new Map([["spa", resolverFor(barrelFiles, "spa")]]) });
+      expect(links[0]!.pages.map((p) => p.page.route)).toEqual(["/customers"]);
+      expect(links[0]!.pages[0]!.path.map((s) => s.symbol)).toEqual(["Customers", "useCustomers"]);
+    });
+
+    it("resolves a page component reached through a default import", () => {
+      const defaultImportFiles = {
+        "src/App.tsx": [
+          'import Orders from "./orders";',
+          "export function App() {",
+          "  return (",
+          "    <Routes>",
+          '      <Route path="/orders" element={<Orders />} />',
+          "    </Routes>",
+          "  );",
+          "}",
+          "",
+        ].join("\n"),
+        "src/orders.tsx": [
+          'import { useOrders } from "./hooks";',
+          "export default function Orders() {",
+          "  const list = useOrders();",
+          "  return null;",
+          "}",
+          "",
+        ].join("\n"),
+        "src/hooks.ts": [
+          "export function useOrders() {",
+          '  return fetch("/api/orders");',
+          "}",
+          "",
+        ].join("\n"),
+      };
+      const ordersCall: HttpCall = { method: "GET", path: "/api/orders", raw: '"/api/orders"', resolved: true, client: "fetch", at: { file: "src/hooks.ts", line: 2, symbol: "useOrders" }, kind: "literal" };
+      const spa = repo("spa", {
+        pages: [{ route: "/orders", file: "src/App.tsx", line: 5, framework: "react-router", component: { name: "Orders", importSource: "./orders" } }],
+        httpCalls: [ordersCall],
+      });
+      const links = linkUi({ ws: ws([spa]), resolvers: new Map([["spa", resolverFor(defaultImportFiles, "spa")]]) });
+      expect(links[0]!.pages.map((p) => p.page.route)).toEqual(["/orders"]);
+      expect(links[0]!.pages[0]!.path.map((s) => s.symbol)).toEqual(["Orders", "useOrders"]);
+    });
   });
   it("a Next page starts from the file's default export even when a helper comes first", () => {
     const files = {

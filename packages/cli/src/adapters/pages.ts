@@ -31,12 +31,26 @@ interface RouteInfo {
   component?: string;
 }
 
-/** `<X />` / `<X></X>` / `<A.B />` -> its tag name; anything else (a call, a conditional) -> undefined. */
+/**
+ * `<X />` / `<A.B />` -> its tag name directly. `<X>...</X>` with no real children behaves the same way
+ * (its own tag name) — a leaf, just like a self-closing element. With exactly one JSX child, unwraps
+ * through it recursively, so a wrapper like `<RequireAuth><Customers/></RequireAuth>` resolves to
+ * "Customers" at any wrapper depth (an attribute such as `fallback={<Spinner/>}` is not a child, so
+ * `<Suspense fallback={<Spinner/>}><Orders/></Suspense>` also resolves to "Orders"). Whitespace-only
+ * text children are ignored; anything else — zero vs. multiple real children, or a non-JSX expression
+ * such as a call or conditional — is ambiguous -> undefined.
+ */
 function jsxTagName(expr: ts.Expression | undefined): string | undefined {
   if (!expr) return undefined;
   while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
   if (ts.isJsxSelfClosingElement(expr)) return expr.tagName.getText();
-  if (ts.isJsxElement(expr)) return expr.openingElement.tagName.getText();
+  if (!ts.isJsxElement(expr)) return undefined;
+  const children = expr.children.filter((c) => !(ts.isJsxText(c) && c.text.trim() === ""));
+  if (children.length === 0) return expr.openingElement.tagName.getText();
+  const [only] = children;
+  if (children.length === 1 && only && (ts.isJsxElement(only) || ts.isJsxSelfClosingElement(only))) {
+    return jsxTagName(only);
+  }
   return undefined;
 }
 

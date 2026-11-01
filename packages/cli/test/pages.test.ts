@@ -115,4 +115,26 @@ describe("detectPages", () => {
       ["/about", { name: "About" }],
     ]);
   });
+
+  it("unwraps single-child route wrappers to find the page component, at any depth", () => {
+    const ctx = ctxWith("react-router-dom");
+    const jsx = `
+      import { Customers } from "./customers";
+      import { Orders } from "./orders";
+      export const App = () => (
+        <Routes>
+          <Route path="/customers" element={<RequireAuth><Customers /></RequireAuth>} />
+          <Route path="/orders" element={<Suspense fallback={<Spinner />}><Orders /></Suspense>} />
+          <Route path="/nested" element={<Layout><RequireAuth><Customers /></RequireAuth></Layout>} />
+          <Route path="/ambiguous" element={<RequireAuth><Customers /><Orders /></RequireAuth>} />
+        </Routes>
+      );`;
+    const pages = detectPages(parsed("src/App.tsx", jsx), ctx);
+    expect(pages.map((p) => [p.route, p.component])).toEqual([
+      ["/customers", { name: "Customers", importSource: "./customers" }],
+      ["/orders", { name: "Orders", importSource: "./orders" }],
+      ["/nested", { name: "Customers", importSource: "./customers" }],
+      ["/ambiguous", undefined],
+    ]);
+  });
 });

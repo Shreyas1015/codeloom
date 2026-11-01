@@ -1,6 +1,6 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
-import { enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
+import { absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
 import type { ParsedFile } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
@@ -162,8 +162,6 @@ function resolveClientReceiver(
   return undefined;
 }
 
-const ABSOLUTE_HOST_RE = /^\s*[a-z][a-z0-9+.-]*:\/\/([^/?#\s]+)/i;
-
 export function detectHttpClients(file: ParsedFile): HttpClient[] {
   if (!file.sf) return [];
   const aliases = collectKnownLibAliases(file.sf);
@@ -181,6 +179,7 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
     if (!receiver.knownLib && !hasBaseOption(obj)) return;
     const baseNode = baseOption(obj);
     const literal = baseNode && stringValue(baseNode);
+    const baseHost = literal !== undefined ? absoluteHost(literal) : undefined;
     out.push({
       name: decl.name.text,
       file: file.rel,
@@ -188,7 +187,7 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
       factory,
       ...(baseNode && literal === undefined ? { baseExpr: baseNode.getText() } : {}),
       ...(literal !== undefined ? { baseLiteral: normalizePath(literal) } : {}),
-      ...(literal !== undefined && ABSOLUTE_HOST_RE.test(literal) ? { baseHost: literal.match(ABSOLUTE_HOST_RE)![1]!.toLowerCase() } : {}),
+      ...(baseHost !== undefined ? { baseHost } : {}),
     });
   });
   return out;

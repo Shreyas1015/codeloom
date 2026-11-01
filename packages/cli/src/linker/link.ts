@@ -9,6 +9,7 @@ import type { EffectiveRoute } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
 import type { Confidence, HttpCall, HttpClient, UiPage } from "../store/schemas.js";
 import { compare } from "../util.js";
+import { absoluteHost } from "../adapters/ast.js";
 
 export interface LinkInput {
   ws: WorkspaceData;
@@ -103,11 +104,6 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
   return reaches;
 }
 
-/** Host (lowercased, port kept) of an absolute URL at the start of `text` (quotes/backtick allowed). */
-function urlHost(text: string): string | undefined {
-  return text.match(/^\s*[`'"]?[a-z][a-z0-9+.-]*:\/\/([^/'"`?#\s]+)/i)?.[1]?.toLowerCase();
-}
-
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
 
 /** Hosts named in any repo's apiBase (entries may be env var names, bare hosts, or full URLs). */
@@ -115,7 +111,7 @@ function apiBaseHosts(repos: RepoData[]): Set<string> {
   const out = new Set<string>();
   for (const r of repos) {
     for (const entry of r.ref.apiBase ?? []) {
-      const host = urlHost(entry) ?? entry.trim().split("/")[0]!.toLowerCase();
+      const host = absoluteHost(entry) ?? entry.trim().split("/")[0]!.toLowerCase();
       if (host !== "") out.add(host);
     }
   }
@@ -134,7 +130,7 @@ const ENV_VAR_RE = /process\.env\.(\w+)/;
 /** Text of whatever base expression a call carries, or its client's, to match against `apiBase` hints. */
 function baseHintText(call: HttpCall, clients: HttpClient[]): string {
   if (call.base) return call.base;
-  const own = urlHost(call.raw);
+  const own = absoluteHost(call.raw);
   if (own) return own;
   const client = clients.find((c) => c.name === call.client);
   return client?.baseExpr ?? client?.baseHost ?? "";
@@ -173,7 +169,7 @@ function resolveTarget(
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
   // A hardcoded absolute URL (no stripped `base` expression) names its host outright; otherwise the
   // client's literal baseURL may. Loopback / apiBase hosts are ours (strip and match), others external.
-  const ownHost = call.base === undefined ? urlHost(call.raw) : undefined;
+  const ownHost = call.base === undefined ? absoluteHost(call.raw) : undefined;
   const host = ownHost ?? clients.find((c) => c.name === call.client)?.baseHost;
   if (host !== undefined && !isInternalHost(host, knownHosts)) return { kind: "external", base: host };
   if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };

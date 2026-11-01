@@ -255,6 +255,15 @@ function paramName(expr: ts.Expression): string | undefined {
   return undefined;
 }
 
+const ABSOLUTE_HOST_RE = /^\s*[`'"]?[a-z][a-z0-9+.-]*:\/\/([^/'"`?#\s]+)/i;
+
+/** Host (lowercased, port kept) of an absolute URL at the start of `text` — an optional leading quote
+ * or backtick is allowed, so this works equally on raw source text (`call.raw`) and an already-unquoted
+ * string value (a client's literal baseURL). Shared by http-calls.ts and the UI linker. */
+export function absoluteHost(text: string): string | undefined {
+  return text.match(ABSOLUTE_HOST_RE)?.[1]?.toLowerCase();
+}
+
 export function normalizePath(p: string): string {
   let s = p.trim().replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, "");
   s = s.split("?")[0]!.split("#")[0]!;
