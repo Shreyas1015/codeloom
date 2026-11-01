@@ -217,6 +217,17 @@ describe("buildChains — confidence folding (review fixes from Tasks 9-11)", ()
   });
 });
 
+describe("buildChains — wrapper-derived UI calls (H2)", () => {
+  it("a call derived through an HTTP wrapper puts its own confidence on the call stop", () => {
+    const { ws, links } = scenario();
+    links.ui[0]!.call = { ...links.ui[0]!.call, via: "wrapper", wrapper: "lib/http.ts#requests.post", confidence: "param" };
+    const page = buildChains(ws, links).find((c) => c.entry === "page:web:/items/new")!;
+    const call = page.stops.find((s) => s.kind === "call")!;
+    expect(call.hop).toEqual({ confidence: "param", reason: "via wrapper lib/http.ts#requests.post" });
+    expect(page.confidence).toBe("param");
+  });
+});
+
 describe("buildChains — edge cases", () => {
   it("a route whose UI call is reached by no page still gets a route-entry chain", () => {
     const { ws, links } = scenario();

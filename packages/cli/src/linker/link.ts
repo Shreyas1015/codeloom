@@ -11,6 +11,8 @@ import type { Confidence, DbAccess, HttpCall, HttpClient, HttpMethod, Loc, Queue
 import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
+import { wrapperCalls } from "./wrappers.js";
+import type { LinkedCall } from "./wrappers.js";
 
 export interface LinkInput {
   ws: WorkspaceData;
@@ -32,7 +34,8 @@ export interface PageReach {
 
 export interface UiLink {
   repo: string;
-  call: HttpCall;
+  /** An adapter HttpCall, or one derived from a call to an HTTP wrapper (`via: "wrapper"`). */
+  call: LinkedCall;
   pages: PageReach[];
   target:
     | { kind: "route"; route: EffectiveRoute; confidence: Confidence; reason?: string }
@@ -164,13 +167,14 @@ export function callPathWithClient(call: HttpCall, clients: HttpClient[]): strin
 }
 
 function resolveTarget(
-  call: HttpCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
+  call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
   knownHosts: Set<string>,
 ): UiLink["target"] {
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
   // A hardcoded absolute URL (no stripped `base` expression) names its host outright; otherwise the
   // client's literal baseURL may. Loopback / apiBase hosts are ours (strip and match), others external.
-  const ownHost = call.base === undefined ? absoluteHost(call.raw) : undefined;
+  // A wrapper-derived call's literal base host plays the same role (its path already carries the base path).
+  const ownHost = call.host ?? (call.base === undefined ? absoluteHost(call.raw) : undefined);
   const host = ownHost ?? clients.find((c) => c.name === call.client)?.baseHost;
   if (host !== undefined && !isInternalHost(host, knownHosts)) return { kind: "external", base: host };
   if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };
@@ -203,7 +207,13 @@ export function linkUi(input: LinkInput): UiLink[] {
   const knownHosts = apiBaseHosts(input.ws.repos);
   const links: UiLink[] = [];
   for (const repo of input.ws.repos) {
-    for (const call of repo.endpoints.httpCalls) {
+    const resolver = input.resolvers.get(repo.ref.id);
+    // A wrapper call on a line where the adapter already sees an HTTP call (e.g. `api.get("/x")` on an
+    // object named like a client) is the same call: keep the adapter's.
+    const seen = new Set(repo.endpoints.httpCalls.map((c) => `${c.at.file}:${c.at.line}`));
+    const derived = resolver ? wrapperCalls(resolver).filter((c) => !seen.has(`${c.at.file}:${c.at.line}`)) : [];
+    const calls: LinkedCall[] = [...repo.endpoints.httpCalls, ...derived];
+    for (const call of calls) {
       links.push({
         repo: repo.ref.id,
         call,

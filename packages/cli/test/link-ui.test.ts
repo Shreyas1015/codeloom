@@ -446,3 +446,114 @@ describe("linkUi", () => {
     expect(links.map((l) => `${l.call.method} ${l.call.path}`)).toEqual(["GET /a", "GET /z", "POST /b"]);
   });
 });
+
+describe("linkUi — HTTP wrapper calls (H2)", () => {
+  const route = (method: HttpCall["method"], path: string): EndpointsFile["routes"][number] => ({
+    method, path, handler: `${method} ${path}`, inline: true, framework: "express",
+    at: { file: "src/routes.ts", line: 1, symbol: `${method} ${path}` },
+  });
+  const apiRoutes = [
+    route("GET", "/api/user"), route("GET", "/api/articles"), route("GET", "/api/articles/:slug"),
+    route("DELETE", "/api/articles/:slug/comments/:id"), route("GET", "/users"),
+  ];
+
+  const agentJs = `import superagentPromise from 'superagent-promise';
+import _superagent from 'superagent';
+const superagent = superagentPromise(_superagent, global.Promise);
+const API_ROOT = 'https://conduit.productionready.io/api';
+const encode = encodeURIComponent;
+const responseBody = res => res.body;
+const requests = {
+  del: url =>
+    superagent.del(\`\${API_ROOT}\${url}\`).then(responseBody),
+  get: url =>
+    superagent.get(\`\${API_ROOT}\${url}\`).then(responseBody),
+};
+const limit = (count, p) => \`limit=\${count}&offset=\${p ? p * count : 0}\`;
+const Auth = {
+  current: () =>
+    requests.get('/user'),
+};
+const Articles = {
+  all: page =>
+    requests.get(\`/articles?\${limit(10, page)}\`),
+  get: slug =>
+    requests.get(\`/articles/\${slug}\`),
+};
+const Comments = {
+  delete: (slug, commentId) =>
+    requests.del(\`/articles/\${slug}/comments/\${commentId}\`),
+};
+export default { Articles, Auth, Comments };
+`;
+
+  function link(files: Record<string, string>, apiBase?: string[]) {
+    const ui = repo("ui", {}, { role: "ui" });
+    const api = repo("api", { routes: apiRoutes }, { role: "api", ...(apiBase ? { apiBase } : {}) });
+    const resolvers = new Map([["ui", resolverFor(files, "ui")], ["api", resolverFor({}, "api")]]);
+    return linkUi({ ws: ws([ui, api]), resolvers });
+  }
+
+  it("turns calls to the realworld `requests` wrapper into HTTP calls at the caller, at best param", () => {
+    const links = link({ "src/agent.js": agentJs }, ["conduit.productionready.io"]);
+    expect(links.map((l) => ({
+      at: `${l.call.at.file}#${l.call.at.symbol}`, method: l.call.method, path: l.call.path, via: l.call.via,
+      confidence: l.call.confidence,
+      target: l.target.kind === "route" ? `${l.target.route.route.method} ${l.target.route.effectivePath}` : l.target.kind,
+    }))).toEqual([
+      { at: "src/agent.js#Auth.current", method: "GET", path: "/api/user", via: "wrapper", confidence: "param", target: "GET /api/user" },
+      { at: "src/agent.js#Articles.all", method: "GET", path: "/api/articles", via: "wrapper", confidence: "param", target: "GET /api/articles" },
+      { at: "src/agent.js#Articles.get", method: "GET", path: "/api/articles/:slug", via: "wrapper", confidence: "param", target: "GET /api/articles/:slug" },
+      { at: "src/agent.js#Comments.delete", method: "DELETE", path: "/api/articles/:slug/comments/:commentId", via: "wrapper", confidence: "param", target: "DELETE /api/articles/:slug/comments/:id" },
+    ]);
+  });
+
+  it("treats a wrapper whose literal base names a foreign host as external", () => {
+    const links = link({ "src/agent.js": agentJs });
+    expect(links.map((l) => l.target)).toEqual(Array(4).fill({ kind: "external", base: "conduit.productionready.io" }));
+  });
+
+  it("follows a plain fetch wrapper imported from another file: apiGet(\"/users\")", () => {
+    const links = link({
+      "src/api.ts": "const API = process.env.NEXT_PUBLIC_API_URL;\nexport function apiGet(path: string) { return fetch(`${API}${path}`); }\n",
+      "src/users.ts": 'import { apiGet } from "./api";\nexport function loadUsers() { return apiGet("/users"); }\n',
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({
+      call: { method: "GET", path: "/users", base: "API", via: "wrapper", confidence: "param", at: { file: "src/users.ts", line: 2, symbol: "loadUsers" } },
+      target: { kind: "route" },
+    });
+  });
+
+  it("leaves a wrapper called with a non-literal argument unresolved", () => {
+    const links = link({
+      "src/api.ts": "export function apiGet(path: string) { return fetch(`${process.env.API}${path}`); }\n",
+      "src/users.ts": 'import { apiGet } from "./api";\nexport function load(p: string) { return apiGet(p); }\n',
+    });
+    // The wrapper's own fetch (adapter-style) is not in endpoints here; only the derived call is linked.
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ call: { kind: "unknown", via: "wrapper", at: { symbol: "load" } }, target: { kind: "unresolved" } });
+  });
+
+  it("does not add a wrapper call where the adapter already found a call on the same line", () => {
+    const files = {
+      "src/api.ts": "const api = { get: (url: string) => fetch(`${process.env.API}${url}`) };\nexport function load() { return api.get(\"/users\"); }\n",
+    };
+    const adapterCall: HttpCall = {
+      method: "GET", path: "/users", raw: '"/users"', resolved: true, client: "api", kind: "literal",
+      at: { file: "src/api.ts", line: 2, symbol: "load" },
+    };
+    const ui = repo("ui", { httpCalls: [adapterCall] }, { role: "ui" });
+    const api = repo("api", { routes: apiRoutes }, { role: "api" });
+    const links = linkUi({ ws: ws([ui, api]), resolvers: new Map([["ui", resolverFor(files, "ui")], ["api", resolverFor({}, "api")]]) });
+    expect(links.map((l) => l.call)).toEqual([adapterCall]);
+  });
+
+  it("does not treat a function that hard-codes its URL as a wrapper", () => {
+    const links = link({
+      "src/api.ts": 'export function listUsers(page: number) { return fetch(`/users?page=${page}`); }\n',
+      "src/users.ts": 'import { listUsers } from "./api";\nexport function load() { return listUsers(1); }\n',
+    });
+    expect(links).toEqual([]);
+  });
+});

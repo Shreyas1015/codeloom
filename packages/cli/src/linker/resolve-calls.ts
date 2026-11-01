@@ -35,6 +35,8 @@ export interface CallResolver {
   resolveName(file: string, name: string): SymbolRef | null;
   /** The cached per-file index this resolver was built over (used by linkUi / findHandler with symbolAt). */
   fileIndex(file: string): FileCodeIndex | undefined;
+  /** Every file in the code index, in code-point order. */
+  indexedFiles(): string[];
 }
 
 export const MAX_DEPTH = 6;
@@ -424,6 +426,7 @@ export function createCallResolver(input: RepoResolveInput): CallResolver {
       return hit ? { repo: input.repo, file: hit.file, symbol: hit.symbol } : null;
     },
     fileIndex: (file) => input.index.get(file),
+    indexedFiles: () => [...input.index.keys()].sort(compare),
   };
 }
 

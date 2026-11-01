@@ -94,7 +94,11 @@ function uiStops(ctx: Ctx, link: UiLink, page: PageReach): ChainStop[] {
     lane: "ui" as const, kind: "call" as const, repo: link.repo,
     nodeId: nearestNodeId(graph, link.call.at.file, link.call.at.symbol),
     file: link.call.at.file, line: link.call.at.line, symbol: link.call.at.symbol,
-    op: link.call.method, label: link.call.path, hop: hop("exact"),
+    op: link.call.method, label: link.call.path,
+    // An adapter call is seen directly (exact); a wrapper-derived one carries its own, at best "param".
+    hop: link.call.via === "wrapper"
+      ? hop(link.call.confidence ?? "param", `via wrapper ${link.call.wrapper ?? ""}`.trimEnd())
+      : hop("exact"),
   }));
   return stops;
 }
