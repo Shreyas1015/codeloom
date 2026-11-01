@@ -652,7 +652,7 @@ export function detectRouters(file: ParsedFile, ctx: AdapterContext): RouterDef[
   return [...defs.entries()]
     .filter(([, d]) => d.app || d.exports.size > 0)
     .map(([name, d]): RouterDef => ({
-      name, file: file.rel, exports: [...d.exports].sort(), ...(d.app ? { app: true } : {}), packageRoot: ctx.packageRoot,
+      name, file: file.rel, exports: [...d.exports].sort(compare), ...(d.app ? { app: true } : {}), packageRoot: ctx.packageRoot,
     }))
     .sort((a, b) => compare(a.name, b.name));
 }

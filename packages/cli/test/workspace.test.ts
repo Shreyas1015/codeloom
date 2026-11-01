@@ -24,6 +24,15 @@ describe("discoverRepos", () => {
   });
 });
 
+describe("discoverRepos ordering (final review item 5)", () => {
+  it("sorts repo ids by code point (util.compare), never by locale", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "a.ts": "" }, join(root, "alpha"));
+    makeRepo({ "b.ts": "" }, join(root, "Zeta"));
+    expect(discoverRepos(root).map((r) => r.id)).toEqual(["Zeta", "alpha"]);
+  });
+});
+
 describe("loadWorkspace", () => {
   it("uses the workspace file when present", () => {
     const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { CodeloomError, dataError } from "../errors.js";
+import { compare } from "../util.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
 import { type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
@@ -12,7 +13,7 @@ export function discoverRepos(root: string): RepoRef[] {
   return readdirSync(abs, { withFileTypes: true })
     .filter((d) => d.isDirectory() && !d.name.startsWith(".") && existsSync(join(abs, d.name, ".git")))
     .map((d) => ({ id: d.name, path: d.name }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => compare(a.id, b.id));
 }
 
 export function findWorkspaceRoot(start: string): string | null {
