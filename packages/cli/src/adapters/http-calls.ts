@@ -37,49 +37,110 @@ function looksLikeUrl(text: string): boolean {
   return /^\s*(https?:\/\/|\/)/.test(text) || text.includes("/");
 }
 
+/** Module names that are superagent (or a promise wrapper around it), e.g. "superagent", "superagent-promise". */
+const SUPERAGENT_MODULE_RE = /^superagent(?:$|[-/])/;
+/** Receiver names that mean superagent once the file imports it (`superagent.del(...)`, `agent.get(...)`). */
+const SUPERAGENT_RECEIVERS = new Set(["superagent", "agent", "request"]);
+/** superagent's own method names: its DELETE is `del` (`delete` is an alias). */
+const SUPERAGENT_METHODS: Record<string, HttpMethod> = { ...METHODS, del: "DELETE" };
+
+/**
+ * Receivers that are superagent in this file: only when the file imports or requires a superagent module
+ * (dependency gate), then the import's own local names plus the conventional names above.
+ */
+export function superagentReceivers(sf: ts.SourceFile): Set<string> {
+  const locals = new Set<string>();
+  let imported = false;
+  for (const stmt of sf.statements) {
+    if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier) && SUPERAGENT_MODULE_RE.test(stmt.moduleSpecifier.text)) {
+      imported = true;
+      const clause = stmt.importClause;
+      if (clause?.name) locals.add(clause.name.text);
+      if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) locals.add(clause.namedBindings.name.text);
+    } else if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        const init = decl.initializer;
+        if (
+          init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "require" &&
+          init.arguments[0] && ts.isStringLiteral(init.arguments[0]) && SUPERAGENT_MODULE_RE.test(init.arguments[0].text)
+        ) {
+          imported = true;
+          if (ts.isIdentifier(decl.name)) locals.add(decl.name.text);
+        }
+      }
+    }
+  }
+  if (!imported) return new Set();
+  for (const n of SUPERAGENT_RECEIVERS) locals.add(n);
+  return locals;
+}
+
+/** What an HTTP call looks like before any URL filtering: its method (undefined when the call passes a
+ * non-literal method, e.g. `fetch(u, { method: m })`), URL expression and client name. */
+export interface HttpCallShape {
+  method: HttpMethod | undefined;
+  urlExpr: ts.Expression;
+  client: string;
+  /** Method-style call (`client.get(url)`): the adapter only keeps these when the URL looks like one. */
+  methodStyle: boolean;
+}
+
+/** Method from a config object's `method` property: its literal value, `fallback` when absent, undefined
+ * when present but not a literal (a variable method). */
+function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
+  const m = obj && prop(obj, "method");
+  if (!m) return fallback;
+  const v = stringValue(m);
+  return v === undefined ? undefined : methodOf(v) ?? fallback;
+}
+
+/** Recognise an HTTP client call (fetch, axios(config), client.request(config), client.get(url), superagent). */
+export function httpCallShape(node: ts.CallExpression, superagent: Set<string>): HttpCallShape | undefined {
+  const callee = node.expression;
+  const [first, second] = node.arguments;
+  if (!first) return undefined;
+  if (ts.isIdentifier(callee) && FETCH_FNS.has(callee.text)) {
+    const init = second && ts.isObjectLiteralExpression(second) ? second : undefined;
+    return { method: configMethod(init, "GET"), urlExpr: first, client: callee.text, methodStyle: false };
+  }
+  if (ts.isIdentifier(callee) && callee.text === "axios" && ts.isObjectLiteralExpression(first)) {
+    const url = prop(first, "url");
+    return url ? { method: configMethod(first, "GET"), urlExpr: url, client: "axios", methodStyle: false } : undefined;
+  }
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  const receiver = lastName(callee.expression);
+  const name = callee.name.text;
+  if (name === "request" && ts.isObjectLiteralExpression(first)) {
+    if (!isClientReceiver(receiver, node)) return undefined;
+    const url = prop(first, "url");
+    return url ? { method: configMethod(first, "GET"), urlExpr: url, client: receiver, methodStyle: false } : undefined;
+  }
+  const isSuperagent = ts.isIdentifier(callee.expression) && superagent.has(receiver) && !isRouterName(node, receiver);
+  const method = isSuperagent ? SUPERAGENT_METHODS[name] : METHODS[name];
+  if (!method) return undefined;
+  if (!isSuperagent && !isClientReceiver(receiver, node)) return undefined;
+  return { method, urlExpr: first, client: receiver, methodStyle: true };
+}
+
 export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   if (!file.sf) return [];
+  const superagent = superagentReceivers(file.sf);
   const out: HttpCall[] = [];
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node)) return;
-    const callee = node.expression;
-    const [first, second] = node.arguments;
-    let method: HttpMethod | undefined;
-    let urlExpr: ts.Expression | undefined;
-    let client = "";
-
-    if (ts.isIdentifier(callee) && FETCH_FNS.has(callee.text) && first) {
-      const init = second && ts.isObjectLiteralExpression(second) ? second : undefined;
-      method = (init && methodOf(stringValue(prop(init, "method")))) ?? "GET";
-      urlExpr = first;
-      client = callee.text;
-    } else if (ts.isIdentifier(callee) && callee.text === "axios" && first && ts.isObjectLiteralExpression(first)) {
-      urlExpr = prop(first, "url");
-      method = methodOf(stringValue(prop(first, "method"))) ?? "GET";
-      client = "axios";
-    } else if (ts.isPropertyAccessExpression(callee) && callee.name.text === "request" && first && ts.isObjectLiteralExpression(first)) {
-      const receiver = lastName(callee.expression);
-      if (isClientReceiver(receiver, node)) {
-        urlExpr = prop(first, "url");
-        method = methodOf(stringValue(prop(first, "method"))) ?? "GET";
-        client = receiver;
-      }
-    } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text] && first) {
-      const receiver = lastName(callee.expression);
-      if (isClientReceiver(receiver, node) && pathPattern(first) && looksLikeUrl(literalText(first))) {
-        method = METHODS[callee.name.text];
-        urlExpr = first;
-        client = receiver;
-      }
-    }
-    if (!method || !urlExpr) return;
+    const shape = httpCallShape(node, superagent);
+    if (!shape) return;
+    const { urlExpr } = shape;
+    if (shape.methodStyle && !(pathPattern(urlExpr) && looksLikeUrl(literalText(urlExpr)))) return;
+    // A variable method keeps the adapter's historical default (GET); wrapper inference treats it apart.
+    const method = shape.method ?? "GET";
     const pattern = pathPattern(urlExpr);
     out.push({
       method,
       path: pattern?.path ?? "",
       raw: urlExpr.getText(),
       resolved: pattern?.resolved ?? false,
-      client,
+      client: shape.client,
       at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
       kind: pattern?.kind ?? "unknown",
       ...(pattern?.base !== undefined ? { base: pattern.base } : {}),

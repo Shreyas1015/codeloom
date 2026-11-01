@@ -102,6 +102,58 @@ describe("detectHttpCalls", () => {
   });
 });
 
+describe("detectHttpCalls — superagent (H2)", () => {
+  it("finds superagent.get/post/put/del/delete when the file imports superagent", () => {
+    expect(calls(`
+      import superagent from "superagent";
+      export const a = () => superagent.get("/api/tags");
+      export const b = (body: unknown) => superagent.post("/api/users", body);
+      export const c = () => superagent.put("/api/user");
+      export const d = (slug: string) => superagent.del(\`/api/articles/\${slug}\`);
+      export const e = (slug: string) => superagent.delete(\`/api/articles/\${slug}\`);
+    `)).toEqual([
+      "GET [/api/tags] ok literal @a",
+      "POST [/api/users] ok literal @b",
+      "PUT [/api/user] ok literal @c",
+      "DELETE [/api/articles/:slug] ok template @d",
+      "DELETE [/api/articles/:slug] ok template @e",
+    ]);
+  });
+
+  it("finds a wrapped superagent binding (superagent-promise) and an `agent` receiver, import-gated", () => {
+    expect(calls(`
+      import superagentPromise from "superagent-promise";
+      import _superagent from "superagent";
+      const superagent = superagentPromise(_superagent, global.Promise);
+      const agent = _superagent.agent();
+      export const a = () => superagent.del("/api/x/1");
+      export const b = () => agent.get("/api/y");
+      export const c = () => _superagent.patch("/api/z");
+    `)).toEqual([
+      "DELETE [/api/x/1] ok literal @a",
+      "GET [/api/y] ok literal @b",
+      "PATCH [/api/z] ok literal @c",
+    ]);
+  });
+
+  it("finds superagent required via CommonJS", () => {
+    expect(calls(`
+      const request = require("superagent");
+      function go() { return request.del("/api/items/1"); }
+    `)).toEqual(["DELETE [/api/items/1] ok literal @go"]);
+  });
+
+  it("does not treat .del() or an agent receiver as HTTP without a superagent import", () => {
+    expect(calls(`
+      const cache = makeCache();
+      const agent = makeAgent();
+      export const a = () => cache.del("/tmp/x");
+      export const b = () => agent.get("/api/y");
+      export const c = () => superagent.del("/api/z");
+    `)).toEqual([]);
+  });
+});
+
 describe("detectHttpClients", () => {
   const clients = (code: string) =>
     detectHttpClients(parsed("src/lib.ts", code)).map(
