@@ -1,8 +1,10 @@
-import { writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatIndexSummary, runIndex } from "../src/commands/index-cmd.js";
-import { materializeFixture } from "./helpers.js";
+import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 
 function workspace() {
   const root = materializeFixture("demo-shop");
@@ -102,5 +104,24 @@ describe("codeloom index on demo-shop", () => {
     expect(result.linker.chains).toBe(7);
     expect(result.linker.wrote).toBe(true);
     expect(result.linker.orphanedJourneys).toBe(0);
+  });
+});
+
+describe("stable repo ids across clones (final review batch 2, item C)", () => {
+  it("the same code in shop/ and shop-worktree/ (package.json name 'shop') gives identical chains.json", async () => {
+    const billing = fileURLToPath(new URL("../../../fixtures/demo-shop/billing", import.meta.url));
+    const parent = mkdtempSync(join(tmpdir(), "codeloom-clone-"));
+    const out: string[] = [];
+    for (const folder of ["shop", "shop-worktree"]) {
+      const repo = makeRepo({}, join(parent, folder));
+      cpSync(billing, repo, { recursive: true });
+      const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+      writeFileSync(join(repo, "package.json"), JSON.stringify({ ...pkg, name: "shop" }));
+      commitAll(repo);
+      await runIndex(repo);
+      out.push(readFileSync(join(repo, ".codeloom", "chains.json"), "utf8"));
+    }
+    expect(out[0]).toContain('"route:shop:');
+    expect(out[1]).toBe(out[0]);
   });
 });

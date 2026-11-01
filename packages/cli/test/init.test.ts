@@ -58,10 +58,22 @@ describe("codeloom init", () => {
     expect(hook.split(HOOK_MARK).length - 1).toBe(1);
   });
 
-  it("does not write a workspace file for a single repo", () => {
-    const repo = makeRepo({ "a.ts": "" });
+  it("writes a workspace file for a single repo too, saving its stable id (final review batch 2, item C)", () => {
+    const repo = makeRepo({ "a.ts": "", "package.json": JSON.stringify({ name: "@acme/shop" }) });
     const res = runInit(repo);
+    expect(res.created).toContain("codeloom.workspace.json");
+    const ws = JSON.parse(readFileSync(join(repo, "codeloom.workspace.json"), "utf8"));
+    expect(ws).toEqual({ version: 1, name: "acme-shop", repos: [{ id: "acme-shop", path: "." }], links: [] });
+  });
+
+  it("does not write a single-repo workspace file inside an existing workspace", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "b.ts": "" }, join(root, "api"));
+    runInit(root);
+    const res = runInit(join(root, "web"));
     expect(res.created).not.toContain("codeloom.workspace.json");
+    expect(existsSync(join(root, "web", "codeloom.workspace.json"))).toBe(false);
   });
 
   it("explains when there are no repos", () => {

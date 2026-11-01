@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { discoverRepos, gitHead, loadWorkspace } from "../src/workspace/repos.js";
+import { discoverRepos, gitHead, loadWorkspace, repoIdFor } from "../src/workspace/repos.js";
 import { listFiles } from "../src/workspace/files.js";
 import { commitAll, makeRepo } from "./helpers.js";
 
@@ -30,6 +30,59 @@ describe("discoverRepos ordering (final review item 5)", () => {
     makeRepo({ "a.ts": "" }, join(root, "alpha"));
     makeRepo({ "b.ts": "" }, join(root, "Zeta"));
     expect(discoverRepos(root).map((r) => r.id)).toEqual(["Zeta", "alpha"]);
+  });
+});
+
+describe("stable repo ids (final review batch 2, item C)", () => {
+  it("uses the package.json name, sanitized: @acme/web -> acme-web, ':' and '#' -> '-'", () => {
+    expect(repoIdFor("@acme/web", "folder")).toBe("acme-web");
+    expect(repoIdFor("a:b#c", "folder")).toBe("a-b-c");
+    expect(repoIdFor(undefined, "folder")).toBe("folder");
+    expect(repoIdFor("  ", "fo:ld#er")).toBe("fo-ld-er");
+  });
+
+  it("single repo: id = package.json name, not the folder name", () => {
+    const repo = makeRepo({ "package.json": JSON.stringify({ name: "shop" }) });
+    expect(discoverRepos(repo)).toEqual([{ id: "shop", path: "." }]);
+  });
+
+  it("no package.json (or no name) -> folder name", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "package.json": "{}" }, join(root, "api"));
+    makeRepo({ "package.json": "not json" }, join(root, "bad"));
+    expect(discoverRepos(root).map((r) => r.id)).toEqual(["api", "bad", "web"]);
+  });
+
+  it("scoped names in a workspace; collisions get -2, -3 by path order", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "package.json": JSON.stringify({ name: "@acme/web" }) }, join(root, "frontend"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop" }) }, join(root, "b-shop"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop" }) }, join(root, "a-shop"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop" }) }, join(root, "c-shop"));
+    expect(discoverRepos(root)).toEqual([
+      { id: "acme-web", path: "frontend" },
+      { id: "shop", path: "a-shop" },
+      { id: "shop-2", path: "b-shop" },
+      { id: "shop-3", path: "c-shop" },
+    ]);
+  });
+
+  it("a suffixed id never collides with a real name", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop" }) }, join(root, "a"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop" }) }, join(root, "b"));
+    makeRepo({ "package.json": JSON.stringify({ name: "shop-2" }) }, join(root, "c"));
+    const ids = discoverRepos(root).map((r) => r.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toContain("shop");
+    expect(ids).toContain("shop-2");
+  });
+
+  it("loadWorkspace with no workspace file uses the package.json name too", () => {
+    const repo = makeRepo({ "package.json": JSON.stringify({ name: "@acme/web" }), "src/a.ts": "" });
+    const ws = loadWorkspace(join(repo, "src"));
+    expect(ws.repos).toEqual([{ id: "acme-web", path: "." }]);
   });
 });
 

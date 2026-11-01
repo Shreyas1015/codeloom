@@ -5,7 +5,7 @@ import { writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { defaultRepoConfig, type RepoRef, type WorkspaceFile } from "../store/schemas.js";
 import { git } from "../workspace/git.js";
-import { discoverRepos } from "../workspace/repos.js";
+import { discoverRepos, findWorkspaceRoot } from "../workspace/repos.js";
 
 export const HOOK_MARK = "# codeloom: re-index after commit";
 const CACHE_IGNORE = `${CODELOOM_DIR}/${FILES.fingerprints}`;
@@ -133,9 +133,12 @@ export function runInit(dir: string): InitResult {
   const created: string[] = [];
   const present: string[] = [];
   const skipped: InitResult["skipped"] = [];
-  const isWorkspace = !(repos.length === 1 && repos[0]!.path === ".");
-  if (isWorkspace && !existsSync(join(root, WORKSPACE_FILE))) {
-    const ws: WorkspaceFile = { version: 1, name: basename(root), repos, links: [] };
+  const single = repos.length === 1 && repos[0]!.path === ".";
+  // A single repo gets a workspace file too, so its id (package.json name, else folder) is saved and
+  // stays stable if the folder is renamed — unless it already sits inside a workspace.
+  const insideWorkspace = single && findWorkspaceRoot(root) !== null;
+  if (!insideWorkspace && !existsSync(join(root, WORKSPACE_FILE))) {
+    const ws: WorkspaceFile = { version: 1, name: single ? repos[0]!.id : basename(root), repos, links: [] };
     writeJsonAtomic(join(root, WORKSPACE_FILE), ws);
     created.push(WORKSPACE_FILE);
   }
