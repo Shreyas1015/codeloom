@@ -10,6 +10,7 @@ import type { BackendLink, ConsumerLink, LinkResult, UiLink } from "../src/linke
 import type { RepoData, WorkspaceData } from "../src/store/read.js";
 import type { DbAccess, EndpointsFile, HttpCall, QueueOp, Route, UiPage } from "../src/store/schemas.js";
 import { ChainsFileSchema } from "../src/store/schemas.js";
+import { hopsFromChains } from "../src/evals/score.js";
 import { writeJsonAtomic } from "../src/store/json.js";
 
 function graphWith(nodes: KnowledgeGraph["nodes"]): KnowledgeGraph {
@@ -113,7 +114,8 @@ function scenario(): { ws: WorkspaceData; links: LinkResult } {
   };
   const api2: RepoData = { ref: { id: "api2", path: "api2" }, abs: "/ws/api2", graph: graphWith([]), endpoints: endpoints("api2", { routes: [route2], queues: [consumeOp] }) };
   const ws: WorkspaceData = { root: "/ws", name: "ws", repos: [web, api, api2], links: [] };
-  const links: LinkResult = { ui: [uiLink], backend: [backendLink, backendLink2], consumers: [consumerLink], queuePairs: [], manual: [] };
+  const uiReach = [{ repo: "web", file: call.at.file, line: call.at.line, symbol: call.at.symbol, method: call.method, path: call.path, reached: true }];
+  const links: LinkResult = { ui: [uiLink], backend: [backendLink, backendLink2], consumers: [consumerLink], queuePairs: [], manual: [], uiReach };
   return { ws, links };
 }
 
@@ -228,10 +230,70 @@ describe("buildChains — wrapper-derived UI calls (H2)", () => {
   });
 });
 
-describe("buildChains — edge cases", () => {
-  it("a route whose UI call is reached by no page still gets a route-entry chain", () => {
+describe("buildChains — call-entry chains (H3b)", () => {
+  function unreached() {
     const { ws, links } = scenario();
     links.ui[0]!.pages = [];
+    links.uiReach = links.uiReach.map((f) => ({ ...f, reached: false }));
+    return { ws, links };
+  }
+
+  it("a UI call that matches a route but no page reaches gets a call: chain instead of a route: chain", () => {
+    const { ws, links } = unreached();
+    const chains = buildChains(ws, links);
+    expect(chains.map((c) => c.entry).sort()).toEqual([
+      "call:web:lib/use-create-item.ts#useCreateItem", "consumer:api2:jobs#src/worker.ts#handleJob", "route:api2:GET /health",
+    ]);
+    const c = chains.find((x) => x.entry.startsWith("call:"))!;
+    expect(c.id).toBe(chainId(c.entry, "api:POST /api/items"));
+    expect(c.routeKey).toBe("api:POST /api/items");
+    expect(c.name).toBe("POST /api/items · useCreateItem");
+    expect(c.stops.map((s) => `${s.lane}:${s.kind}`)).toEqual(["ui:call", "api:route", "code:handler", "code:function", "db:db"]);
+    expect(c.stops.some((s) => s.kind === "page")).toBe(false);
+    expect(c.complete).toBe(true);
+    expect(c.confidence).toBe("exact");
+    expect(defaultChainName(c)).toBe(c.name);
+    expect(() => ChainsFileSchema.parse({ version: 1, chains })).not.toThrow();
+  });
+
+  it("a call-entry chain scores as a ui-api hop keyed on the call's file and symbol", () => {
+    const { ws, links } = unreached();
+    const hops = hopsFromChains(buildChains(ws, links)).filter((h) => h.hop.type === "ui-api");
+    expect(hops).toEqual([{
+      hop: { type: "ui-api", from: { repo: "web", file: "lib/use-create-item.ts", symbol: "useCreateItem" }, to: { repo: "api", method: "POST", path: "/api/items" } },
+      confidence: "exact",
+    }]);
+  });
+
+  it("a wrapper-derived call keeps its own (param) confidence on the call stop and the chain", () => {
+    const { ws, links } = unreached();
+    links.ui[0]!.call = { ...links.ui[0]!.call, via: "wrapper", wrapper: "src/agent.js#requests.post", confidence: "param" };
+    const c = buildChains(ws, links).find((x) => x.entry.startsWith("call:"))!;
+    expect(c.stops[0]!.hop).toEqual({ confidence: "param", reason: "via wrapper src/agent.js#requests.post" });
+    expect(c.confidence).toBe("param");
+    expect(hopsFromChains([c]).find((h) => h.hop.type === "ui-api")!.confidence).toBe("param");
+  });
+
+  it("a guessed route target caps the call-entry chain at guess", () => {
+    const { ws, links } = unreached();
+    const t = links.ui[0]!.target;
+    if (t.kind === "route") links.ui[0]!.target = { ...t, confidence: "guess", reason: "tie" };
+    const c = buildChains(ws, links).find((x) => x.entry.startsWith("call:"))!;
+    expect(c.confidence).toBe("guess");
+  });
+
+  it("an unreached call that matches no route gets no chain", () => {
+    const { ws, links } = unreached();
+    links.ui[0]!.target = { kind: "unresolved", reason: "no matching route" };
+    expect(buildChains(ws, links).some((c) => c.entry.startsWith("call:"))).toBe(false);
+  });
+});
+
+describe("buildChains — edge cases", () => {
+  it("a route whose call is backend code (no UI reach fact) still gets a route-entry chain", () => {
+    const { ws, links } = scenario();
+    links.ui[0]!.pages = [];
+    links.uiReach = [];
     const chains = buildChains(ws, links);
     expect(chains.map((c) => c.entry).sort()).toEqual(["consumer:api2:jobs#src/worker.ts#handleJob", "route:api2:GET /health", "route:api:POST /api/items"]);
   });

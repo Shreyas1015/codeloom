@@ -268,7 +268,7 @@ describe("resolveManualLinks", () => {
 describe("linkAll", () => {
   it("combines every stage into one result", () => {
     const result = linkAll({ ws: ws([]), resolvers: new Map() });
-    expect(result).toEqual({ ui: [], backend: [], consumers: [], queuePairs: [], manual: [] });
+    expect(result).toEqual({ ui: [], backend: [], consumers: [], queuePairs: [], manual: [], uiReach: [] });
   });
 });
 

@@ -625,16 +625,77 @@ export function resolveManualLinks(input: LinkInput): ManualLink[] {
   });
 }
 
+/** A UI-side HTTP call (readable URL, not third-party, not backend) and whether ≥1 page reaches it. */
+export interface UiReachFact {
+  repo: string; file: string; line: number; symbol: string; method: HttpMethod; path: string; reached: boolean;
+}
+
+export function uiReachKey(f: { repo: string; file: string; line: number; method: string; path: string }): string {
+  return [f.repo, f.file, String(f.line), f.method, f.path].join("\0");
+}
+
+/** Where backend code starts: every route handler and consumer handler, with an inline callback's lines. */
+interface BackendEntry { ref: SymbolRef; lines?: [number, number] }
+
+function backendEntries(input: LinkInput, backend: BackendLink[], consumers: ConsumerLink[]): BackendEntry[] {
+  const out: BackendEntry[] = [];
+  for (const b of backend) {
+    const scope = handlerScope(input, b.route);
+    if (scope) out.push(scope.lines ? { ref: scope.ref, lines: scope.lines } : { ref: scope.ref });
+  }
+  for (const c of consumers) out.push({ ref: c.handler });
+  return out;
+}
+
+/** A call is backend code when its repo has no UI pages, when it sits inside an inline route callback,
+ * or when walking its callers (≤6 hops) reaches a route handler or a consumer handler. */
+function isBackendCall(input: LinkInput, repo: RepoData, call: LinkedCall, entries: BackendEntry[], handlerKeys: Set<string>): boolean {
+  if (repo.endpoints.pages.length === 0) return true;
+  const id = repo.ref.id;
+  if (entries.some((e) => e.ref.repo === id && e.lines && e.ref.file === call.at.file && within(call.at.line, e.lines))) return true;
+  const resolver = input.resolvers.get(id);
+  const start: SymbolRef = { repo: id, file: call.at.file, symbol: call.at.symbol };
+  if (handlerKeys.has(stepKey(start))) return true;
+  return !!resolver && walkCallers(resolver, start, 6).some((s) => handlerKeys.has(stepKey(s.ref)));
+}
+
+/** Reach facts for every UI-side call, from linkUi's results (never from deduplicated chains). Skipped:
+ * calls with no literal URL (check's "unresolved-url"), third-party calls, and backend calls (see
+ * isBackendCall). Sorted by repo, file, line, method, path; one fact per key (reached if any link is). */
+export function uiReachFacts(input: LinkInput, ui: UiLink[], backend: BackendLink[], consumers: ConsumerLink[]): UiReachFact[] {
+  const entries = backendEntries(input, backend, consumers);
+  const handlerKeys = new Set(entries.map((e) => stepKey(e.ref)));
+  const byKey = new Map<string, UiReachFact>();
+  for (const link of ui) {
+    if (link.call.kind === "unknown" || link.target.kind === "external") continue;
+    const repo = input.ws.repos.find((r) => r.ref.id === link.repo);
+    if (!repo || isBackendCall(input, repo, link.call, entries, handlerKeys)) continue;
+    const fact: UiReachFact = {
+      repo: link.repo, file: link.call.at.file, line: link.call.at.line, symbol: link.call.at.symbol,
+      method: link.call.method, path: link.call.path, reached: link.pages.length > 0,
+    };
+    const key = uiReachKey(fact);
+    const prev = byKey.get(key);
+    if (!prev || (!prev.reached && fact.reached)) byKey.set(key, fact);
+  }
+  return [...byKey.values()].sort((a, b) => compare(a.repo, b.repo) || compare(a.file, b.file) || a.line - b.line
+    || compare(a.method, b.method) || compare(a.path, b.path) || compare(a.symbol, b.symbol));
+}
+
 export interface LinkResult {
   ui: UiLink[]; backend: BackendLink[]; consumers: ConsumerLink[]; queuePairs: QueuePair[]; manual: ManualLink[];
+  /** UI-side calls and whether a page reaches them (see uiReachFacts). */
+  uiReach: UiReachFact[];
 }
 
 export function linkAll(input: LinkInput): LinkResult {
+  const ui = linkUi(input);
+  const backend = linkBackend(input);
+  const consumers = linkConsumers(input);
   return {
-    ui: linkUi(input),
-    backend: linkBackend(input),
-    consumers: linkConsumers(input),
+    ui, backend, consumers,
     queuePairs: pairQueues(input.ws),
     manual: resolveManualLinks(input),
+    uiReach: uiReachFacts(input, ui, backend, consumers),
   };
 }

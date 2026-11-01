@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
-import { stepKey } from "./link.js";
+import { stepKey, uiReachKey } from "./link.js";
 import type { BackendLink, ConsumerLink, LinkResult, PageReach, StoreHit, UiLink } from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
 import type { EffectiveRoute } from "./mounts.js";
@@ -82,13 +82,14 @@ function hop(confidence: Confidence, reason?: string): Hop {
 
 /** Page, intermediate functions, then the HTTP call. `PageReach.path[i].confidence` is the confidence of
  * path[i]'s call to path[i+1], so it is the hop *into* stop i+1 (the page itself is the entry: exact). */
-function uiStops(ctx: Ctx, link: UiLink, page: PageReach): ChainStop[] {
+function uiStops(ctx: Ctx, link: UiLink, page: PageReach | undefined): ChainStop[] {
   const graph = graphOf(ctx.ws, link.repo);
-  const stops: ChainStop[] = page.path.map((ref, i) => {
+  // A call-entry chain (no page) starts at the call stop itself.
+  const stops: ChainStop[] = (page?.path ?? []).map((ref, i) => {
     const sym: SymbolRef = { repo: ref.repo, file: ref.file, symbol: ref.symbol };
     return i === 0
-      ? refStop(ctx, "ui", "page", sym, hop("exact"), page.page.line)
-      : refStop(ctx, "ui", "function", sym, hop(page.path[i - 1]!.confidence));
+      ? refStop(ctx, "ui", "page", sym, hop("exact"), page!.page.line)
+      : refStop(ctx, "ui", "function", sym, hop(page!.path[i - 1]!.confidence));
   });
   stops.push(withoutUndefined({
     lane: "ui" as const, kind: "call" as const, repo: link.repo,
@@ -213,6 +214,10 @@ export function defaultChainName(c: Pick<Chain, "entry" | "stops">): string {
     return `consume ${consume?.label ?? ""} · ${handler?.symbol ?? ""}`;
   }
   const route = c.stops.find((s) => s.kind === "route");
+  if (c.entry.startsWith("call:")) {
+    const call = c.stops.find((s) => s.kind === "call");
+    return `${route?.label ?? `${call?.op ?? ""} ${call?.label ?? ""}`} · ${call?.symbol ?? ""}`;
+  }
   if (c.entry.startsWith("page:")) {
     const page = c.stops.find((s) => s.kind === "page");
     if (!route) {
@@ -268,7 +273,10 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
  * - each page reaching a call that matches no route -> a partial `page:` chain with routeKey "" carrying
  *   one unresolved entry per unmatched call (calls with no literal URL text are left to check's
  *   "unresolved-url"; external calls are third-party, not broken);
- * - each route that no page chain covers -> `route:<chain route key>` chain (see chainRouteKeys);
+ * - each UI-side call (LinkResult.uiReach) that targets a route but no page reaches -> a call-entry
+ *   `call:<repo>:<file>#<symbol>` chain: the call stop (no page is invented), the route, then the backend
+ *   half as usual; its route then needs no `route:` chain;
+ * - each route that no page or call-entry chain covers -> `route:<chain route key>` chain (see chainRouteKeys);
  * - each consumer -> `consumer:<repo>:<queue>#<handler file>#<handler symbol>` chain, so two consumers of
  *   one queue in one repo are two chains.
  * The backend half of a page chain is looked up by route identity, never by routeKey alone.
@@ -302,6 +310,24 @@ export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: Sy
       pageRoutes.add(routeIdentity(target.route));
       add(makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
     }
+  }
+
+  // Call-entry chains: UI-side calls that match a route but that no page reaches.
+  const unreached = new Set(links.uiReach.filter((f) => !f.reached).map(uiReachKey));
+  for (const uiLink of links.ui) {
+    if (uiLink.target.kind !== "route" || uiLink.pages.length > 0) continue;
+    const at = uiLink.call.at;
+    if (!unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
+    const target: RouteTarget = uiLink.target;
+    const backend = backendByIdentity.get(routeIdentity(target.route));
+    const stops = [
+      ...uiStops(ctx, uiLink, undefined),
+      routeStop(ws, target.route, hop(target.confidence, target.reason)),
+      ...(backend ? backendStops(ctx, backend) : []),
+    ];
+    pageRoutes.add(routeIdentity(target.route));
+    add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
+      (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
   }
 
   // Unmatched UI calls: one partial chain per page, collecting every unmatched call it reaches.
