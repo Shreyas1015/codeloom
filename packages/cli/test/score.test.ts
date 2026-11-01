@@ -6,7 +6,7 @@ import { formatScore, hopKey, hopsFromChains, scoreChains } from "../src/evals/s
 import { CODELOOM_DIR, FILES } from "../src/store/paths.js";
 import { ChainsFileSchema, ExpectedJourneysSchema } from "../src/store/schemas.js";
 import type { Chain, ChainStop, ExpectedHop, ExpectedJourneys } from "../src/store/schemas.js";
-import { materializeFixture } from "./helpers.js";
+import { makeRepo, materializeFixture } from "./helpers.js";
 
 function fakeChain(overrides: Partial<Chain>): Chain {
   return {
@@ -217,4 +217,59 @@ describe("demo-shop answer key", () => {
       expect(score[type], `${type}: ${JSON.stringify(score[type])}`).toMatchObject({ precision: 1, recall: 1, guesses: 0 });
     }
   });
+});
+
+describe("handler-store hops carry the worst confidence of their path (final review item 1)", () => {
+  const schema = "model Order {\n  id Int @id @default(autoincrement())\n}\n";
+  const service = [
+    "import { PrismaClient } from \"@prisma/client\";",
+    "const prisma = new PrismaClient();",
+    "export class OrderService {",
+    "  async createOrder(data: { n: number }) {",
+    "    return prisma.order.create({ data });",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const pkg = JSON.stringify({ name: "shop", dependencies: { express: "^4", "@prisma/client": "^5" } });
+
+  async function chainsOf(files: Record<string, string>) {
+    const root = makeRepo({ "package.json": pkg, "prisma/schema.prisma": schema, "src/order-service.ts": service, ...files });
+    await runIndex(root);
+    return ChainsFileSchema.parse(JSON.parse(readFileSync(join(root, CODELOOM_DIR, FILES.chains), "utf8"))).chains;
+  }
+
+  it("a store reached through a guessed (unique-method) call scores as guess, not exact", async () => {
+    const chains = await chainsOf({
+      "src/server.ts": [
+        "import express from \"express\";",
+        "const app = express();",
+        "export async function createOrderHandler(req, res, svc) {",
+        "  const order = await svc.createOrder(req.body);",
+        "  res.json(order);",
+        "}",
+        "app.post(\"/orders\", createOrderHandler);",
+        "app.listen(3000);",
+        "",
+      ].join("\n"),
+    });
+    const stores = hopsFromChains(chains).filter((f) => f.hop.type === "handler-store");
+    expect(stores.map((f) => [f.hop.type === "handler-store" ? f.hop.table : "", f.confidence])).toEqual([["Order", "guess"]]);
+  }, 60_000);
+
+  it("a store under an unknown mount prefix scores as guess", async () => {
+    const chains = await chainsOf({
+      "src/routes.ts": [
+        "import express from \"express\";",
+        "import { OrderService } from \"./order-service\";",
+        "export const router = express.Router();",
+        "router.post(\"/orders\", async (req, res) => {",
+        "  res.json(await new OrderService().createOrder(req.body));",
+        "});",
+        "",
+      ].join("\n"),
+    });
+    const stores = hopsFromChains(chains).filter((f) => f.hop.type === "handler-store");
+    expect(stores.map((f) => f.confidence)).toEqual(["guess"]);
+  }, 60_000);
 });

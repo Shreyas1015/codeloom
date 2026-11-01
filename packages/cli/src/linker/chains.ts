@@ -114,20 +114,28 @@ function routeStop(ws: WorkspaceData, er: EffectiveRoute, h: Hop): ChainStop {
   });
 }
 
-function dbStop(repo: string, hit: StoreHit & { kind: "db" }): ChainStop {
+function dbStop(repo: string, hit: StoreHit & { kind: "db" }, h: Hop): ChainStop {
   return {
     lane: "db", kind: "db", repo,
     file: hit.access.at.file, line: hit.access.at.line, symbol: hit.access.at.symbol,
-    op: hit.access.op, label: hit.access.table ?? hit.access.model ?? "", hop: hop("exact"),
+    op: hit.access.op, label: hit.access.table ?? hit.access.model ?? "", hop: h,
   };
 }
 
-function publishStop(repo: string, hit: StoreHit & { kind: "queue" }): ChainStop {
+function publishStop(repo: string, hit: StoreHit & { kind: "queue" }, h: Hop): ChainStop {
   return {
     lane: "queue", kind: "publish", repo,
     file: hit.op.at.file, line: hit.op.at.line, symbol: hit.op.at.symbol,
-    op: "publish", label: hit.op.queue, hop: hop("exact"),
+    op: "publish", label: hit.op.queue, hop: h,
   };
+}
+
+/** A store stop's hop is the worst confidence on its own path: `base` (the route/consume stop through the
+ * handler) folded with every step of the hit's viaPath. A store reached through a guessed call, or under a
+ * guessed route, is itself only a guess (exact only when every link to it is exact). */
+function storeHop(base: Confidence, hit: StoreHit): Hop {
+  const c = hit.viaPath.reduce<Confidence>((acc, step) => worse(acc, step.via?.confidence ?? "exact"), base);
+  return c === "exact" ? hop("exact") : hop(c, "worst hop on the path to this store");
 }
 
 function hopFromStep(step: WalkStep): Hop {
@@ -137,7 +145,7 @@ function hopFromStep(step: WalkStep): Hop {
 /** Intermediate "function" stops for every hit's viaPath (deduped by symbol across all of a link's
  * hits), then each hit's own terminal db/publish stop. `emitted` starts containing the entry symbol
  * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
-function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>): ChainStop[] {
+function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence): ChainStop[] {
   const stops: ChainStop[] = [];
   for (const hit of hits) {
     for (const step of hit.viaPath.slice(1)) {
@@ -146,14 +154,15 @@ function hitStops(ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>
       emitted.add(key);
       stops.push(refStop(ctx, "code", "function", step.ref, hopFromStep(step)));
     }
-    stops.push(hit.kind === "db" ? dbStop(repo, hit) : publishStop(repo, hit));
+    const h = storeHop(base, hit);
+    stops.push(hit.kind === "db" ? dbStop(repo, hit, h) : publishStop(repo, hit, h));
   }
   return stops;
 }
 
 /** A handler the code index could not place (BackendLink.handlerConfidence "guess") is still shown, as a
  * guessed hop; a route with no handler file at all stops at the route (check's "handler-not-found"). */
-function backendStops(ctx: Ctx, link: BackendLink): ChainStop[] {
+function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop): ChainStop[] {
   if (!link.handler) return [];
   const handlerHop = link.handlerConfidence === "exact"
     ? hop("exact")
@@ -162,7 +171,8 @@ function backendStops(ctx: Ctx, link: BackendLink): ChainStop[] {
   const inlineLine = link.route.route.inline && link.handler.file === link.route.route.handlerFile
     ? link.route.route.handlerLines?.[0] : undefined;
   const stops: ChainStop[] = [refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine)];
-  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)])));
+  const base = worse(routeHop.confidence, handlerHop.confidence);
+  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)]), base));
   return stops;
 }
 
@@ -180,7 +190,7 @@ function consumerStops(ctx: Ctx, link: ConsumerLink): ChainStop[] {
     stops.push(refStop(ctx, "code", "handler", link.handler, hop("exact")));
     emitted.add(stepKey(link.handler));
   }
-  stops.push(...hitStops(ctx, link.repo, link.hits, emitted));
+  stops.push(...hitStops(ctx, link.repo, link.hits, emitted, "exact"));
   return stops;
 }
 
@@ -305,7 +315,7 @@ export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: Sy
       const stops = [
         ...uiStops(ctx, uiLink, page),
         routeStop(ws, target.route, hop(target.confidence, target.reason)),
-        ...(backend ? backendStops(ctx, backend) : []),
+        ...(backend ? backendStops(ctx, backend, hop(target.confidence)) : []),
       ];
       pageRoutes.add(routeIdentity(target.route));
       add(makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
@@ -323,7 +333,7 @@ export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: Sy
     const stops = [
       ...uiStops(ctx, uiLink, undefined),
       routeStop(ws, target.route, hop(target.confidence, target.reason)),
-      ...(backend ? backendStops(ctx, backend) : []),
+      ...(backend ? backendStops(ctx, backend, hop(target.confidence)) : []),
     ];
     pageRoutes.add(routeIdentity(target.route));
     add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
@@ -354,7 +364,7 @@ export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: Sy
     const rKey = keyOf(b.route);
     const entry = `route:${rKey}`;
     const routeHop = b.route.mountsKnown ? hop("exact") : hop("guess", "mount prefix unknown");
-    const stops = [routeStop(ws, b.route, routeHop), ...backendStops(ctx, b)];
+    const stops = [routeStop(ws, b.route, routeHop), ...backendStops(ctx, b, routeHop)];
     add(makeChain(entry, rKey, stops, b.unresolved.map((u) => toUnresolved(b.repo, u))));
   }
 
