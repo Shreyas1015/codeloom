@@ -5,7 +5,7 @@ import type { AdapterContext, EndpointsPart, ParsedFile } from "./types.js";
 
 type DbPart = Pick<EndpointsPart, "dbAccess" | "tables" | "models">;
 
-const DB_DEPS = ["@adonisjs/lucid", "knex", "@prisma/client", "drizzle-orm", "typeorm", "pg", "mysql2", "better-sqlite3", "postgres", "sqlite3"];
+const DB_DEPS = ["@adonisjs/lucid", "knex", "@prisma/client", "drizzle-orm", "typeorm", "@nestjs/typeorm", "pg", "mysql2", "better-sqlite3", "postgres", "sqlite3"];
 const QB_ROOTS = /^(db|knex|trx|database|Database|connection|query|qb|sql|tx)$/;
 const DRIZZLE_ROOTS = /^(db|tx|trx|database|client|conn|connection)$/;
 const SQL_CALL_RE = /^(query|execute|raw|unsafe|prepare|exec|queryRaw|executeRaw|\$queryRaw|\$executeRaw|\$queryRawUnsafe|\$executeRawUnsafe|rawQuery)$/;
@@ -24,9 +24,15 @@ const PRISMA_OPS: Record<string, DbOp> = {
 };
 const REPO_OPS: Record<string, DbOp> = {
   find: "read", findOne: "read", findOneBy: "read", findBy: "read", findOneOrFail: "read", count: "read",
-  save: "insert", insert: "insert", create: "insert", update: "update", upsert: "update",
+  findAndCount: "read", exist: "read", exists: "read", preload: "read",
+  save: "insert", insert: "insert", create: "insert", update: "update", upsert: "update", merge: "update",
   delete: "delete", remove: "delete", softDelete: "delete",
 };
+/** Type-reference names that TypeORM injects as a repository field. */
+const REPO_TYPE_RE = /^(Repository|MongoRepository|TreeRepository)$/;
+const PARAM_PROP_MODS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.PublicKeyword, ts.SyntaxKind.PrivateKeyword, ts.SyntaxKind.ProtectedKeyword, ts.SyntaxKind.ReadonlyKeyword,
+]);
 
 export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
   if (!/^\s*(select|insert|update|delete|with)\b/i.test(text)) return [];
@@ -87,6 +93,56 @@ function classTableName(node: ts.Node, arg: ts.Expression): string | undefined {
   return undefined;
 }
 
+/** The entity `E` of an `@InjectRepository(E)` decorator among `decorators`, if any. */
+function injectRepositoryEntity(decorators: readonly ts.Decorator[] | undefined): string | undefined {
+  for (const d of decorators ?? []) {
+    if (ts.isCallExpression(d.expression) && d.expression.expression.getText() === "InjectRepository") {
+      const arg = d.expression.arguments[0];
+      if (arg) return arg.getText();
+    }
+  }
+  return undefined;
+}
+
+/** The entity `E` a field (constructor-property parameter or class property) injects as a TypeORM
+ * repository: from a `Repository<E>` / `MongoRepository<E>` / `TreeRepository<E>` type annotation,
+ * else from an `@InjectRepository(E)` decorator on an untyped field. Type wins when both are present. */
+function repoFieldEntity(type: ts.TypeNode | undefined, decorators: readonly ts.Decorator[] | undefined): string | undefined {
+  if (type && ts.isTypeReferenceNode(type) && REPO_TYPE_RE.test(type.typeName.getText())) {
+    const arg = type.typeArguments?.[0];
+    if (arg) return arg.getText();
+  }
+  return injectRepositoryEntity(decorators);
+}
+
+/** Every field of `cls` (constructor-property parameter, or class property) that injects a TypeORM
+ * repository, mapped to the entity it is a repository of. Adapters see one file at a time, so this
+ * only sees fields whose type/decorator is written in this same file's class. */
+function repoFields(cls: ts.ClassLikeDeclaration): Map<string, string> {
+  const map = new Map<string, string>();
+  const ctor = cls.members.find((m): m is ts.ConstructorDeclaration => ts.isConstructorDeclaration(m));
+  for (const p of ctor?.parameters ?? []) {
+    if (!ts.isIdentifier(p.name)) continue;
+    const mods = ts.canHaveModifiers(p) ? ts.getModifiers(p) : undefined;
+    if (!(mods ?? []).some((m) => PARAM_PROP_MODS.has(m.kind))) continue; // not a parameter property
+    const decorators = ts.canHaveDecorators(p) ? ts.getDecorators(p) : undefined;
+    const entity = repoFieldEntity(p.type, decorators);
+    if (entity) map.set(p.name.text, entity);
+  }
+  for (const m of cls.members) {
+    if (!ts.isPropertyDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+    const decorators = ts.canHaveDecorators(m) ? ts.getDecorators(m) : undefined;
+    const entity = repoFieldEntity(m.type, decorators);
+    if (entity) map.set(m.name.text, entity);
+  }
+  return map;
+}
+
+function enclosingClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
+  for (let cur = node.parent; cur; cur = cur.parent) if (ts.isClassLike(cur)) return cur;
+  return undefined;
+}
+
 function modelClass(cls: ts.ClassDeclaration, rel: string): ModelDef | undefined {
   const name = cls.name?.text;
   if (!name) return undefined;
@@ -142,6 +198,15 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
   const drizzle = ctx.deps.has("drizzle-orm");
   const at = (n: ts.Node) => ({ file: file.rel, line: lineOf(n), symbol: enclosingSymbol(n) });
   const push = (a: DbAccess) => res.dbAccess.push(a);
+  const classRepoFields = new Map<ts.ClassLikeDeclaration, Map<string, string>>();
+  const repoFieldsFor = (cls: ts.ClassLikeDeclaration): Map<string, string> => {
+    let m = classRepoFields.get(cls);
+    if (!m) {
+      m = repoFields(cls);
+      classRepoFields.set(cls, m);
+    }
+    return m;
+  };
 
   walk(file.sf, (node) => {
     if (ts.isClassDeclaration(node)) {
@@ -172,6 +237,18 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
     if (ctx.deps.has("@prisma/client") && ts.isPropertyAccessExpression(e) && PRISMA_OPS[e.name.text] && ts.isPropertyAccessExpression(e.expression) && /prisma|db|client|tx/i.test(rootName(e.expression))) {
       push({ model: e.expression.name.text, op: PRISMA_OPS[e.name.text]!, via: "prisma", at: at(node) });
       return;
+    }
+    if (ts.isPropertyAccessExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const cls = enclosingClass(node);
+      const entity = cls && repoFieldsFor(cls).get(e.expression.name.text);
+      if (entity) {
+        const method = e.name.text;
+        const op = method === "createQueryBuilder" ? "read" : REPO_OPS[method];
+        if (op) {
+          push({ model: entity, op, via: "typeorm", at: at(node) });
+          return;
+        }
+      }
     }
     if (ts.isPropertyAccessExpression(e) && REPO_OPS[e.name.text] && ts.isCallExpression(e.expression) && /getRepository$/.test(e.expression.expression.getText())) {
       const model = e.expression.arguments[0];

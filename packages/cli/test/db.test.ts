@@ -136,6 +136,95 @@ describe("detectDb", () => {
       "insert model:orders via drizzle @add",
     ]);
   });
+
+  describe("TypeORM injected repositories", () => {
+    it("reads a constructor-property repository (Nest @InjectRepository, typed field)", () => {
+      // Shape copied (minimally) from fixtures/evals/realworld-nest/api/src/user/user.service.ts
+      expect(access("src/user/user.service.ts", `
+        @Injectable()
+        export class UserService {
+          constructor (
+            @InjectRepository(UserEntity)
+            private readonly userRepository: Repository<UserEntity>,
+          ) {}
+
+          async createUser (userInfo: any) {
+            return this.userRepository.save(Object.assign(new UserEntity(), userInfo))
+          }
+
+          async findUser (by: any) {
+            return this.userRepository.findOne({ where: by })
+          }
+        }
+      `, "typeorm", "@nestjs/typeorm")).toEqual([
+        "insert model:UserEntity via typeorm @UserService.createUser",
+        "read model:UserEntity via typeorm @UserService.findUser",
+      ]);
+    });
+
+    it("reads a class-property repository typed Repository<E>, assigned in the constructor body", () => {
+      expect(access("src/order/order.service.ts", `
+        export class OrderService {
+          private readonly orderRepository: Repository<Order>;
+          constructor(orderRepository: Repository<Order>) {
+            this.orderRepository = orderRepository;
+          }
+          list() { return this.orderRepository.find(); }
+          remove(id: number) { return this.orderRepository.delete(id); }
+        }
+      `, "typeorm")).toEqual([
+        "read model:Order via typeorm @OrderService.list",
+        "delete model:Order via typeorm @OrderService.remove",
+      ]);
+    });
+
+    it("reads an @InjectRepository field with no type annotation", () => {
+      expect(access("src/tag/tag.service.ts", `
+        export class TagService {
+          constructor(@InjectRepository(Tag) private readonly tagRepository) {}
+          all() { return this.tagRepository.find(); }
+        }
+      `, "@nestjs/typeorm")).toEqual(["read model:Tag via typeorm @TagService.all"]);
+    });
+
+    it("ignores a non-repository field", () => {
+      expect(access("src/user/user.service.ts", `
+        export class UserService {
+          constructor(private readonly http: HttpService) {}
+          ping() { return this.http.get("/health"); }
+        }
+      `, "typeorm")).toEqual([]);
+    });
+
+    it("reads createQueryBuilder as a read on the repository's entity", () => {
+      expect(access("src/order/order.service.ts", `
+        export class OrderService {
+          constructor(@InjectRepository(Order) private readonly orderRepository: Repository<Order>) {}
+          totals() { return this.orderRepository.createQueryBuilder("o").getMany(); }
+        }
+      `, "typeorm")).toEqual(["read model:Order via typeorm @OrderService.totals"]);
+    });
+
+    it("supports MongoRepository/TreeRepository and the newer repository ops", () => {
+      expect(access("src/mix.ts", `
+        export class MixService {
+          constructor(
+            @InjectRepository(Comment) private readonly commentRepository: MongoRepository<Comment>,
+            @InjectRepository(Category) private readonly categoryRepository: TreeRepository<Category>,
+          ) {}
+          count() { return this.commentRepository.findAndCount(); }
+          has() { return this.commentRepository.exists(); }
+          build() { return this.categoryRepository.preload({ id: 1 }); }
+          combine() { return this.categoryRepository.merge({}, {}); }
+        }
+      `, "typeorm")).toEqual([
+        "read model:Comment via typeorm @MixService.count",
+        "read model:Comment via typeorm @MixService.has",
+        "read model:Category via typeorm @MixService.build",
+        "update model:Category via typeorm @MixService.combine",
+      ]);
+    });
+  });
 });
 
 describe("sqlTables", () => {
