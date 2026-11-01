@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "name": "prisma-rest-nextjs",
+  "repos": [{ "id": "app", "path": "app", "role": "api" }],
+  "links": []
+}

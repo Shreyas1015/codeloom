@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "source": {
+    "url": "https://github.com/prisma/prisma-examples/tree/76e9674e3a9a42b786401c52e2f05b2b52c198b9/orm/rest-nextjs-api-routes",
+    "sha": "76e9674e3a9a42b786401c52e2f05b2b52c198b9",
+    "licence": "Apache-2.0"
+  },
+  "hops": [
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "app",
+        "file": "src/app/create/page.tsx",
+        "symbol": "submitData"
+      },
+      "to": {
+        "repo": "app",
+        "method": "ANY",
+        "path": "/api/post"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "app",
+        "file": "src/app/signup/page.tsx",
+        "symbol": "submitData"
+      },
+      "to": {
+        "repo": "app",
+        "method": "ANY",
+        "path": "/api/user"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "app",
+        "file": "src/components/PostDetails.tsx",
+        "symbol": "publish"
+      },
+      "to": {
+        "repo": "app",
+        "method": "ANY",
+        "path": "/api/publish/:id"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "app",
+        "file": "src/components/PostDetails.tsx",
+        "symbol": "destroy"
+      },
+      "to": {
+        "repo": "app",
+        "method": "DELETE",
+        "path": "/api/post/:id"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "app:ANY /api/filterPosts",
+      "handler": {
+        "file": "src/pages/api/filterPosts.ts",
+        "symbol": "handle"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "app:ANY /api/user",
+      "handler": {
+        "file": "src/pages/api/user.ts",
+        "symbol": "handle"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "app:ANY /api/post",
+      "handler": {
+        "file": "src/pages/api/post/index.ts",
+        "symbol": "handle"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "app:DELETE /api/post/:id",
+      "handler": {
+        "file": "src/pages/api/post/[id].ts",
+        "symbol": "handle"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "app:ANY /api/publish/:id",
+      "handler": {
+        "file": "src/pages/api/publish/[id].ts",
+        "symbol": "handle"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "app:ANY /api/filterPosts",
+      "table": "Post",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "app:ANY /api/user",
+      "table": "User",
+      "op": "insert"
+    },
+    {
+      "type": "handler-store",
+      "route": "app:ANY /api/post",
+      "table": "Post",
+      "op": "insert"
+    },
+    {
+      "type": "handler-store",
+      "route": "app:DELETE /api/post/:id",
+      "table": "Post",
+      "op": "delete"
+    },
+    {
+      "type": "handler-store",
+      "route": "app:ANY /api/publish/:id",
+      "table": "Post",
+      "op": "update"
+    }
+  ]
+}

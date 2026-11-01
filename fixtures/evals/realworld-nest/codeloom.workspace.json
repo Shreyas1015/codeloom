@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "name": "realworld-nest",
+  "repos": [{ "id": "api", "path": "api", "role": "api" }],
+  "links": []
+}

@@ -1,0 +1,656 @@
+{
+  "version": 1,
+  "source": {
+    "url": "https://github.com/gothinkster/react-redux-realworld-example-app @ ee72eba4056392c95a27bc48d385d3f54ba38a18 + https://github.com/gothinkster/node-express-prisma-v1-official-app @ 6ac99ea5aeadc4e001dd4d6933c2e269f878a969",
+    "sha": "ui ee72eba4056392c95a27bc48d385d3f54ba38a18; api 6ac99ea5aeadc4e001dd4d6933c2e269f878a969",
+    "licence": "MIT"
+  },
+  "hops": [
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Auth.current"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/user"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Auth.login"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/users/login"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Auth.register"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/users"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Auth.save"
+      },
+      "to": {
+        "repo": "api",
+        "method": "PUT",
+        "path": "/api/user"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Tags.getAll"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/tags"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.all"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.byAuthor"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.byTag"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.del"
+      },
+      "to": {
+        "repo": "api",
+        "method": "DELETE",
+        "path": "/api/articles/:slug"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.favorite"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/articles/:slug/favorite"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.favoritedBy"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.feed"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles/feed"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.get"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles/:slug"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.unfavorite"
+      },
+      "to": {
+        "repo": "api",
+        "method": "DELETE",
+        "path": "/api/articles/:slug/favorite"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.update"
+      },
+      "to": {
+        "repo": "api",
+        "method": "PUT",
+        "path": "/api/articles/:slug"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Articles.create"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/articles"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Comments.create"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/articles/:slug/comments"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Comments.delete"
+      },
+      "to": {
+        "repo": "api",
+        "method": "DELETE",
+        "path": "/api/articles/:slug/comments/:id"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Comments.forArticle"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/articles/:slug/comments"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Profile.follow"
+      },
+      "to": {
+        "repo": "api",
+        "method": "POST",
+        "path": "/api/profiles/:username/follow"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Profile.get"
+      },
+      "to": {
+        "repo": "api",
+        "method": "GET",
+        "path": "/api/profiles/:username"
+      }
+    },
+    {
+      "type": "ui-api",
+      "from": {
+        "repo": "ui",
+        "file": "src/agent.js",
+        "symbol": "Profile.unfollow"
+      },
+      "to": {
+        "repo": "api",
+        "method": "DELETE",
+        "path": "/api/profiles/:username/follow"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/tags",
+      "handler": {
+        "file": "src/controllers/tag.controller.ts",
+        "symbol": "GET /tags"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/tags",
+      "table": "Tag",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/articles",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "GET /articles"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/articles",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/articles/feed",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "GET /articles/feed"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/articles/feed",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/articles/feed",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/articles",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "POST /articles"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles",
+      "table": "Article",
+      "op": "insert"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/articles/:slug",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "GET /articles/:slug"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/articles/:slug",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:PUT /api/articles/:slug",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "PUT /articles/:slug"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:PUT /api/articles/:slug",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:PUT /api/articles/:slug",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:PUT /api/articles/:slug",
+      "table": "Article",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:DELETE /api/articles/:slug",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "DELETE /articles/:slug"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/articles/:slug",
+      "table": "Article",
+      "op": "delete"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/articles/:slug/comments",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "GET /articles/:slug/comments"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/articles/:slug/comments",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/articles/:slug/comments",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "POST /articles/:slug/comments"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles/:slug/comments",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles/:slug/comments",
+      "table": "Article",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles/:slug/comments",
+      "table": "Comment",
+      "op": "insert"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:DELETE /api/articles/:slug/comments/:id",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "DELETE /articles/:slug/comments/:id"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/articles/:slug/comments/:id",
+      "table": "Comment",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/articles/:slug/comments/:id",
+      "table": "Comment",
+      "op": "delete"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/articles/:slug/favorite",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "POST /articles/:slug/favorite"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles/:slug/favorite",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/articles/:slug/favorite",
+      "table": "Article",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:DELETE /api/articles/:slug/favorite",
+      "handler": {
+        "file": "src/controllers/article.controller.ts",
+        "symbol": "DELETE /articles/:slug/favorite"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/articles/:slug/favorite",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/articles/:slug/favorite",
+      "table": "Article",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/profiles/:username",
+      "handler": {
+        "file": "src/controllers/profile.controller.ts",
+        "symbol": "GET /profiles/:username"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/profiles/:username",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/profiles/:username/follow",
+      "handler": {
+        "file": "src/controllers/profile.controller.ts",
+        "symbol": "POST /profiles/:username/follow"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/profiles/:username/follow",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/profiles/:username/follow",
+      "table": "User",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:DELETE /api/profiles/:username/follow",
+      "handler": {
+        "file": "src/controllers/profile.controller.ts",
+        "symbol": "DELETE /profiles/:username/follow"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/profiles/:username/follow",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:DELETE /api/profiles/:username/follow",
+      "table": "User",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/users",
+      "handler": {
+        "file": "src/controllers/auth.controller.ts",
+        "symbol": "POST /users"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/users",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/users",
+      "table": "User",
+      "op": "insert"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /api/users/login",
+      "handler": {
+        "file": "src/controllers/auth.controller.ts",
+        "symbol": "POST /users/login"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /api/users/login",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api/user",
+      "handler": {
+        "file": "src/controllers/auth.controller.ts",
+        "symbol": "GET /user"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:GET /api/user",
+      "table": "User",
+      "op": "read"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:PUT /api/user",
+      "handler": {
+        "file": "src/controllers/auth.controller.ts",
+        "symbol": "PUT /user"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:PUT /api/user",
+      "table": "User",
+      "op": "update"
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /",
+      "handler": {
+        "file": "src/index.ts",
+        "symbol": "GET /"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /api-docs",
+      "handler": {
+        "file": "src/index.ts",
+        "symbol": "GET /api-docs"
+      }
+    }
+  ]
+}

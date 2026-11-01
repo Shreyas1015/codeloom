@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,22 @@ export function materializeFixture(name: string): string {
     const repo = join(root, entry.name);
     git(repo, "init", "-q", "-b", "main");
     commitAll(repo);
+  }
+  return root;
+}
+
+/** Copy fixtures/evals/<app> to a temp folder and git-init every repo its own codeloom.workspace.json lists
+ * (unlike materializeFixture, which blindly git-inits every child folder — an eval app's root also holds
+ * LICENSE/SOURCE.md/expected-journeys.json/codeloom.workspace.json, which are not repos). */
+export function materializeEval(app: string): string {
+  const src = fileURLToPath(new URL(`../../../fixtures/evals/${app}`, import.meta.url));
+  const root = mkdtempSync(join(tmpdir(), `codeloom-eval-${app}-`));
+  cpSync(src, root, { recursive: true });
+  const ws = JSON.parse(readFileSync(join(root, "codeloom.workspace.json"), "utf8")) as { repos: Array<{ path: string }> };
+  for (const repo of ws.repos) {
+    const repoAbs = join(root, repo.path);
+    git(repoAbs, "init", "-q", "-b", "main");
+    commitAll(repoAbs);
   }
   return root;
 }

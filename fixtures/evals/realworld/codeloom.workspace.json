@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "realworld",
+  "repos": [
+    { "id": "api", "path": "api", "role": "api", "apiBase": ["conduit.productionready.io"] },
+    { "id": "ui", "path": "ui", "role": "ui" }
+  ],
+  "links": []
+}

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "source": {
+    "url": "https://github.com/mutoe/nestjs-realworld-example-app",
+    "sha": "0c30a1828af52cf6528d0b3e9ddf86fc459723f6",
+    "licence": "MIT"
+  },
+  "hops": [
+    {
+      "type": "route-handler",
+      "route": "api:GET /hello",
+      "handler": {
+        "file": "src/app.controller.ts",
+        "symbol": "AppController.healthCheck"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /auth/register",
+      "handler": {
+        "file": "src/auth/auth.controller.ts",
+        "symbol": "AuthController.register"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "api:POST /auth/login",
+      "handler": {
+        "file": "src/auth/auth.controller.ts",
+        "symbol": "AuthController.login"
+      }
+    },
+    {
+      "type": "route-handler",
+      "route": "api:GET /user",
+      "handler": {
+        "file": "src/user/user.controller.ts",
+        "symbol": "UserController.profile"
+      }
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /auth/register",
+      "table": "user",
+      "op": "read"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /auth/register",
+      "table": "user",
+      "op": "insert"
+    },
+    {
+      "type": "handler-store",
+      "route": "api:POST /auth/login",
+      "table": "user",
+      "op": "read"
+    }
+  ]
+}

@@ -154,3 +154,11 @@ export function formatScore(r: ScoreReport): string {
   const line = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i]!)).join("  ").trimEnd();
   return [line(header), ...rows.map(line)].join("\n");
 }
+
+/** v0.1 CI gate (spec §7a.2): precision ≥ 95%, recall ≥ 80%, per hop type. Applied in `test/evals.test.ts`
+ * against every vendored app under fixtures/evals/. Never lower these to make a run pass. */
+export const EVAL_THRESHOLDS: Record<ExpectedHop["type"], { precision: number; recall: number }> = {
+  "ui-api": { precision: 0.95, recall: 0.8 },
+  "route-handler": { precision: 0.95, recall: 0.8 },
+  "handler-store": { precision: 0.95, recall: 0.8 },
+};
