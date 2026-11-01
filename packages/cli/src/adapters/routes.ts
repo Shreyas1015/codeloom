@@ -383,9 +383,109 @@ function nextApiRoutes(file: ParsedFile, ctx: AdapterContext): Route[] | undefin
   if (pages) {
     const segs = pages[1]!.split("/");
     if (segs[segs.length - 1] === "index") segs.pop();
-    return [{ method: "ANY", path: fileRoute(["api", ...segs]), handler: "default", inline: false, framework: "next-api", at: { file: file.rel, line: 1, symbol: "default" }, handlerFile: file.rel }];
+    const path = fileRoute(["api", ...segs]);
+    const methods = file.sf ? pagesApiMethods(file.sf) : [];
+    const list: HttpMethod[] = methods.length ? methods : ["ANY"];
+    return list.map((method) => ({
+      method, path, handler: "default", inline: false, framework: "next-api",
+      at: { file: file.rel, line: 1, symbol: "default" }, handlerFile: file.rel,
+    }));
   }
   return undefined;
+}
+
+const PAGES_API_METHODS = new Set<string>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+/** The default-exported handler of a pages-router API file: a function declaration, or the
+ * arrow/function expression that `export default` points to (directly, or via a local binding). */
+function defaultExportHandler(sf: ts.SourceFile): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined {
+  const localFunction = (name: string): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined => {
+    for (const st of sf.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name?.text === name) return st;
+      if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) {
+          if (
+            ts.isIdentifier(d.name) && d.name.text === name && d.initializer &&
+            (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))
+          ) {
+            return d.initializer;
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && (ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) {
+      return st;
+    }
+    if (ts.isExportAssignment(st) && !st.isExportEquals) {
+      const expr = st.expression;
+      if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) return expr;
+      if (ts.isIdentifier(expr)) {
+        const local = localFunction(expr.text);
+        if (local) return local;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** HTTP methods a pages-router default-export handler checks for, from `req.method === "X"` /
+ * `!==` guards, `switch (req.method)` cases, and a destructured `const { method } = req` alias.
+ * Sorted/deduped; empty when the handler never checks the method (caller falls back to "ANY"). */
+function pagesApiMethods(sf: ts.SourceFile): HttpMethod[] {
+  const fn = defaultExportHandler(sf);
+  if (!fn || !fn.body) return [];
+  const reqParam = fn.parameters[0];
+  const reqName = reqParam && ts.isIdentifier(reqParam.name) ? reqParam.name.text : undefined;
+
+  const aliases = new Set<string>();
+  if (reqName) {
+    walk(fn.body, (n) => {
+      if (!ts.isVariableDeclaration(n) || !ts.isObjectBindingPattern(n.name)) return;
+      if (!n.initializer || !ts.isIdentifier(n.initializer) || n.initializer.text !== reqName) return;
+      for (const el of n.name.elements) {
+        if (ts.isOmittedExpression(el)) continue;
+        const propName = el.propertyName ?? el.name;
+        if (ts.isIdentifier(propName) && propName.text === "method" && ts.isIdentifier(el.name)) aliases.add(el.name.text);
+      }
+    });
+  }
+
+  const isMethodRef = (expr: ts.Expression): boolean => {
+    if (reqName && ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === reqName && expr.name.text === "method") {
+      return true;
+    }
+    return ts.isIdentifier(expr) && aliases.has(expr.text);
+  };
+
+  const methods = new Set<HttpMethod>();
+  const add = (s: string) => {
+    const m = s.toUpperCase();
+    if (PAGES_API_METHODS.has(m)) methods.add(m as HttpMethod);
+  };
+
+  walk(fn.body, (n) => {
+    if (
+      ts.isBinaryExpression(n) &&
+      (n.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || n.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)
+    ) {
+      const left = stringValue(n.left);
+      const right = stringValue(n.right);
+      if (left !== undefined && isMethodRef(n.right)) add(left);
+      else if (right !== undefined && isMethodRef(n.left)) add(right);
+    }
+    if (ts.isSwitchStatement(n) && isMethodRef(n.expression)) {
+      for (const clause of n.caseBlock.clauses) {
+        if (!ts.isCaseClause(clause)) continue;
+        const v = stringValue(clause.expression);
+        if (v !== undefined) add(v);
+      }
+    }
+  });
+
+  return [...methods].sort(compare);
 }
 
 export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[] {
