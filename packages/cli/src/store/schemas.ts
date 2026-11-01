@@ -307,3 +307,35 @@ export const CheckReportSchema = z.object({
   traces: z.unknown().optional(),
 });
 export type CheckReport = z.infer<typeof CheckReportSchema>;
+
+// ---------------------------------------------------------------------------------------------------
+// Answer key (fixtures/<app>/expected-journeys.json) — what the linker should find, written by hand.
+// ---------------------------------------------------------------------------------------------------
+
+export const ExpectedHopSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("ui-api"),
+    from: z.object({ repo: z.string(), file: z.string(), symbol: z.string() }),
+    to: z.object({ repo: z.string(), method: HttpMethodSchema, path: z.string() }),
+  }),
+  z.object({
+    type: z.literal("route-handler"),
+    route: z.string(),
+    handler: z.object({ file: z.string(), symbol: z.string() }),
+  }),
+  z.object({
+    type: z.literal("handler-store"),
+    route: z.string(),
+    table: z.string().optional(),
+    queue: z.string().optional(),
+    op: z.string(),
+  }),
+]);
+export type ExpectedHop = z.infer<typeof ExpectedHopSchema>;
+
+export const ExpectedJourneysSchema = z.object({
+  version: z.literal(1),
+  source: z.object({ url: z.string(), sha: z.string(), licence: z.string() }),
+  hops: z.array(ExpectedHopSchema),
+});
+export type ExpectedJourneys = z.infer<typeof ExpectedJourneysSchema>;

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "source": { "url": "fixtures/demo-shop (written for codeloom)", "sha": "n/a", "licence": "MIT" },
+  "hops": [
+    { "type": "ui-api",
+      "from": { "repo": "web", "file": "lib/use-create-customer.ts", "symbol": "useCreateCustomer" },
+      "to": { "repo": "api", "method": "POST", "path": "/api/customers" } },
+    { "type": "ui-api",
+      "from": { "repo": "web", "file": "lib/get-customer.ts", "symbol": "getCustomer" },
+      "to": { "repo": "api", "method": "GET", "path": "/api/customers/:id" } },
+    { "type": "ui-api",
+      "from": { "repo": "web", "file": "lib/billing.ts", "symbol": "createInvoice" },
+      "to": { "repo": "billing", "method": "POST", "path": "/billing/invoices" } },
+
+    { "type": "route-handler", "route": "api:POST /api/customers",
+      "handler": { "file": "app/controllers/customers_controller.ts", "symbol": "CustomersController.store" } },
+    { "type": "route-handler", "route": "api:GET /api/customers/:id",
+      "handler": { "file": "app/controllers/customers_controller.ts", "symbol": "CustomersController.show" } },
+    { "type": "route-handler", "route": "billing:POST /billing/invoices",
+      "handler": { "file": "src/invoices.ts", "symbol": "createInvoice" } },
+    { "type": "route-handler", "route": "billing:POST /billing/invoices/:id/pay",
+      "handler": { "file": "src/invoices.ts", "symbol": "payInvoice" } },
+    { "type": "route-handler", "route": "billing:GET /health",
+      "handler": { "file": "src/server.ts", "symbol": "GET /health" } },
+
+    { "type": "handler-store", "route": "api:POST /api/customers", "table": "customers", "op": "insert" },
+    { "type": "handler-store", "route": "api:POST /api/customers", "table": "audit_logs", "op": "insert" },
+    { "type": "handler-store", "route": "api:GET /api/customers/:id", "table": "customers", "op": "read" },
+    { "type": "handler-store", "route": "billing:POST /billing/invoices", "table": "invoices", "op": "insert" },
+    { "type": "handler-store", "route": "billing:POST /billing/invoices", "queue": "invoice.created", "op": "publish" },
+    { "type": "handler-store", "route": "billing:POST /billing/invoices/:id/pay", "table": "invoices", "op": "update" },
+    { "type": "handler-store", "route": "billing:POST /billing/invoices/:id/pay", "queue": "billing:invoice.paid", "op": "publish" },
+    { "type": "handler-store", "route": "consumer:billing:invoice.created#src/events.ts#startConsumer", "queue": "invoice.created", "op": "consume" },
+    { "type": "handler-store", "route": "consumer:billing:emails#src/notify-consumer.ts#handleEmail", "queue": "emails", "op": "consume" },
+    { "type": "handler-store", "route": "consumer:billing:emails#src/notify-consumer.ts#handleEmail", "table": "email_logs", "op": "insert" }
+  ]
+}
