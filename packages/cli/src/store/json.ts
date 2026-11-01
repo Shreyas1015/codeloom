@@ -3,16 +3,23 @@ import { dirname } from "node:path";
 import type { z } from "zod";
 import { dataError } from "../errors.js";
 
+export interface ReadJsonOptions {
+  /** The file is written by a person or an agent, never rebuilt by codeloom (journeys.json): a bad file
+   * must be fixed by hand, so the error never suggests deleting it and re-indexing. */
+  handWritten?: boolean;
+}
+
 /** Read and validate a JSON file. Missing file → null. Bad JSON or bad shape → CodeloomError (exit 2). */
-export function readJson<T>(path: string, schema: z.ZodType<T>): T | null {
+export function readJson<T>(path: string, schema: z.ZodType<T>, opts: ReadJsonOptions = {}): T | null {
   if (!existsSync(path)) return null;
+  const handFix = `Fix it by hand: codeloom never rebuilds this file, and it holds work that cannot be regenerated.`;
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    throw dataError(
-      `${path} is not valid JSON. Delete it and run "codeloom index" again to rebuild it.`,
-    );
+    throw dataError(opts.handWritten
+      ? `${path} is not valid JSON. ${handFix}`
+      : `${path} is not valid JSON. Delete it and run "codeloom index" again to rebuild it.`);
   }
   const result = schema.safeParse(raw);
   if (!result.success) {
@@ -20,7 +27,9 @@ export function readJson<T>(path: string, schema: z.ZodType<T>): T | null {
       (i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`,
     );
     throw dataError(
-      `${path} has an unexpected shape:\n${lines.join("\n")}\nFix the file by hand, or delete it and run "codeloom index" again.`,
+      `${path} has an unexpected shape:\n${lines.join("\n")}\n` + (opts.handWritten
+        ? handFix
+        : `Fix the file by hand, or delete it and run "codeloom index" again.`),
     );
   }
   return result.data;

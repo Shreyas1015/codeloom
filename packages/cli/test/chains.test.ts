@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -438,5 +438,27 @@ describe("writeChains / syncJourneys", () => {
     const before = readFileSync(path, "utf8");
     expect(() => syncJourneys(wsRoot, new Set())).toThrow(/unexpected shape/);
     expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("tells the user to fix a malformed journeys.json by hand, never to delete it", () => {
+    const wsRoot = root();
+    const path = join(wsRoot, ".codeloom", "journeys.json");
+    mkdirSync(join(wsRoot, ".codeloom"), { recursive: true });
+    const messageFor = (text: string): string => {
+      writeFileSync(path, text);
+      try {
+        syncJourneys(wsRoot, new Set());
+      } catch (err) {
+        return (err as Error).message;
+      }
+      throw new Error("expected syncJourneys to throw");
+    };
+    for (const text of ['{ "version": 1, "journeys": [{ "id": "bad" }] }', "{ not json"]) {
+      const message = messageFor(text);
+      expect(message).toMatch(/by hand/);
+      expect(message).not.toMatch(/delete/i);
+      expect(message).not.toMatch(/re-?index|run "codeloom index"/i);
+      expect(readFileSync(path, "utf8")).toBe(text);
+    }
   });
 });

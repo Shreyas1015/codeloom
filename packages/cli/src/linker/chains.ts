@@ -355,10 +355,11 @@ function isOrphaned(j: Journey, ids: Set<string>): boolean {
 
 /** Create journeys.json if missing; otherwise set each journey's status to "orphaned" when all of its
  * chainIds are gone and back to "ok" when any returns, writing only if some status actually changed. Never
- * touches order or any other field. A malformed existing file throws (via readJson) and is left untouched. */
+ * touches order or any other field. A malformed existing file throws (via readJson, telling the user to
+ * fix it by hand) and is left untouched. */
 export function syncJourneys(wsRoot: string, ids: Set<string>): { created: boolean; orphaned: number; changed: boolean } {
   const path = join(wsRoot, CODELOOM_DIR, FILES.journeys);
-  const existing = readJson(path, JourneysFileSchema);
+  const existing = readJson(path, JourneysFileSchema, { handWritten: true });
   if (!existing) {
     const empty: JourneysFile = { version: 1, journeys: [] };
     writeJsonAtomic(path, empty);
