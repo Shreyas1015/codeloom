@@ -341,15 +341,41 @@ function scopedResolver(resolver: CallResolver, scope: HandlerScope): CallResolv
 }
 
 /** `resolver` whose walk stops at recorded DbAccess / QueueOp sites: such a call is the ORM/broker call
- * that already became a store hit (a terminal), so a resolution of it — typically a unique-method guess
- * onto a same-named repo method — must not be followed. `knownAt` keys are `file:line`. */
+ * that already became a store hit (a terminal), so a *guessed* resolution at that `file:line` — typically
+ * a unique-method guess onto a same-named repo method — must not be followed. Exact resolutions on the
+ * same line (`ch.consume("q", (m) => record(m))`, `prisma.x.create({ data: build() })`) are real calls
+ * and are walked. `knownAt` keys are `file:line`. */
 function terminalStores(resolver: CallResolver, knownAt: Set<string>): CallResolver {
   return {
     ...resolver,
     callsFrom(ref) {
-      return resolver.callsFrom(ref).filter((rc) => !knownAt.has(`${ref.file}:${rc.site.line}`));
+      return resolver.callsFrom(ref).filter((rc) => rc.confidence !== "guess" || !knownAt.has(`${ref.file}:${rc.site.line}`));
     },
   };
+}
+
+/** Method / function names a recorded store call is made through (db.ts and queues.ts adapters). */
+const STORE_CALL_NAMES = new Set([
+  // queues
+  "sendToQueue", "publish", "consume", "bindQueue",
+  // Lucid model statics, Prisma delegates, TypeORM repositories
+  "create", "createMany", "createManyAndReturn", "firstOrCreate", "fetchOrCreateMany", "updateOrCreate", "updateOrCreateMany",
+  "find", "findOrFail", "findBy", "findByOrFail", "findMany", "findManyBy", "first", "firstOrFail", "all", "query", "truncate",
+  "findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "count", "aggregate", "groupBy",
+  "update", "updateMany", "upsert", "delete", "deleteMany", "findOne", "findOneBy", "findOneOrFail",
+  "save", "insert", "remove", "softDelete", "getRepository",
+  // query builders / drizzle / raw SQL
+  "from", "table", "into", "knex", "db", "trx", "execute", "raw", "unsafe", "prepare", "exec", "rawQuery",
+  "queryRaw", "executeRaw", "$queryRaw", "$executeRaw", "$queryRawUnsafe", "$executeRawUnsafe",
+]);
+
+/** Is this unresolved call site part of the store call recorded on its line? A chained receiver
+ * (`prisma.audit.create`, `db.from("t").where().insert()`) always is; otherwise the called name must be
+ * one a store call is made through. `res.json(...)` wrapped around a store call is not. */
+function isStoreCall(site: CallSite): boolean {
+  const c = site.callee;
+  if (c.kind === "other") return true;
+  return STORE_CALL_NAMES.has(c.kind === "ident" ? c.name : c.prop);
 }
 
 function describeCallee(c: CallSite["callee"]): string {
@@ -369,15 +395,15 @@ function sortUnresolved(list: Unresolved[]): Unresolved[] {
   return list.sort((a, b) => compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.reason, b.reason));
 }
 
-/** Every call site inside a visited symbol that the resolver could not resolve — except a site that is
- * itself a recognised DbAccess/QueueOp location (`knownAt`): that is the ORM/broker call already turned
- * into a hit, not a lost call. */
+/** Every call site inside a visited symbol that the resolver could not resolve — except the store call
+ * itself at a recognised DbAccess/QueueOp location (`knownAt`): that is the ORM/broker call already turned
+ * into a hit, not a lost call. Other calls on that line (`res.json(await prisma.x.create())`) are reported. */
 function collectUnresolved(resolver: CallResolver, steps: WalkStep[], scope: HandlerScope, knownAt: Set<string>): Unresolved[] {
   const out: Unresolved[] = [];
   for (const step of steps) {
     for (const site of sitesOf(resolver, step.ref, scope)) {
-      if (knownAt.has(`${step.ref.file}:${site.line}`)) continue;
       if (resolver.resolve(step.ref.file, site)) continue;
+      if (knownAt.has(`${step.ref.file}:${site.line}`) && isStoreCall(site)) continue;
       out.push({ at: { file: step.ref.file, line: site.line, symbol: step.ref.symbol }, reason: describeCallee(site.callee) });
     }
   }

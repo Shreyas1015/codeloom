@@ -377,3 +377,53 @@ describe("store sites are terminals (Task 12 fix)", () => {
     expect(link!.hits.every((h) => h.viaPath.length === 1)).toBe(true);
   });
 });
+
+describe("store-site terminals only drop guesses (Task 12 review fix 1)", () => {
+  it("follows an exact call on the same line as a consume: a one-line inline consumer reaches its store", () => {
+    const code = [
+      "export async function startJobs(conn) {",                       // 1
+      "  const ch = await conn.createChannel();",                      // 2
+      '  ch.consume("inline", (m) => recordJob(m));',                  // 3
+      "}",                                                             // 4
+      "export async function recordJob(m) {",                          // 5
+      "  return prisma.job.create({ data: {} });",                     // 6
+      "}",                                                             // 7
+      "",
+    ].join("\n");
+    const { data, resolver } = repoWith("billing", { "src/jobs.ts": code }, {
+      queues: [{ queue: "inline", op: "consume", at: { file: "src/jobs.ts", line: 3, symbol: "startJobs" } }],
+      dbAccess: [{ model: "job", op: "insert", via: "prisma", at: { file: "src/jobs.ts", line: 6, symbol: "recordJob" } }],
+    });
+    const [link] = linkConsumers({ ws: ws([data]), resolvers: new Map([["billing", resolver]]) });
+    expect(link!.hits.map((h) => (h.kind === "db" ? h.access.model : h.op.queue))).toEqual(["job"]);
+    expect(link!.hits[0]!.viaPath.map((s) => s.ref.symbol)).toEqual(["startJobs", "recordJob"]);
+  });
+
+  it("keeps an exact hop nested inside a store call, and still reports other unresolved calls on that line", () => {
+    const code = [
+      'import { buildAudit } from "./audit.js";',                                    // 1
+      "export async function createAudit(req, res) {",                               // 2
+      "  res.json(await prisma.audit.create({ data: await buildAudit() }));",        // 3
+      "}",                                                                           // 4
+      "",
+    ].join("\n");
+    const { data, resolver } = repoWith("api", {
+      "src/h.ts": code,
+      "src/audit.ts": 'export async function buildAudit() {\n  return db.from("users").select();\n}\n',
+    }, {
+      routes: [{
+        method: "POST", path: "/audit", handler: "createAudit", inline: false, framework: "express",
+        at: { file: "src/app.ts", line: 1, symbol: "<module>" }, handlerFile: "src/h.ts",
+      }],
+      dbAccess: [
+        { model: "audit", op: "insert", via: "prisma", at: { file: "src/h.ts", line: 3, symbol: "createAudit" } },
+        { table: "users", op: "read", via: "query-builder", at: { file: "src/audit.ts", line: 2, symbol: "buildAudit" } },
+      ],
+    });
+    const [link] = linkBackend({ ws: ws([data]), resolvers: new Map([["api", resolver]]) });
+    expect(link!.hits.map((h) => (h.kind === "db" ? h.access.table ?? h.access.model : ""))).toEqual(["audit", "users"]);
+    expect(link!.hits[1]!.viaPath.map((s) => s.ref.symbol)).toEqual(["createAudit", "buildAudit"]);
+    // res.json is not the store call: it is reported; prisma.audit.create (the store call) and db.from are not.
+    expect(link!.unresolved).toEqual([{ at: { file: "src/h.ts", line: 3, symbol: "createAudit" }, reason: 'could not resolve "res.json(...)"' }]);
+  });
+});
