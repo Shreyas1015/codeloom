@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodeloomError } from "../src/errors.js";
 import { indexRepo } from "../src/indexer/index-repo.js";
+import { effectiveRoutes } from "../src/linker/mounts.js";
 import { readJson } from "../src/store/json.js";
 import { EndpointsFileSchema } from "../src/store/schemas.js";
 import { commitAll, makeRepo } from "./helpers.js";
@@ -197,5 +198,26 @@ describe("indexRepo in a monorepo", () => {
     const res = await indexRepo(repo, "mono");
     expect(res.stats.reused).toBe(0);
     expect(res.endpoints.pages.map((p) => p.route)).toContain("/Dashboard");
+  });
+
+  it("keeps each package's own main app known, even when two packages share a top-level directory (review finding: packageOf used the top-level dir, not the real package root)", async () => {
+    // packages/a/src/index.ts and packages/b/src/index.ts both sit directly under "packages/", which is
+    // exactly what the old directory-based grouping conflated into one "package" — counting two apps there
+    // and marking both unknown. Each has its own package.json, so detectRouters now stamps the real
+    // package root (AdapterContext.packageRoot) onto its RouterDef and isMainApp groups by that instead.
+    // Both apps are exported (e.g. for supertest, same as other "exported only for tests" cases in
+    // router-mounts.test.ts) so this exercises isMainApp's per-package counting rather than the separate
+    // "unexported, so trivially known" shortcut.
+    const repo = makeRepo({
+      "package.json": JSON.stringify({ private: true }),
+      "packages/a/package.json": JSON.stringify({ dependencies: { express: "^4" } }),
+      "packages/a/src/index.ts": `import express from "express";\nconst api = express();\napi.get("/health", (_q, r) => r.json({}));\nexport default api;`,
+      "packages/b/package.json": JSON.stringify({ dependencies: { express: "^4" } }),
+      "packages/b/src/index.ts": `import express from "express";\nconst worker = express();\nworker.get("/health", (_q, r) => r.json({}));\nexport default worker;`,
+    });
+    const res = await indexRepo(repo, "mono");
+    const effs = effectiveRoutes(res.endpoints);
+    expect(effs).toHaveLength(2);
+    expect(effs.every((e) => e.mountsKnown)).toBe(true);
   });
 });

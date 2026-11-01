@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { detectMounts, detectRouters } from "../src/adapters/routes.js";
 import { finalizeEndpoints, runAdapters, type ImportResolver } from "../src/adapters/run.js";
 import { effectiveRoutes } from "../src/linker/mounts.js";
-import { ctxWith, parsed } from "./adapter-helpers.js";
+import { ctxIn, ctxWith, parsed } from "./adapter-helpers.js";
 
 const ctx = ctxWith("express");
 
@@ -17,10 +17,19 @@ function resolverFor(files: string[]): ImportResolver {
   };
 }
 
+/** This test file has no real package.json per fixture, so it derives each file's package root by
+ * convention the same way `loadContext` would group a monorepo laid out one-top-level-folder-per-package
+ * (e.g. "service-a/src/app.ts" -> "service-a"); a file with no top-level folder (e.g. "a.ts") is the
+ * repo root ("", same as a real `loadContext` with no package.json at all). */
+function packageRootFor(rel: string): string {
+  const slash = rel.indexOf("/");
+  return slash === -1 ? "" : rel.slice(0, slash);
+}
+
 /** Index a set of files as one repo and return "METHOD effectivePath known|unknown" per route. */
 function effective(files: Record<string, string>): string[] {
   const rels = Object.keys(files);
-  const parts = rels.map((rel) => runAdapters(rel, files[rel]!, ctx));
+  const parts = rels.map((rel) => runAdapters(rel, files[rel]!, ctxIn(packageRootFor(rel), "express")));
   const ep = finalizeEndpoints("api", parts, resolverFor(rels));
   return effectiveRoutes(ep)
     .map((e) => `${e.route.method} ${e.effectivePath} ${e.mountsKnown ? "known" : "unknown"}`)
@@ -103,6 +112,24 @@ describe("detectRouters", () => {
       export const helper = () => 1;
       export default { a: 1 };
     `)).toEqual([]);
+  });
+
+  it("stamps the file's real package root (AdapterContext.packageRoot) onto the RouterDef", () => {
+    const [def] = detectRouters(parsed("packages/a/src/index.ts", `
+      import express from 'express';
+      const api = express();
+      api.get('/health', (req, res) => res.json({}));
+    `), ctxIn("packages/a", "express"));
+    expect(def).toMatchObject({ name: "api", app: true, packageRoot: "packages/a" });
+  });
+
+  it("stamps \"\" (the repo root) as the package root, distinct from no package.json at all", () => {
+    const [def] = detectRouters(parsed("src/index.ts", `
+      import express from 'express';
+      const app = express();
+      app.get('/health', (req, res) => res.json({}));
+    `), ctxWith("express"));
+    expect(def).toMatchObject({ name: "app", app: true, packageRoot: "" });
   });
 });
 

@@ -34,33 +34,45 @@ function isUnexported(routers: Routers, file: string, name: string): boolean {
   return (routerDef(routers, file, name)?.exports.length ?? 0) === 0;
 }
 
-/** The package `file` belongs to, for scoping "the only app in its package" (see `isMainApp`). A package
- * is the nearest directory containing a package.json; mounts.ts only has the repo-relative file paths
- * RouterDef carries, not a filesystem to walk, so with no package.json visible in that data this falls
- * back to the file's top-level directory — enough to separate a monorepo's `service-a/`, `service-b/`
- * from each other, which is the case this exists for. */
+/** Fallback "package" for `file`, used only when its RouterDef carries no `packageRoot` (an older cache
+ * entry from before that field existed). isMainApp prefers the real package root — the nearest directory
+ * with a package.json, computed per file by AdapterContext.packageRoot and stored on RouterDef by
+ * detectRouters — and falls back to this guess, the file's top-level directory, only when that is
+ * unavailable. The guess is cruder: it conflates any apps that merely share a top-level directory even
+ * when they belong to different nested packages, but it is still enough to separate a monorepo's
+ * `service-a/`, `service-b/` from each other, which is the case this exists for. */
 function packageOf(file: string): string {
   const slash = file.indexOf("/");
   return slash === -1 ? "" : file.slice(0, slash);
 }
 
+/** `r`'s real package when known (see `RouterDefSchema.packageRoot`), else the `packageOf` fallback guess.
+ * "" is a valid package root (the repo root itself), so this only falls back on `undefined`. */
+function packageRootOf(r: RouterDef): string {
+  return r.packageRoot ?? packageOf(r.file);
+}
+
 /** True when `name`/`file` is a main app: either it's bound to one of the conventional top-level receiver
  * names (`app`/`server`/`fastify`, same set as `TOP_LEVEL_RECEIVERS`), or it is the only express()/fastify()
- * app in its own package (see `packageOf`) once apps mounted somewhere else are excluded from that count —
- * those are sub-apps accounted for via their own mount, not candidates for "the package's main app". This
- * also returns true when `name`/`file` isn't backed by a RouterDef at all — a bare `app`/`server`/`fastify`
- * name codeloom couldn't resolve to a declaration. We have no `.listen()`/handler-start signal to work with
- * here (RouterDef only records the `app` flag, not call sites), so this remains a proxy for "looks like the
- * program's entry point," not a certainty — scoped per package so a second, unrelated app elsewhere in the
- * repo (another service, an admin sub-app) doesn't downgrade this one's own routes to unknown. */
+ * app in its own package (see `packageRootOf`) once apps mounted somewhere else are excluded from that
+ * count — those are sub-apps accounted for via their own mount, not candidates for "the package's main
+ * app". This also returns true when `name`/`file` isn't backed by a RouterDef at all — a bare
+ * `app`/`server`/`fastify` name codeloom couldn't resolve to a declaration. We have no `.listen()`/
+ * handler-start signal to work with here (RouterDef only records the `app` flag, not call sites), so this
+ * remains a proxy for "looks like the program's entry point," not a certainty — scoped per real package
+ * (not merely a shared top-level directory) so a second, unrelated app elsewhere in the repo (another
+ * service, an admin sub-app) doesn't downgrade this one's own routes to unknown, and so two unrelated main
+ * apps that happen to share a top-level directory (e.g. `packages/a/src/index.ts` and
+ * `packages/b/src/index.ts`) aren't lumped into one package and both downgraded. */
 function isMainApp(mounts: Mount[], routers: Routers, file: string, name: string): boolean {
-  if (routerDef(routers, file, name)?.app !== true) return true;
+  const self = routerDef(routers, file, name);
+  if (self?.app !== true) return true;
   if (TOP_LEVEL_RECEIVERS.has(name)) return true;
-  const pkg = packageOf(file);
+  const pkg = packageRootOf(self);
   let apps = 0;
   for (const r of routers.values()) {
     if (r.app !== true) continue;
-    if (packageOf(r.file) !== pkg) continue;
+    if (packageRootOf(r) !== pkg) continue;
     if (mountsFor(mounts, routers, r.file, r.name).length > 0) continue;
     apps++;
   }

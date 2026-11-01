@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { effectiveRoutes, routeKey } from "../src/linker/mounts.js";
 import { pickRoute } from "../src/linker/paths.js";
 import type { RouteCandidate } from "../src/linker/paths.js";
-import type { EndpointsFile, HttpMethod, Loc, Mount, MountKind, Route } from "../src/store/schemas.js";
+import type { EndpointsFile, HttpMethod, Loc, Mount, MountKind, Route, RouterDef } from "../src/store/schemas.js";
 
 function loc(file: string, line: number, symbol: string): Loc {
   return { file, line, symbol };
@@ -13,8 +13,11 @@ function route(method: HttpMethod, path: string, file: string, framework: Route[
 function mount(prefix: string, kind: MountKind, on: string, target: { name?: string; file?: string }, file: string): Mount {
   return { prefix, kind, on, target, at: loc(file, 1, "<module>") };
 }
-function endpoints(repo: string, routes: Route[], mounts: Mount[]): EndpointsFile {
-  return { version: 2, repo, pages: [], httpCalls: [], httpClients: [], routes, mounts, dbAccess: [], tables: [], models: [], queues: [] };
+function endpoints(repo: string, routes: Route[], mounts: Mount[], routers?: RouterDef[]): EndpointsFile {
+  return {
+    version: 2, repo, pages: [], httpCalls: [], httpClients: [], routes, mounts, dbAccess: [], tables: [], models: [], queues: [],
+    ...(routers ? { routers } : {}),
+  };
 }
 
 describe("effectiveRoutes: express app.use, multi-level", () => {
@@ -76,6 +79,54 @@ describe("effectiveRoutes: several mounts for one router", () => {
     const ma = mount("/a", "express-use", "app", { file: "items-router.ts" }, "server.ts");
     const effs = effectiveRoutes(endpoints("api", [r], [mb, ma]));
     expect(effs.map((e) => e.effectivePath)).toEqual(["/a/items", "/b/items"]);
+  });
+});
+
+describe("effectiveRoutes: main-app grouping uses the real package root, not a shared top-level directory", () => {
+  it("keeps two unrelated main apps known when their files share a top-level directory but have different packageRoots", () => {
+    // packages/a/src/index.ts and packages/b/src/index.ts both sit under "packages/", which is what the
+    // old directory-based packageOf() fallback would group them by — wrongly treating them as two apps in
+    // the same "package" and marking both unknown. With RouterDef.packageRoot set (as detectRouters now
+    // does from AdapterContext.packageRoot), each is recognized as the lone app in its own package.
+    // Exported (e.g. for supertest, same as the existing "keeps an exported express() app's own routes
+    // known" cases) so isMainApp's per-package counting actually runs, instead of the separate
+    // "unexported, so trivially known" shortcut (isUnexported) short-circuiting the check.
+    const api = route("GET", "/health", "packages/a/src/index.ts", "express", "api");
+    const worker = route("GET", "/health", "packages/b/src/index.ts", "express", "worker");
+    const routers: RouterDef[] = [
+      { name: "api", file: "packages/a/src/index.ts", exports: ["default"], app: true, packageRoot: "packages/a" },
+      { name: "worker", file: "packages/b/src/index.ts", exports: ["default"], app: true, packageRoot: "packages/b" },
+    ];
+    const effs = effectiveRoutes(endpoints("monorepo", [api, worker], [], routers));
+    expect(effs.every((e) => e.mountsKnown)).toBe(true);
+  });
+
+  it("(regression guard) falls back to the top-level directory and conflates them when packageRoot is absent", () => {
+    // Same shape as above but without packageRoot (e.g. an older cache entry): this documents the fallback
+    // behavior the Fix keeps for compatibility — it is the pre-fix bug, reproduced on purpose.
+    const api = route("GET", "/health", "packages/a/src/index.ts", "express", "api");
+    const worker = route("GET", "/health", "packages/b/src/index.ts", "express", "worker");
+    const routers: RouterDef[] = [
+      { name: "api", file: "packages/a/src/index.ts", exports: ["default"], app: true },
+      { name: "worker", file: "packages/b/src/index.ts", exports: ["default"], app: true },
+    ];
+    const effs = effectiveRoutes(endpoints("monorepo", [api, worker], [], routers));
+    expect(effs.every((e) => e.mountsKnown)).toBe(false);
+  });
+
+  it("treats a known \"\" (repo root) packageRoot as its own group, not as falsy/missing", () => {
+    // Router A's real packageRoot is "" (the repo root) — a value, not an absence. Router B carries no
+    // packageRoot at all and falls back to packageOf(file) = "src". A `pkg || packageOf(file)` grouping
+    // (instead of `??`) would treat A's "" as falsy, fall back to packageOf("src/app.ts") = "src" too, and
+    // wrongly collide both apps into one group. `??` keeps them apart: each is the only app in its group.
+    const a = route("GET", "/health", "src/app.ts", "express", "api");
+    const b = route("GET", "/status", "src/other/worker.ts", "express", "worker");
+    const routers: RouterDef[] = [
+      { name: "api", file: "src/app.ts", exports: ["default"], app: true, packageRoot: "" },
+      { name: "worker", file: "src/other/worker.ts", exports: ["default"], app: true },
+    ];
+    const effs = effectiveRoutes(endpoints("monorepo", [a, b], [], routers));
+    expect(effs.every((e) => e.mountsKnown)).toBe(true);
   });
 });
 

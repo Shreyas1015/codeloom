@@ -113,6 +113,10 @@ export const RouterDefSchema = z.object({
    * sub-app under another app (`const admin = express(); app.use("/admin", admin)`); see linker/mounts.ts
    * (isTopLevelReceiver, isMainApp) for how the linker decides whether a chain stops here. */
   app: z.boolean().optional(),
+  /** The file's package root (AdapterContext.packageRoot: nearest directory with a package.json, "" for
+   * the repo root), set by detectRouters. Lets isMainApp group apps by real package instead of guessing
+   * from the file's top-level directory; optional so older cache entries without it still read. */
+  packageRoot: z.string().optional(),
 });
 export type RouterDef = z.infer<typeof RouterDefSchema>;
 
