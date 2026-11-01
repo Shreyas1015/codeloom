@@ -81,12 +81,37 @@ function routeNoCallerItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
   return items;
 }
 
-/** Unresolved entries become `unmatched-call` items, listed for information only: many are framework or
- * library calls (`res.json`, `logger.info`) and they never decide whether a chain is complete. */
+/** The one bucket a chain falls into. Every chain lands in exactly one, so
+ *   chains = complete + missingDb + brokenUiApi
+ * - complete: reaches a database table or queue (a db or publish stop);
+ * - brokenUiApi: a page chain whose UI call matched no route, or a chain whose handler was not found
+ *   (its walk stops at the route);
+ * - missingDb: everything else.
+ * Unreadable URLs (`unresolved-url`) are per call, not per chain, and are never part of these buckets. */
+type Bucket = "complete" | "brokenUiApi" | "missingDb";
+
+function bucketOf(chain: Chain): Bucket {
+  if (hasStoreStop(chain)) return "complete";
+  if (isUnmatchedPageChain(chain) || lastStop(chain)?.kind === "route") return "brokenUiApi";
+  return "missingDb";
+}
+
+/** A page chain whose UI call matched no route yields `ui-no-route` items — one per unmatched call the
+ * linker recorded, or one at the call stop if it recorded none — decided by the chain's shape, never by
+ * the linker's reason text. Every other unresolved entry is an `unmatched-call`, listed for information
+ * only: many are framework or library calls (`res.json`, `logger.info`) and never decide a bucket. */
 function chainLevelItems(chain: Chain): CheckItem[] {
   const items: CheckItem[] = [];
+  const unmatchedPage = isUnmatchedPageChain(chain);
   for (const u of chain.unresolved) {
-    items.push({ kind: "unmatched-call", repo: u.at.repo, file: u.at.file, line: u.at.line, symbol: u.at.symbol, detail: u.reason });
+    items.push({
+      kind: unmatchedPage ? "ui-no-route" : "unmatched-call",
+      repo: u.at.repo, file: u.at.file, line: u.at.line, symbol: u.at.symbol, detail: u.reason,
+    });
+  }
+  if (unmatchedPage && chain.unresolved.length === 0) {
+    const at = chain.stops.find((s) => s.kind === "call") ?? chain.stops[0];
+    if (at) items.push({ kind: "ui-no-route", repo: at.repo, file: at.file, line: at.line, symbol: at.symbol, detail: `${chain.name}: UI call matches no route` });
   }
   for (const stop of chain.stops) {
     if (stop.hop.confidence !== "guess") continue;
@@ -131,15 +156,19 @@ export function buildCheckReport(chains: Chain[], ws: WorkspaceData): CheckRepor
   for (const chain of chains) for (const stop of chain.stops) byConfidence[stop.hop.confidence]++;
 
   const count = (kind: CheckItem["kind"]) => items.filter((i) => i.kind === kind).length;
+  const buckets: Record<Bucket, number> = { complete: 0, brokenUiApi: 0, missingDb: 0 };
+  for (const chain of chains) buckets[bucketOf(chain)]++;
 
   return {
     version: 1,
     summary: {
+      // chains = complete + missingDb + brokenUiApi (see bucketOf); unresolvedCalls is a separate per-call
+      // count of unreadable URLs and is never added into the journey buckets.
       chains: chains.length,
-      complete: chains.filter((c) => c.complete).length,
-      missingDb: count("no-store"),
-      brokenUiApi: count("unresolved-url") + count("handler-not-found") + chains.filter(isUnmatchedPageChain).length,
-      unresolvedCalls: count("unmatched-call"),
+      complete: buckets.complete,
+      missingDb: buckets.missingDb,
+      brokenUiApi: buckets.brokenUiApi,
+      unresolvedCalls: count("unresolved-url"),
       uncalledRoutes: count("route-no-caller"),
       byConfidence,
     },

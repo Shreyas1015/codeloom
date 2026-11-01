@@ -273,6 +273,7 @@ export type JourneysFile = z.infer<typeof JourneysFileSchema>;
 // ---------------------------------------------------------------------------------------------------
 
 export const CheckItemKindSchema = z.enum([
+  "ui-no-route",
   "unmatched-call",
   "handler-not-found",
   "no-store",
@@ -299,6 +300,8 @@ export const CheckReportSchema = z.object({
     complete: z.number().int(),
     missingDb: z.number().int(),
     brokenUiApi: z.number().int(),
+    /** Calls whose URL codeloom could not read (`unresolved-url` items). Per call, not per chain: never
+     * part of chains = complete + missingDb + brokenUiApi. */
     unresolvedCalls: z.number().int(),
     uncalledRoutes: z.number().int(),
     byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),

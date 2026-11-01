@@ -73,7 +73,8 @@ describe("buildCheckReport", () => {
     expect(report.items).toEqual([
       { kind: "unresolved-url", repo: "web", file: "lib/x.ts", line: 3, symbol: "getX", detail: "cannot read URL from fetch(url)" },
     ]);
-    expect(report.summary.brokenUiApi).toBe(1);
+    // Per call, not per chain: counted in unresolvedCalls, never in the chain buckets.
+    expect(report.summary).toMatchObject({ chains: 0, brokenUiApi: 0, unresolvedCalls: 1 });
   });
 
   it("reports route-no-caller for a route no page chain targets", () => {
@@ -175,7 +176,8 @@ describe("buildCheckReport", () => {
         { kind: "guess-link", repo: "api", file: "start/routes.ts", line: 1, symbol: "X.show", detail: `suffix match (${chain.name})` },
       ]),
     );
-    expect(report.summary.unresolvedCalls).toBe(1);
+    // unresolvedCalls counts unreadable URLs (unresolved-url) only; unmatched-call items are info only.
+    expect(report.summary.unresolvedCalls).toBe(0);
     expect(report.summary.byConfidence).toEqual({ exact: 1, param: 0, guess: 1 });
   });
 
@@ -200,7 +202,8 @@ describe("buildCheckReport", () => {
       ],
     });
     const report = buildCheckReport([chain], fakeWorkspace([fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api"))]));
-    expect(report.summary).toMatchObject({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 2 });
+    expect(report.summary).toMatchObject({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0 });
+    expect(report.items.map((i) => i.kind)).toEqual(["unmatched-call", "unmatched-call"]);
     expect(formatCheckText(report)).toContain("1 journey: 1 complete UI → API → DB");
   });
 
@@ -217,13 +220,37 @@ describe("buildCheckReport", () => {
       ],
     });
     const report = buildCheckReport([chain], fakeWorkspace([fakeRepoData({ id: "web", path: "web" }, fakeEndpoints("web"))]));
-    expect(report.summary).toMatchObject({ chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 1 });
+    expect(report.summary).toMatchObject({ chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 0 });
     expect(report.items).toEqual([
-      { kind: "unmatched-call", repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "no matching route for POST /api/nope" },
+      { kind: "ui-no-route", repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "no matching route for POST /api/nope" },
     ]);
     const text = formatCheckText(report);
     expect(text).toContain("1 journey: 0 complete UI → API → DB, 1 broken at UI → API");
     expect(text).toContain("UI calls that match no route (1):");
+  });
+
+  it("an unreadable URL elsewhere is a separate trailer, not a journey bucket", () => {
+    const chain = fakeChain({
+      stops: [
+        { lane: "ui", kind: "page", repo: "web", file: "app/x/page.tsx", line: 1, symbol: "XPage", hop: { confidence: "exact" } },
+        { lane: "api", kind: "route", repo: "api", file: "start/routes.ts", line: 1, symbol: "X.store", op: "POST", label: "POST /api/x", hop: { confidence: "exact" } },
+        { lane: "code", kind: "handler", repo: "api", file: "app/x.ts", line: 2, symbol: "X.store", hop: { confidence: "exact" } },
+        { lane: "db", kind: "db", repo: "api", file: "app/x.ts", line: 3, symbol: "X.store", op: "insert", label: "xs", hop: { confidence: "exact" } },
+      ],
+    });
+    const web = fakeRepoData(
+      { id: "web", path: "web" },
+      fakeEndpoints("web", {
+        httpCalls: [{ method: "GET", path: "", raw: "fetch(url)", resolved: false, client: "fetch", kind: "unknown", at: { file: "lib/other.ts", line: 7, symbol: "getOther" } }],
+      }),
+    );
+    const report = buildCheckReport([chain], fakeWorkspace([fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api")), web]));
+    expect(report.summary).toMatchObject({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 1 });
+    expect(completePercent(report)).toBe(100);
+    const lines = formatCheckText(report).split("\n");
+    expect(lines[0]).toBe("1 journey: 1 complete UI → API → DB");
+    expect(lines).toContain("1 call with a URL codeloom could not read");
+    expect(lines).toContain("complete: 100%");
   });
 
   it("produces a report that passes CheckReportSchema", () => {
@@ -287,6 +314,30 @@ describe("formatCheckText", () => {
   });
 });
 
+describe("formatCheckText grouping", () => {
+  it("groups a ui-no-route item by kind, whatever the linker's reason text says", () => {
+    const report = {
+      version: 1 as const,
+      summary: { chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 2, param: 0, guess: 0 } },
+      items: [{ kind: "ui-no-route" as const, repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "some other wording entirely" }],
+    };
+    const text = formatCheckText(report);
+    expect(text).toContain("UI calls that match no route (1):\n  web/lib/x.ts:2 postX — some other wording entirely");
+    expect(text).not.toContain("Calls that could not be resolved");
+  });
+
+  it("puts an unmatched-call worded like a missing route in the info group (kind decides, not text)", () => {
+    const report = {
+      version: 1 as const,
+      summary: { chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } },
+      items: [{ kind: "unmatched-call" as const, repo: "api", file: "c.ts", line: 2, symbol: "C.s", detail: "no matching route for GET /x" }],
+    };
+    const text = formatCheckText(report);
+    expect(text).not.toContain("UI calls that match no route");
+    expect(text).toContain("Calls that could not be resolved, info only — they do not affect completeness (1):");
+  });
+});
+
 describe("formatCheckJson", () => {
   it("round-trips through JSON.parse", () => {
     const report = { version: 1 as const, summary: { chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }, items: [] };
@@ -321,6 +372,17 @@ describe("runCheck", () => {
     // store. Framework calls (res.json, amqp.connect, ...) are listed but never counted as broken.
     expect(output.split("\n")[0]).toBe("7 journeys: 5 complete UI → API → DB, 2 missing the DB step");
     expect(report.summary).toMatchObject({ complete: 5, missingDb: 2, brokenUiApi: 0 });
+  });
+
+  it("splits every demo-shop chain into exactly one bucket (the buckets add up to the chains)", async () => {
+    const root = demoShopWorkspace();
+    await runIndex(root);
+    const { report } = runCheck(root, {});
+    const { chains, complete, missingDb, brokenUiApi } = report.summary;
+    expect(chains).toBeGreaterThan(0);
+    expect(complete + missingDb + brokenUiApi).toBe(chains);
+    expect([complete, missingDb, brokenUiApi].every((n) => n >= 0)).toBe(true);
+    expect(report.summary.unresolvedCalls).toBe(report.items.filter((i) => i.kind === "unresolved-url").length);
   });
 
   it("prints JSON with --json", async () => {
