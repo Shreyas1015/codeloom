@@ -267,3 +267,43 @@ export type Journey = z.infer<typeof JourneySchema>;
 
 export const JourneysFileSchema = z.object({ version: z.literal(1), journeys: z.array(JourneySchema) });
 export type JourneysFile = z.infer<typeof JourneysFileSchema>;
+
+// ---------------------------------------------------------------------------------------------------
+// `codeloom check` report (printed with --json; never written to disk).
+// ---------------------------------------------------------------------------------------------------
+
+export const CheckItemKindSchema = z.enum([
+  "unmatched-call",
+  "handler-not-found",
+  "no-store",
+  "unresolved-url",
+  "route-no-caller",
+  "guess-link",
+]);
+export type CheckItemKind = z.infer<typeof CheckItemKindSchema>;
+
+export const CheckItemSchema = z.object({
+  kind: CheckItemKindSchema,
+  repo: z.string(),
+  file: z.string(),
+  line: z.number().int().positive(),
+  symbol: z.string(),
+  detail: z.string(),
+});
+export type CheckItem = z.infer<typeof CheckItemSchema>;
+
+export const CheckReportSchema = z.object({
+  version: z.literal(1),
+  summary: z.object({
+    chains: z.number().int(),
+    complete: z.number().int(),
+    missingDb: z.number().int(),
+    brokenUiApi: z.number().int(),
+    unresolvedCalls: z.number().int(),
+    uncalledRoutes: z.number().int(),
+    byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),
+  }),
+  items: z.array(CheckItemSchema),
+  traces: z.unknown().optional(),
+});
+export type CheckReport = z.infer<typeof CheckReportSchema>;

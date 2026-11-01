@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { runCheck } from "./commands/check.js";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { VERSION } from "./version.js";
@@ -27,6 +28,17 @@ export function buildProgram(): Command {
     .action(async (opts: { quiet?: boolean }) => {
       const result = await runIndex(process.cwd());
       if (!opts.quiet) console.log(formatIndexSummary(result));
+    });
+
+  program
+    .command("check")
+    .description("Report how complete the journey map is")
+    .option("--json", "print the report as JSON")
+    .option("--fail-under <percent>", "exit 1 when the complete percentage is below this")
+    .action((opts: { json?: boolean; failUnder?: string }) => {
+      const { output, exitCode } = runCheck(process.cwd(), opts);
+      console.log(output);
+      process.exitCode = exitCode;
     });
 
   return program;
