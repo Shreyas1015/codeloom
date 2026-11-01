@@ -328,6 +328,66 @@ describe("effectiveRoutes: router-level mounts across files", () => {
     })).toEqual(["GET / known", "GET /stats unknown"]);
   });
 
+  it("keeps the main app's routes known next to an unrelated, never-mounted sub-app (review finding: isOnlyApp counted every app in the repo)", () => {
+    // app.ts's `app` is exported only for tests/supertest, same as the "keeps an exported express() app's
+    // own routes known" case above, but this repo also has a second express() app (admin) elsewhere. The
+    // old isOnlyApp counted both and downgraded /health to unknown; app's binding name is one of the
+    // conventional top-level receiver names, so it must stay known regardless of what else is in the repo.
+    expect(effective({
+      "src/app.ts": `
+        import express from 'express';
+        const app = express();
+        app.get('/health', (req, res) => res.json({}));
+        export default app;
+      `,
+      "src/admin.ts": `
+        import express from 'express';
+        export const admin = express();
+        admin.get('/stats', (req, res) => res.json({}));
+      `,
+    })).toEqual(["GET /health known", "GET /stats unknown"]);
+  });
+
+  it("keeps each service's main app known in a monorepo with two services under one repo (review finding: isOnlyApp was repo-wide, not per-package)", () => {
+    // Two independent services live under one .git/one EndpointsFile, each with its own express() app
+    // exported (for tests). Neither is mounted by the other. The old repo-wide isOnlyApp saw 2 apps and
+    // downgraded both to unknown; each must be known on its own.
+    expect(effective({
+      "service-a/src/app.ts": `
+        import express from 'express';
+        const app = express();
+        app.get('/health', (req, res) => res.json({}));
+        export default app;
+      `,
+      "service-b/src/app.ts": `
+        import express from 'express';
+        const app = express();
+        app.get('/status', (req, res) => res.json({}));
+        export default app;
+      `,
+    })).toEqual(["GET /health known", "GET /status known"]);
+  });
+
+  it("treats a non-conventionally-named app as the main app when it is the only app in its own package", () => {
+    // `svc` isn't one of the conventional top-level receiver names, so this exercises the per-package
+    // uniqueness rule directly: svc is the only app under service-a/, so it's known even though a
+    // same-named receiver also exists, unmounted, under the unrelated service-b/ package.
+    expect(effective({
+      "service-a/src/index.ts": `
+        import express from 'express';
+        const svc = express();
+        svc.get('/health', (req, res) => res.json({}));
+        export default svc;
+      `,
+      "service-b/src/index.ts": `
+        import express from 'express';
+        const svc = express();
+        svc.get('/status', (req, res) => res.json({}));
+        export default svc;
+      `,
+    })).toEqual(["GET /health known", "GET /status known"]);
+  });
+
   it("marks a default-imported router unknown when nothing mounts it (negative twin of the prefix-less case)", () => {
     expect(effective({
       "src/server.ts": `

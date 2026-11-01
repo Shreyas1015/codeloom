@@ -109,7 +109,9 @@ export const RouterDefSchema = z.object({
   file: z.string(),
   /** Names it is exported under ("default" for export default / module.exports), sorted; [] when not exported. */
   exports: z.array(z.string()),
-  /** True for an app/server (express(), fastify()): a top-level receiver, never mounted itself. */
+  /** True for an app/server (express(), fastify()): a top-level receiver. It can itself be mounted as a
+   * sub-app under another app (`const admin = express(); app.use("/admin", admin)`); see linker/mounts.ts
+   * (isTopLevelReceiver, isMainApp) for how the linker decides whether a chain stops here. */
   app: z.boolean().optional(),
 });
 export type RouterDef = z.infer<typeof RouterDefSchema>;
