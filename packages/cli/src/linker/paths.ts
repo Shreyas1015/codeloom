@@ -126,9 +126,11 @@ export function pickRoute<T>(
     }
   }
   if (known.length > 0) {
-    known.sort((a, b) => b.match.literals - a.match.literals || compare(a.candidate.path, b.candidate.path));
+    // Most literal segments first, then the better match confidence (exact > param > guess).
+    known.sort((a, b) => b.match.literals - a.match.literals || rank(a.match.confidence) - rank(b.match.confidence) ||
+      compare(a.candidate.path, b.candidate.path));
     const best = known[0]!;
-    const tied = known.filter((k) => k.match.literals === best.match.literals);
+    const tied = known.filter((k) => k.match.literals === best.match.literals && k.match.confidence === best.match.confidence);
     if (tied.length > 1) {
       return { item: best.candidate.item, match: { confidence: "guess", literals: best.match.literals, reason: "tie between equally specific routes" } };
     }

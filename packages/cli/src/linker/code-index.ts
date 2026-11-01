@@ -281,11 +281,13 @@ const WRAPPER_NAME_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE",
 };
 
-/** The nearest enclosing named function-like node (the one enclosingSymbol names). */
+/** The nearest enclosing function-like node, when it is named (the one enclosingSymbol names). An
+ * unnamed function in between (a callback) ends the search: its own parameters may shadow the outer ones. */
 function enclosingFunction(node: ts.Node): { node: ts.SignatureDeclaration; name: string } | undefined {
   for (let cur = node.parent; cur; cur = cur.parent) {
     const name = functionLikeName(cur);
-    if (name !== undefined) return ts.isFunctionLike(cur) ? { node: cur, name } : undefined;
+    if (ts.isFunctionLike(cur)) return name !== undefined ? { node: cur, name } : undefined;
+    if (name !== undefined) return undefined;
   }
   return undefined;
 }
@@ -353,15 +355,25 @@ function wrapperCandidate(
   };
 }
 
-/** Literal-URL arguments of a call, as route patterns. */
+/** Is `a` a path-like URL argument: a plain literal starting with "/", or a template/concatenation whose
+ * literal text contains "/"? */
+function pathLikeArg(a: ts.Expression): boolean {
+  if (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) return a.text.startsWith("/");
+  if (ts.isTemplateExpression(a)) return [a.head.text, ...a.templateSpans.map((s) => s.literal.text)].some((t) => t.includes("/"));
+  if (ts.isBinaryExpression(a) && a.operatorToken.kind === ts.SyntaxKind.PlusToken) return a.getText().includes("/");
+  return false;
+}
+
+/** Literal-URL arguments of a call, as route patterns. Module specifiers (`require(...)`, `import(...)`) never count. */
 function urlArgsOf(call: ts.CallExpression): UrlArg[] {
   const out: UrlArg[] = [];
+  if (call.expression.kind === ts.SyntaxKind.ImportKeyword) return out;
+  if (ts.isIdentifier(call.expression) && call.expression.text === "require") return out;
   call.arguments.forEach((a, index) => {
-    if (!(ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) || ts.isTemplateExpression(a) || ts.isBinaryExpression(a))) return;
+    if (!pathLikeArg(a)) return;
     const pattern = pathPattern(a);
     if (!pattern) return;
     const raw = a.getText();
-    if (!raw.includes("/")) return;
     out.push({
       index, path: pattern.path, kind: pattern.kind, resolved: pattern.resolved, raw,
       ...(pattern.base !== undefined ? { base: pattern.base } : {}),

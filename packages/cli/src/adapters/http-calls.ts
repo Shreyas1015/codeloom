@@ -52,7 +52,10 @@ export function superagentReceivers(sf: ts.SourceFile): Set<string> {
   const locals = new Set<string>();
   let imported = false;
   for (const stmt of sf.statements) {
-    if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier) && SUPERAGENT_MODULE_RE.test(stmt.moduleSpecifier.text)) {
+    if (
+      ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier) && SUPERAGENT_MODULE_RE.test(stmt.moduleSpecifier.text) &&
+      !stmt.importClause?.isTypeOnly
+    ) {
       imported = true;
       const clause = stmt.importClause;
       if (clause?.name) locals.add(clause.name.text);
@@ -86,10 +89,10 @@ export interface HttpCallShape {
 }
 
 /** Method from a config object's `method` property: its literal value, `fallback` when absent, undefined
- * when present but not a literal (a variable method). */
+ * when present but not a literal (a variable method), or when absent but a spread may supply it. */
 function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
   const m = obj && prop(obj, "method");
-  if (!m) return fallback;
+  if (!m) return obj?.properties.some(ts.isSpreadAssignment) ? undefined : fallback;
   const v = stringValue(m);
   return v === undefined ? undefined : methodOf(v) ?? fallback;
 }
@@ -100,8 +103,9 @@ export function httpCallShape(node: ts.CallExpression, superagent: Set<string>):
   const [first, second] = node.arguments;
   if (!first) return undefined;
   if (ts.isIdentifier(callee) && FETCH_FNS.has(callee.text)) {
-    const init = second && ts.isObjectLiteralExpression(second) ? second : undefined;
-    return { method: configMethod(init, "GET"), urlExpr: first, client: callee.text, methodStyle: false };
+    // An init that is not an object literal (a forwarded variable) may carry any method: unknown.
+    const method = !second ? "GET" : ts.isObjectLiteralExpression(second) ? configMethod(second, "GET") : undefined;
+    return { method, urlExpr: first, client: callee.text, methodStyle: false };
   }
   if (ts.isIdentifier(callee) && callee.text === "axios" && ts.isObjectLiteralExpression(first)) {
     const url = prop(first, "url");

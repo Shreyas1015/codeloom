@@ -549,6 +549,29 @@ export default { Articles, Auth, Comments };
     expect(links.map((l) => l.call)).toEqual([adapterCall]);
   });
 
+  it("keeps a wrapper call that shares its line with a different adapter call", () => {
+    const files = {
+      "src/api.ts": "export function apiGet(path: string) { return fetch(`${process.env.API}${path}`); }\n",
+      "src/load.ts": 'import { apiGet } from "./api";\nexport function load() { return Promise.all([fetch("/users"), apiGet("/api/user")]); }\n',
+    };
+    const adapterCall: HttpCall = {
+      method: "GET", path: "/users", raw: '"/users"', resolved: true, client: "fetch", kind: "literal",
+      at: { file: "src/load.ts", line: 2, symbol: "load" },
+    };
+    const ui = repo("ui", { httpCalls: [adapterCall] }, { role: "ui" });
+    const api = repo("api", { routes: apiRoutes }, { role: "api" });
+    const links = linkUi({ ws: ws([ui, api]), resolvers: new Map([["ui", resolverFor(files, "ui")], ["api", resolverFor({}, "api")]]) });
+    expect(links.map((l) => `${l.call.method} ${l.call.path} ${l.call.via ?? "adapter"}`).sort()).toEqual(["GET /api/user wrapper", "GET /users adapter"]);
+  });
+
+  it("never links a forwarded-init fetch wrapper as GET: apiFetch(path, { method: \"POST\" })", () => {
+    const links = link({
+      "src/api.ts": "export function apiFetch(path: string, init: RequestInit) { return fetch(path, init); }\nexport function apiSend(path: string, o: RequestInit) { return fetch(path, { ...o }); }\n",
+      "src/users.ts": 'import { apiFetch, apiSend } from "./api";\nexport function save() { apiFetch("/users", { method: "POST" }); return apiSend("/users", { method: "POST" }); }\n',
+    });
+    expect(links.filter((l) => l.call.method === "GET")).toEqual([]);
+  });
+
   it("does not treat a function that hard-codes its URL as a wrapper", () => {
     const links = link({
       "src/api.ts": 'export function listUsers(page: number) { return fetch(`/users?page=${page}`); }\n',

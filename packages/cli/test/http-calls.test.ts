@@ -257,3 +257,22 @@ describe("detectHttpClients", () => {
     ).toEqual([]);
   });
 });
+
+describe("H2 fix — type-only superagent imports and fetch init", () => {
+  it("does not open the superagent gate on a type-only import", () => {
+    expect(calls(`
+      import type { SuperAgentStatic } from "superagent";
+      import type superagent from "superagent";
+      const cache = makeCache();
+      export const a = () => cache.del("/tmp/x");
+      export const c = () => superagent.del("/api/z");
+    `)).toEqual([]);
+  });
+
+  it("keeps GET for a direct fetch with a non-literal or spread-only init", () => {
+    expect(calls(`
+      export const a = (init: RequestInit) => fetch("/api/a", init);
+      export const b = (opts: RequestInit) => fetch("/api/b", { ...opts });
+    `)).toEqual(["GET [/api/a] ok literal @a", "GET [/api/b] ok literal @b"]);
+  });
+});

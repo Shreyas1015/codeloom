@@ -573,3 +573,38 @@ function load(path: string) { return apiGet(path); }
     expect(idx.calls[0]?.urlArgs).toBeUndefined();
   });
 });
+
+describe("buildFileCodeIndex — H2 fix", () => {
+  it("does not infer GET for a wrapper that forwards a non-literal or spread-only fetch init", () => {
+    const idx = buildFileCodeIndex(parsed("src/api.ts", `
+export function apiFetch(path: string, init: RequestInit) { return fetch(path, init); }
+export function apiSend(path: string, opts: RequestInit) { return fetch(path, { ...opts }); }
+export const http = { post: (url: string, init: RequestInit) => fetch(url, init) };
+export function apiPost(path: string, opts: RequestInit) { return fetch(path, { ...opts, method: "POST" }); }
+`));
+    expect(idx.wrappers).toEqual([
+      { symbol: "http.post", param: 0, method: "POST", client: "fetch" },
+      { symbol: "apiPost", param: 0, method: "POST", client: "fetch" },
+    ]);
+  });
+
+  it("does not treat a function whose URL is a shadowing inner parameter as a wrapper", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `
+export function loadAll(path: string) { return ["/a"].map((path) => fetch(path)); }
+export function loadOne(path: string) { return ["/a"].map(function (p) { return fetch(path); }); }
+`));
+    expect(idx.wrappers ?? []).toEqual([]);
+  });
+
+  it("records only path-like url arguments, never require/import specifiers", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.js", `
+const a = require("./lib/a");
+const b = () => import("./lib/b");
+log("a/b");
+apiGet("/ok");
+apiGet(\`/t/\${id}\`);
+apiGet(\`x\${id}\`);
+`));
+    expect(idx.calls.flatMap((c) => c.urlArgs ?? []).map((u) => u.raw)).toEqual(["\"/ok\"", "`/t/${id}`"]);
+  });
+});

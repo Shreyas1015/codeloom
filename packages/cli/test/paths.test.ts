@@ -111,6 +111,14 @@ describe("pickRoute", () => {
     });
   });
 
+  it("breaks an equal-literal tie by match confidence: exact :slug beats guess /feed", () => {
+    const candidates = [cand("/api/articles/feed"), cand("/api/articles/:slug")];
+    expect(pickRoute("GET", "/api/articles/:slug", candidates)).toEqual({
+      item: "GET /api/articles/:slug",
+      match: { confidence: "exact", literals: 2 },
+    });
+  });
+
   it("drops a call-param-vs-route-literal guess when a less-specific candidate also matched", () => {
     // "/customers/active" is the most specific (1 literal) but only a guess; "/:section/:id" also
     // matches (0 literals, confidence "param") so the guess is not the sole candidate and is dropped.

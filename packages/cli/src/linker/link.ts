@@ -210,8 +210,10 @@ export function linkUi(input: LinkInput): UiLink[] {
     const resolver = input.resolvers.get(repo.ref.id);
     // A wrapper call on a line where the adapter already sees an HTTP call (e.g. `api.get("/x")` on an
     // object named like a client) is the same call: keep the adapter's.
-    const seen = new Set(repo.endpoints.httpCalls.map((c) => `${c.at.file}:${c.at.line}`));
-    const derived = resolver ? wrapperCalls(resolver).filter((c) => !seen.has(`${c.at.file}:${c.at.line}`)) : [];
+    // Keyed on file, line, method and path so a different call sharing the line is kept.
+    const key = (c: HttpCall) => `${c.at.file}:${c.at.line}:${c.method}:${c.path}`;
+    const seen = new Set(repo.endpoints.httpCalls.map(key));
+    const derived = resolver ? wrapperCalls(resolver).filter((c) => !seen.has(key(c))) : [];
     const calls: LinkedCall[] = [...repo.endpoints.httpCalls, ...derived];
     for (const call of calls) {
       links.push({
