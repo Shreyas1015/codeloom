@@ -28,11 +28,27 @@ function isUnmatchedPageChain(chain: Chain): boolean {
   return chain.entry.startsWith("page:") && chain.routeKey === "";
 }
 
-function unresolvedUrlItems(repos: RepoData[]): CheckItem[] {
+/** Calls that some chain shows reaching a route (a call stop directly followed by a route stop). An
+ * unreadable-URL call gets there only through a manual link, so it is no longer unresolved. */
+function routedCalls(chains: Chain[]): Set<string> {
+  const out = new Set<string>();
+  for (const c of chains) {
+    c.stops.forEach((s, i) => {
+      if (s.kind === "call" && c.stops[i + 1]?.kind === "route" && c.routeKey !== "") {
+        out.add([s.repo, s.file, String(s.line), s.symbol].join("\0"));
+      }
+    });
+  }
+  return out;
+}
+
+function unresolvedUrlItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
+  const routed = routedCalls(chains);
   const items: CheckItem[] = [];
   for (const repo of repos) {
     for (const call of repo.endpoints.httpCalls) {
       if (call.kind !== "unknown") continue;
+      if (routed.has([repo.ref.id, call.at.file, String(call.at.line), call.at.symbol].join("\0"))) continue;
       items.push({
         kind: "unresolved-url",
         repo: repo.ref.id,
@@ -185,7 +201,7 @@ export function buildCheckReport(
 ): CheckReport {
   const items = sortItems([
     ...manualLinkItems(manualLinks),
-    ...unresolvedUrlItems(ws.repos),
+    ...unresolvedUrlItems(ws.repos, chains),
     ...routeNoCallerItems(ws.repos, chains),
     ...uiUnreachedItems(uiReach),
     ...chains.flatMap(chainLevelItems),
