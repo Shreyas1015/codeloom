@@ -219,6 +219,24 @@ describe("buildChains — confidence folding (review fixes from Tasks 9-11)", ()
   });
 });
 
+describe("buildChains — db access with no table or model (final review item 4)", () => {
+  it("is not a db stop: no empty-label hop, the chain is not complete, and the access is listed as unresolved", () => {
+    const { ws, links } = scenario();
+    const hit = links.backend[0]!.hits[0]!;
+    if (hit.kind !== "db") throw new Error("scenario changed");
+    hit.access = { op: "insert", via: "lucid", at: hit.access.at };
+    const chains = buildChains(ws, links);
+    const page = chains.find((c) => c.entry === "page:web:/items/new")!;
+    expect(page.stops.some((s) => s.kind === "db")).toBe(false);
+    expect(page.complete).toBe(false);
+    expect(page.unresolved).toEqual([{
+      at: { repo: "api", file: "app/services/item_service.ts", line: 2, symbol: "ItemService.create" },
+      reason: "database access (insert) with no table or model",
+    }]);
+    expect(hopsFromChains(chains).filter((f) => f.hop.type === "handler-store" && f.hop.table === "")).toEqual([]);
+  });
+});
+
 describe("buildChains — wrapper-derived UI calls (H2)", () => {
   it("a call derived through an HTTP wrapper puts its own confidence on the call stop", () => {
     const { ws, links } = scenario();

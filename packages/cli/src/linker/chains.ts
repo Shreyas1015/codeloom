@@ -246,6 +246,16 @@ function makeChain(entry: string, rKey: string, stops: ChainStop[], unresolved: 
   };
 }
 
+/** A db access with neither a table nor a model names no store: it is not a db stop (no empty-label
+ * hop). It moves to the link's unresolved list instead, so the chain counts as missing its store. */
+function dropUnlabeledDb<L extends BackendLink | ConsumerLink>(link: L): L {
+  const unlabeled = (h: StoreHit) => h.kind === "db" && !h.access.table && !h.access.model;
+  if (!link.hits.some(unlabeled)) return link;
+  const extra = link.hits.flatMap((h) => (h.kind === "db" && unlabeled(h)
+    ? [{ at: h.access.at, reason: `database access (${h.access.op}) with no table or model` }] : []));
+  return { ...link, hits: link.hits.filter((h) => !unlabeled(h)), unresolved: [...link.unresolved, ...extra] };
+}
+
 type RouteTarget = Extract<UiLink["target"], { kind: "route" }>;
 
 /** A route's identity: repo + where it is registered + method + effective path. Two routers that both
@@ -292,8 +302,11 @@ function chainRouteKeys(routes: EffectiveRoute[]): Map<string, string> {
  * The backend half of a page chain is looked up by route identity, never by routeKey alone.
  * Inputs from linkAll are sorted, so when two sources produce the same id the first one wins.
  * `symbolLine` (from runLinker's code index) gives function/handler stops their own first line. */
-export function buildChains(ws: WorkspaceData, links: LinkResult, symbolLine: SymbolLineLookup = () => undefined): Chain[] {
+export function buildChains(ws: WorkspaceData, rawLinks: LinkResult, symbolLine: SymbolLineLookup = () => undefined): Chain[] {
   const ctx: Ctx = { ws, symbolLine };
+  const links: LinkResult = {
+    ...rawLinks, backend: rawLinks.backend.map(dropUnlabeledDb), consumers: rawLinks.consumers.map(dropUnlabeledDb),
+  };
   const uiTargets = links.ui.flatMap((l) => (l.target.kind === "route" ? [l.target.route] : []));
   const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
   const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
