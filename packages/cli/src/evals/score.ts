@@ -60,6 +60,7 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
 
   for (const chain of sorted) {
     let route = chain.routeKey || chain.entry;
+    const firstRoute = chain.stops.findIndex((s) => s.kind === "route");
     for (let i = 0; i < chain.stops.length; i++) {
       const stop = chain.stops[i]!;
       const next = chain.stops[i + 1];
@@ -74,14 +75,18 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
         route = `consumer:${stop.repo}:${stop.label ?? ""}#${handler.file}#${handler.symbol}`;
       }
 
-      if (stop.kind === "call" && next?.kind === "route") {
+      // A call reaches a route only when that route is the call's own target: the chain's routeKey is set
+      // (the call matched, or a manual link was applied to this very call) and it is the chain's first route
+      // stop. A partial chain (routeKey "") never has a ui-api hop, whatever stop follows its call.
+      const ownRoute = next?.kind === "route" && chain.routeKey !== "" && firstRoute === i + 1;
+      if (stop.kind === "call" && ownRoute) {
         add(
           {
             type: "ui-api",
             from: { repo: stop.repo, file: stop.file, symbol: stop.symbol },
-            to: { repo: next.repo, method: next.op as HttpMethod, path: pathFromLabel(next) },
+            to: { repo: next!.repo, method: next!.op as HttpMethod, path: pathFromLabel(next!) },
           },
-          lowerConfidence(stop.hop.confidence, next.hop.confidence),
+          lowerConfidence(stop.hop.confidence, next!.hop.confidence),
         );
       }
       if (stop.kind === "route" && next?.kind === "handler") {
