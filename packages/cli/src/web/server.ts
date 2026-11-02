@@ -223,7 +223,8 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       res.writeHead(302, {
         ...BASE_HEADERS,
         "Set-Cookie": `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`,
-        Location: url.pathname + url.search,
+        // Collapse leading slashes: "//evil.com" would be a protocol-relative (off-site) redirect.
+        Location: "/" + url.pathname.replace(/^\/+/, "") + url.search,
         "Cache-Control": "no-store",
       });
       res.end();

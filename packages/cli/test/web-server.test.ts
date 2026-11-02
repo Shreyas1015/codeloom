@@ -171,6 +171,16 @@ describe("token flow", () => {
     expect(r.headers.location).toBe("/map?repo=api");
   });
 
+  it("the redirect never points off-site (no protocol-relative //host Location)", async () => {
+    for (const path of [`/.//evil.com/?token=${TOKEN}`, `/x/..//evil.com?token=${TOKEN}`, `//evil.com?token=${TOKEN}`]) {
+      const r = await get(server.port, path);
+      expect(r.status, path).toBe(302);
+      const loc = r.headers.location ?? "";
+      expect(loc, path).toMatch(/^\/(?!\/)/);
+      expect(loc, path).not.toMatch(/^\/\//);
+    }
+  });
+
   it("GET /?token=<wrong> → 401, no cookie", async () => {
     const r = await get(server.port, "/?token=nope");
     expect(r.status).toBe(401);
