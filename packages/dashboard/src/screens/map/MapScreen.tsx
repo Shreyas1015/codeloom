@@ -211,7 +211,7 @@ export function MapScreen() {
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] overflow-hidden rounded-xl border border-border">
-        <section aria-label={repo ? `Map of ${repo}` : "Map"} className="relative min-h-[520px] min-w-0">
+        <div className="relative min-h-[520px] min-w-0">
           {overview.isError && !repo ? (
             <Message alert>{overview.error.message}</Message>
           ) : !repo ? (
@@ -240,7 +240,7 @@ export function MapScreen() {
               <Legend layers={layers ? layerNames : undefined} journey={journeyId ? (journey.data?.journey?.name ?? journeyId) : undefined} stopsHere={stopsHere} hidden={hidden} repo={repo} />
             </>
           )}
-        </section>
+        </div>
         <Inspector
           repo={repo ?? ""}
           {...(selectedRef ? { selectedRef } : {})}

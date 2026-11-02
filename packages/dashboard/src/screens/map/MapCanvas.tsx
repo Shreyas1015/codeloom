@@ -1,11 +1,11 @@
 /** The React Flow canvas for one folder level. Cards sit where `layoutLevel` puts them; nothing is dragged and
  * nothing moves by physics. Each card is a real button, so Tab walks the cards and Enter acts on them. */
 import "@xyflow/react/dist/style.css";
-import { Background, BackgroundVariant, Controls, type Edge, type Node, ReactFlow } from "@xyflow/react";
-import { useMemo } from "react";
+import { Background, BackgroundVariant, Controls, type Edge, type Node, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
+import { useCallback, useMemo, useRef } from "react";
 import type { GraphFile, GraphLevel, Lane } from "@/api/types";
 import { type CardOverlay, type FileCardData, type FolderCardData, type MoreCardData, nodeTypes } from "./MapCards";
-import { type LevelItem, type MapStop, laneOfLayer, layoutLevel, levelEdges, stopsUnder } from "./layout";
+import { type LevelItem, type MapStop, isOffscreen, laneOfLayer, layoutLevel, levelEdges, stopsUnder } from "./layout";
 
 export interface MapCanvasProps {
   level: GraphLevel;
@@ -25,11 +25,47 @@ export interface MapCanvasProps {
 
 type CardNode = Node<FolderCardData, "folder"> | Node<FileCardData, "file"> | Node<MoreCardData, "more">;
 
+/** React Flow's default key hints talk about selecting, moving and deleting nodes, which the Map does not do. */
+const ARIA_LABELS = {
+  "node.a11yDescription.default": "Press Enter to open a folder, or to show a file's functions.",
+  "node.a11yDescription.keyboardDisabled": "Press Enter to open a folder, or to show a file's functions.",
+  "edge.a11yDescription.default": "Imports or calls between two cards.",
+};
+
 export function MapCanvas(props: MapCanvasProps) {
+  // one React Flow store per level, so each level fits the view afresh
+  return (
+    <ReactFlowProvider key={`${props.level.repo}/${props.level.dir}`}>
+      <Canvas {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+const reducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function Canvas(props: MapCanvasProps) {
   const { level, items, expanded, selectedRef, selectedFolder, stops, layers } = props;
+  const flow = useReactFlow();
+  const box = useRef<HTMLDivElement>(null);
+
+  const placed = useMemo(() => layoutLevel(items, expanded), [items, expanded]);
+  const placedById = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
+
+  // Tab can land on a card outside the view: bring it into view, keeping the zoom
+  const onFocusCard = useCallback(
+    (id: string) => {
+      const p = placedById.get(id);
+      const el = box.current;
+      if (!p || !el) return;
+      const vp = flow.getViewport();
+      const rect = el.getBoundingClientRect();
+      if (!isOffscreen(p, vp, { width: rect.width, height: rect.height })) return;
+      void flow.setCenter(p.x + p.width / 2, p.y + p.height / 2, { zoom: vp.zoom, duration: reducedMotion() ? 0 : 200 });
+    },
+    [placedById, flow],
+  );
 
   const nodes = useMemo<CardNode[]>(() => {
-    const placed = layoutLevel(items, expanded);
     return placed.map((p): CardNode => {
       // React Flow turns pointer events off on nodes that are neither selectable nor draggable; the cards are
       // buttons, so turn them back on. "nopan": a press on a card is a click, not the start of a pan.
@@ -60,6 +96,7 @@ export function MapCanvas(props: MapCanvasProps) {
             width: p.width,
             onSelect: props.onSelectFolder,
             onOpen: props.onOpenFolder,
+            onFocusCard,
           },
         };
       }
@@ -78,17 +115,18 @@ export function MapCanvas(props: MapCanvasProps) {
           width: p.width,
           onToggle: props.onToggleFile,
           onSelectFunction: props.onSelectFunction,
+          onFocusCard,
         },
       };
     });
     // the callbacks are stable (useCallback in MapScreen)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, expanded, selectedRef, selectedFolder, stops, layers]);
+  }, [placed, selectedRef, selectedFolder, stops, layers, onFocusCard]);
 
   const edges = useMemo<Edge[]>(() => {
-    const visible = new Set(nodes.map((n) => n.id));
-    return levelEdges(level, visible).map((e) => {
-      const onJourney = !!stops && (stopCount(nodes, e.source) > 0 || stopCount(nodes, e.target) > 0);
+    const stopsById = new Map(nodes.map((n) => [n.id, n.data.kind === "more" ? 0 : n.data.stops.length]));
+    return levelEdges(level, new Set(stopsById.keys())).map((e) => {
+      const onJourney = !!stops && ((stopsById.get(e.source) ?? 0) > 0 || (stopsById.get(e.target) ?? 0) > 0);
       return {
         id: e.id,
         source: e.source,
@@ -114,34 +152,33 @@ export function MapCanvas(props: MapCanvasProps) {
   }, [level, nodes, stops]);
 
   return (
-    <ReactFlow
-      key={`${level.repo}/${level.dir}`}
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      fitView
-      fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
-      minZoom={0.2}
-      maxZoom={1.75}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      nodesFocusable={false}
-      edgesFocusable={false}
-      elementsSelectable={false}
-      zoomOnDoubleClick={false}
-      deleteKeyCode={null}
-      selectionKeyCode={null}
-      multiSelectionKeyCode={null}
-      attributionPosition="top-right"
-      className="bg-[#EEF0EC]"
-    >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#C9CFCA" />
-      <Controls showInteractive={false} position="bottom-right" className="!overflow-hidden !rounded-lg !border !border-border !shadow-none" />
-    </ReactFlow>
+    <div ref={box} className="h-full w-full">
+      <ReactFlow
+        aria-label={`Map of ${level.repo}`}
+        disableKeyboardA11y
+        ariaLabelConfig={ARIA_LABELS}
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
+        minZoom={0.2}
+        maxZoom={1.75}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        nodesFocusable={false}
+        edgesFocusable={false}
+        elementsSelectable={false}
+        zoomOnDoubleClick={false}
+        deleteKeyCode={null}
+        selectionKeyCode={null}
+        multiSelectionKeyCode={null}
+        attributionPosition="top-right"
+        className="bg-[#EEF0EC]"
+      >
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#C9CFCA" />
+        <Controls showInteractive={false} position="bottom-right" className="!overflow-hidden !rounded-lg !border !border-border !shadow-none" />
+      </ReactFlow>
+    </div>
   );
-}
-
-function stopCount(nodes: CardNode[], id: string): number {
-  const n = nodes.find((x) => x.id === id);
-  return n && n.data.kind !== "more" ? n.data.stops.length : 0;
 }

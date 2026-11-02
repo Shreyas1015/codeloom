@@ -2,11 +2,11 @@
  * and the "+ N more files" card. They render inside React Flow nodes. */
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { ChevronDown, ChevronRight, FileCode2, Folder } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import { type KeyboardEvent, useMemo } from "react";
 import type { GraphFile, GraphFolder, Lane } from "@/api/types";
 import { StopRoundel } from "@/components/gallery/StopRoundel";
 import { cn } from "@/lib/utils";
-import type { MapStop } from "./layout";
+import { type MapStop, functionStops } from "./layout";
 
 /** How the active overlay paints a card: a journey stop, dimmed (not on the journey), or plain. */
 export type CardOverlay = "stop" | "dim" | "none";
@@ -18,6 +18,8 @@ interface CardCommon {
   stops: MapStop[];
   selected: boolean;
   width: number;
+  /** A button in the card got focus (the canvas pans to it when it is off screen). */
+  onFocusCard?: (id: string) => void;
 }
 
 export interface FolderCardData extends CardCommon {
@@ -67,7 +69,8 @@ function cardFrame({ overlay, lane, selected }: Pick<CardCommon, "overlay" | "la
     "relative rounded-xl border-[1.5px] transition-[opacity,box-shadow,border-color] duration-150 motion-reduce:transition-none",
     lane ? LANE_CARD[lane] : "border-border bg-card",
     overlay === "stop" && "border-[#C99A2E] shadow-[0_1px_2px_rgb(26_29_28_/_0.08),0_0_0_3px_rgb(227_167_47_/_0.35)]",
-    overlay === "dim" && "opacity-45",
+    // dim the frame and the icons, never the text: it keeps its full contrast
+    overlay === "dim" && "border-border/40 bg-card/50 [&_svg]:opacity-40",
     selected && "border-ring shadow-[0_2px_6px_rgb(26_29_28_/_0.10),0_0_0_3px_rgb(227_167_47_/_0.45)]",
   );
 }
@@ -110,7 +113,14 @@ export function FolderCard({ data }: NodeProps & { data: FolderCardData }) {
     }
   };
   return (
-    <div data-card="folder" data-overlay={data.overlay} data-lane={lane} className={cardFrame(data)} style={{ width: data.width }}>
+    <div
+      data-card="folder"
+      data-overlay={data.overlay}
+      data-lane={lane}
+      className={cardFrame(data)}
+      style={{ width: data.width }}
+      onFocus={() => data.onFocusCard?.(folder.path)}
+    >
       <Handles />
       <div className="flex items-start gap-2 p-3">
         <button
@@ -149,9 +159,16 @@ export function FileCard({ data }: NodeProps & { data: FileCardData }) {
   ]
     .filter(Boolean)
     .join(", ");
-  const stopOf = (name: string, ref: string) => stops.filter((s) => s.ref === ref || s.symbol === name);
+  const byFunction = useMemo(() => functionStops(file.functions, stops), [file.functions, stops]);
   return (
-    <div data-card="file" data-overlay={data.overlay} data-lane={lane} className={cn(cardFrame(data), "rounded-lg border")} style={{ width: data.width }}>
+    <div
+      data-card="file"
+      data-overlay={data.overlay}
+      data-lane={lane}
+      className={cn(cardFrame(data), "rounded-lg border")}
+      style={{ width: data.width }}
+      onFocus={() => data.onFocusCard?.(file.path)}
+    >
       <Handles />
       <div className="flex items-center gap-2 px-2.5 py-2">
         <button
@@ -182,7 +199,7 @@ export function FileCard({ data }: NodeProps & { data: FileCardData }) {
         <ul aria-label={`Functions in ${file.name}`} className="flex flex-col gap-0.5 border-t border-border/80 px-2 py-1.5">
           {fnCount === 0 && <li className="px-1.5 py-1 text-[12px] text-muted-foreground">No functions or classes found.</li>}
           {file.functions.map((fn) => {
-            const fnStops = stopOf(fn.name, fn.ref);
+            const fnStops = byFunction.get(fn.ref) ?? [];
             const sel = data.selectedRef === fn.ref;
             return (
               <li key={fn.ref} className="flex items-center gap-1.5">

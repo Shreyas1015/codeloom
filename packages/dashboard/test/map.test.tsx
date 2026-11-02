@@ -202,7 +202,7 @@ describe("Map screen", () => {
   it("defaults to the first repo and renders its folders as cards with file counts and layer tags", async () => {
     const fetch = stubApi();
     renderAt("/map");
-    const canvas = await screen.findByRole("region", { name: "Map of api" });
+    const canvas = await screen.findByRole("application", { name: "Map of api" });
     expect(await within(canvas).findByRole("button", { name: "app/ folder, 5 files" })).toBeInTheDocument();
     const start = within(canvas).getByRole("button", { name: "start/ folder, 1 file, layer api" });
     expect(start).toBeInTheDocument();
