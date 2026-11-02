@@ -39,7 +39,7 @@ Every hop was read from the app's own code, not from codeloom's output:
 
 ## Scores (2026-11-01, gate: precision ≥ 0.95 counting exact+param hops, recall ≥ 0.80, per app and hop type)
 
-`test/evals.test.ts` fails CI if any app drops below the gate. Cells are found/expected, precision, recall.
+`test/evals.test.ts` fails CI (`.github/workflows/ci.yml`) if any app drops below the gate. Cells are found/expected, precision, recall.
 
 | App | ui-api | route-handler | handler-store |
 |---|---|---|---|
