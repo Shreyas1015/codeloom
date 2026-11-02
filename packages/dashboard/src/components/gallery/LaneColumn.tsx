@@ -17,6 +17,9 @@ export interface LaneStop {
   /** Why that hop is a guess or unresolved. */
   reason?: string;
   unresolved?: boolean;
+  /** False when no hop leads from the stop above to this one (they only share the lane): no connector is
+   * drawn, just a plain gap. Default true. */
+  connected?: boolean;
 }
 
 export const LANE_NAME: Record<Lane, string> = { ui: "UI", api: "API", code: "Code", db: "DB", queue: "Queue" };
@@ -93,7 +96,11 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
             );
             return (
               <li key={s.index} className="flex flex-col">
-                {i > 0 ? <ConfidenceLine confidence={s.confidence ?? "exact"} reason={s.reason} className="ml-[17px]" /> : null}
+                {i === 0 ? null : s.connected === false ? (
+                  <span aria-hidden="true" data-slot="lane-gap" className="block h-3.5" />
+                ) : (
+                  <ConfidenceLine confidence={s.confidence ?? "exact"} reason={s.reason} className="ml-[17px]" />
+                )}
                 {onSelect ? (
                   <button
                     type="button"
