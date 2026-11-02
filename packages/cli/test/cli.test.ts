@@ -56,3 +56,10 @@ describe("codeloom cli exit codes (final review item 2)", () => {
     expect(exitCodeFor(new Error("boom"))).toBe(1);
   });
 });
+
+describe("codeloom serve", () => {
+  it("registers the serve command", () => {
+    const serve = buildProgram().commands.find((c) => c.name() === "serve");
+    expect(serve).toBeDefined();
+  });
+});

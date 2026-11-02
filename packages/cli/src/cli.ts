@@ -3,6 +3,7 @@ import { runCheck } from "./commands/check.js";
 import { CodeloomError } from "./errors.js";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
+import { runServeCommand } from "./commands/serve.js";
 import { VERSION } from "./version.js";
 
 export { VERSION };
@@ -42,6 +43,13 @@ export function buildProgram(): Command {
       const { output, exitCode } = runCheck(process.cwd(), opts);
       console.log(output);
       process.exitCode = exitCode;
+    });
+
+  program
+    .command("serve")
+    .description("Run the codeloom MCP server on stdio, for Claude or any MCP agent")
+    .action(async () => {
+      await runServeCommand(process.cwd());
     });
 
   return program;
