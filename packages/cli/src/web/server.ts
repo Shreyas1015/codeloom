@@ -32,7 +32,9 @@ export interface DashboardServer {
 const HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
-export const SESSION_COOKIE = "codeloom_session";
+/** The session cookie name: per port, because browsers scope cookies by host, not port, so two
+ * dashboards on 127.0.0.1 would otherwise overwrite each other's session. */
+export const sessionCookie = (port: number): string => `codeloom_session_${port}`;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -194,7 +196,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     const url = new URL(rawUrl, `http://${HOST}:${port}`);
 
     if (rawPath === "/api" || rawPath.startsWith("/api/")) {
-      if (!sameToken(cookieValue(req, SESSION_COOKIE), token)) {
+      if (!sameToken(cookieValue(req, sessionCookie(port)), token)) {
         sendJson(res, 401, { error: 'Missing or wrong session token. Open the URL that "codeloom dashboard" printed.' }, head);
         return;
       }
@@ -210,7 +212,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       url.searchParams.delete("token");
       res.writeHead(302, {
         ...BASE_HEADERS,
-        "Set-Cookie": `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+        "Set-Cookie": `${sessionCookie(port)}=${token}; HttpOnly; SameSite=Strict; Path=/`,
         // Collapse leading slashes: "//evil.com" would be a protocol-relative (off-site) redirect.
         Location: "/" + url.pathname.replace(/^\/+/, "") + url.search,
         "Cache-Control": "no-store",

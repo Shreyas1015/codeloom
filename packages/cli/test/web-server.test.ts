@@ -43,7 +43,8 @@ function get(port: number, path: string, headers: Record<string, string> = {}): 
   });
 }
 
-const cookie = (token = TOKEN) => ({ cookie: `codeloom_session=${token}` });
+/** The session cookie for a server (named per port, so two dashboards never share one). */
+const cookie = (token = TOKEN, port = server.port) => ({ cookie: `codeloom_session_${port}=${token}` });
 
 let demo: string;
 let assets: string;
@@ -187,7 +188,7 @@ describe("token flow", () => {
     expect(r.status).toBe(302);
     expect(r.headers.location).toBe("/");
     const set = r.headers["set-cookie"]?.[0] ?? "";
-    expect(set).toContain(`codeloom_session=${TOKEN}`);
+    expect(set).toContain(`codeloom_session_${server.port}=${TOKEN}`);
     expect(set).toContain("HttpOnly");
     expect(set).toContain("SameSite=Strict");
     expect(set).toContain("Path=/");
@@ -209,6 +210,24 @@ describe("token flow", () => {
       const loc = r.headers.location ?? "";
       expect(loc, path).toMatch(/^\/(?!\/)/);
       expect(loc, path).not.toMatch(/^\/\//);
+    }
+  });
+
+  it("two dashboards on two ports keep separate cookies (neither clobbers the other)", async () => {
+    const tokB = "c".repeat(64);
+    const b = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, token: tokB, watch: false });
+    try {
+      // The browser keeps cookies per host, not per port: both servers' cookies go to both servers.
+      const setA = (await get(server.port, `/?token=${TOKEN}`)).headers["set-cookie"]![0]!.split(";")[0]!;
+      const setB = (await get(b.port, `/?token=${tokB}`, { host: `127.0.0.1:${b.port}` })).headers["set-cookie"]![0]!.split(";")[0]!;
+      expect(setA.split("=")[0]).not.toBe(setB.split("=")[0]);
+      const jar = { cookie: `${setA}; ${setB}` };
+      expect((await get(server.port, "/api/overview", jar)).status).toBe(200);
+      expect((await get(b.port, "/api/overview", { host: `127.0.0.1:${b.port}`, ...jar })).status).toBe(200);
+      // A's cookie alone does not open B.
+      expect((await get(b.port, "/api/overview", { host: `127.0.0.1:${b.port}`, cookie: setA })).status).toBe(401);
+    } finally {
+      await b.close();
     }
   });
 
@@ -454,7 +473,7 @@ describe("/api/overview", () => {
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
     const s = await startDashboardServer({ start: repo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
     try {
-      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie() });
+      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie(TOKEN, s.port) });
       expect(r.status).toBe(409);
       const body = JSON.parse(r.body);
       expect(body.code).toBe("not-indexed");
@@ -470,7 +489,7 @@ describe("/api/overview", () => {
     writeFileSync(join(repo, ".codeloom", "chains.json"), "{ not json");
     const s = await startDashboardServer({ start: repo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
     try {
-      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie() });
+      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie(TOKEN, s.port) });
       expect(r.status).toBe(409);
       expect(JSON.parse(r.body).code).toBe("bad-data");
     } finally {
