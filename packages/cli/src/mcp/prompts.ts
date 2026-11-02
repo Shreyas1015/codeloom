@@ -44,8 +44,9 @@ function verifyJourneyText(journey: string): string {
    re-scoring.
 6. Only if I agree with your findings, save a short note on the journey with \`save_journeys\`, using an
    \`update\` op: \`{ op: "update", id: "<journey id>", note: "..." }\`. If you were given a chain id
-   (ch_…), use the id of the journey \`get_journey\` returned; if it returned no journey, there is nothing
-   to save — just report. Do not call \`save_journeys\` until I say so.`;
+   (ch_…), \`get_journey\` returns \`journey: null\`: take the journey id from \`chains[0].journeys\` (the
+   journeys that name this chain; if there are several, ask me which). If that list is empty, the chain is
+   in no journey and there is nothing to save — just report. Do not call \`save_journeys\` until I say so.`;
 }
 
 // ---- registration -------------------------------------------------------------------------------

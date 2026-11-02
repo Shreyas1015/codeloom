@@ -65,7 +65,8 @@ describe("mcp prompts", () => {
     expect(t).toContain("update");
     expect(t).toContain("note");
     // A chain id has no journey of its own, and stops without a graph ref still get read.
-    expect(t).toMatch(/chain id\s+\(ch_…\)[^.]*journey `get_journey`\s+returned/);
+    expect(t).toMatch(/chain id\s+\(ch_…\)[^.]*`chains\[0\]\.journeys`/);
+    expect(t).toMatch(/list is empty[^.]*nothing\s+to save — just report/);
     expect(t).toMatch(/without a `ref`[^.]*`file`/);
   });
 
