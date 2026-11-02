@@ -17,7 +17,9 @@ import type {
 } from "@/api/types";
 
 // React Flow reads the viewport transform through DOMMatrixReadOnly, which jsdom lacks.
-beforeAll(() => {
+beforeAll(async () => {
+  // the route lazy-loads the screen; load it once up front so the first test is not timed against the import
+  await import("@/screens/map/MapScreen");
   if (typeof globalThis.DOMMatrixReadOnly === "undefined") {
     class DOMMatrixReadOnly {
       m22 = 1;
