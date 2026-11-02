@@ -1,14 +1,16 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import ts from "typescript";
 import { z } from "zod";
 import { JS_EXT, parseSource, walk } from "../../adapters/ast.js";
 import { buildReport } from "../../commands/check.js";
 import { CodeloomError } from "../../errors.js";
-import type { ChainStop } from "../../store/schemas.js";
+import { readJson } from "../../store/json.js";
+import { CODELOOM_DIR, FILES } from "../../store/paths.js";
+import { type ChainStop, FingerprintsSchema } from "../../store/schemas.js";
 import { compare } from "../../util.js";
-import { type ChangedFile, changedLines } from "../../workspace/diff.js";
+import { type ChangedFile, changedLinesAtBase, EMPTY_TREE, isGitRepo, resolveCommit, resolveRange } from "../../workspace/diff.js";
+import { git } from "../../workspace/git.js";
 import { withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
 import { formatNodeRef, journeysForChains, loadMapState } from "../state.js";
@@ -31,17 +33,16 @@ export async function checkChains(opts: ServerOptions, traces: boolean): Promise
 type Range = [number, number];
 const overlaps = (a: Range, b: Range): boolean => a[0] <= b[1] && b[0] <= a[1];
 
-/** Line extents of every function-like node in a JS/TS file, keyed by start line (the widest one
- * starting there). Missing / non-JS / outside-the-repo files → empty map. */
-function functionExtents(repoAbs: string, file: string): Map<number, number> {
+/** Line extents of every function-like node in a JS/TS file as it was at commit `base` (the map's line
+ * space), keyed by start line (the widest one starting there). A non-JS file, or one absent at `base`
+ * (its change is "all" anyway) → empty map. */
+function functionExtents(repoAbs: string, base: string, file: string): Map<number, number> {
   const out = new Map<number, number>();
-  if (!JS_EXT.test(file)) return out;
-  const abs = resolve(repoAbs, file);
-  const rel = relative(repoAbs, abs);
-  if (rel.startsWith("..") || isAbsolute(rel)) return out;
+  if (!JS_EXT.test(file) || base === EMPTY_TREE) return out;
   let text: string;
   try {
-    text = readFileSync(abs, "utf8");
+    // "./" makes the path relative to the repo folder, which may be a subfolder of the git repo.
+    text = git(repoAbs, ["show", "--end-of-options", `${base}:./${file}`], { maxBuffer: 64 * 1024 * 1024 });
   } catch {
     return out;
   }
@@ -55,6 +56,18 @@ function functionExtents(repoAbs: string, file: string): Map<number, number> {
   return out;
 }
 
+/** The commit a repo's map was indexed at (the git-ignored fingerprints cache), or undefined when unknown.
+ * A corrupt or missing cache is the same as unknown. */
+function indexedCommit(repoAbs: string): string | undefined {
+  try {
+    return readJson(join(repoAbs, CODELOOM_DIR, FILES.fingerprints), FingerprintsSchema)?.gitCommitHash || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const short = (sha: string) => sha.slice(0, 7);
+
 /** True when a stop is touched by the change. A stop at the first line of a function (a handler or code
  * stop) spans that function's body, so an edit anywhere inside the function counts; other stops (a
  * route, a db call, a publish) are their own line. */
@@ -65,28 +78,56 @@ function stopTouched(stop: ChainStop, change: ChangedFile, extents: () => Map<nu
   return change.lines.some((r) => overlaps(r, span));
 }
 
-/** Changed lines → graph nodes, chains, journeys, tables and queues. `range` absent = working tree vs HEAD
- * plus untracked files. A range that resolves in some repos but not others skips the others (listed in
- * `skippedRepos`); one that resolves in none, or is option-like, is a data error. */
+/** Changed lines → graph nodes, chains, journeys, tables and queues. Lines are compared in the map's own
+ * line space: the old side of the diff, and function extents read at the base commit.
+ * `range` absent = the repo's indexed commit (else HEAD) vs the working tree, plus untracked files; a repo
+ * that is not a git repo is skipped. With a range, base = its base commit; when the map was indexed at a
+ * different commit, `notes` says line matches are approximate. A range that resolves in some repos but not
+ * others skips the others (listed in `skippedRepos`); one that resolves in none, or is option-like, is a
+ * data error. */
 export function impactOfDiff(start: string, range?: string): Record<string, unknown> {
   const state = loadMapState(start);
   const repos: Array<Record<string, unknown>> = [];
   const skippedRepos: Array<{ id: string; reason: string }> = [];
+  const notes: string[] = [];
   const changesByRepo = new Map<string, Map<string, ChangedFile>>();
+  const baseByRepo = new Map<string, string>();
   let firstError: CodeloomError | undefined;
   let truncated = false;
 
   for (const repo of [...state.ws.repos].sort((a, b) => compare(a.ref.id, b.ref.id))) {
+    const indexed = indexedCommit(repo.abs);
     let changed: ChangedFile[];
-    try {
-      // .codeloom/ holds the map itself, not code.
-      changed = changedLines(repo.abs, range).filter((f) => !f.file.startsWith(".codeloom/"));
-    } catch (err) {
-      if (range === undefined || !(err instanceof CodeloomError)) throw err;
-      firstError ??= err;
-      skippedRepos.push({ id: repo.ref.id, reason: err.message });
-      continue;
+    let base: string;
+    if (range === undefined) {
+      if (!isGitRepo(repo.abs)) {
+        skippedRepos.push({ id: repo.ref.id, reason: `${repo.abs} is not a git repository` });
+        continue;
+      }
+      const at = indexed === undefined ? undefined : resolveCommit(repo.abs, indexed);
+      if (indexed !== undefined && at === undefined) {
+        notes.push(`${repo.ref.id}: map indexed at ${short(indexed)}, which git cannot find; compared with HEAD, line matches are approximate`);
+      }
+      base = at ?? resolveCommit(repo.abs, "HEAD") ?? EMPTY_TREE;
+      changed = changedLinesAtBase(repo.abs, base);
+    } else {
+      let head: string;
+      try {
+        ({ base, head } = resolveRange(repo.abs, range));
+      } catch (err) {
+        if (!(err instanceof CodeloomError)) throw err;
+        firstError ??= err;
+        skippedRepos.push({ id: repo.ref.id, reason: err.message });
+        continue;
+      }
+      if (indexed !== base) {
+        notes.push(`${repo.ref.id}: map indexed at ${indexed ? short(indexed) : "unknown"}, not at ${short(base)}; line matches are approximate`);
+      }
+      changed = changedLinesAtBase(repo.abs, base, head);
     }
+    // .codeloom/ holds the map itself, not code.
+    changed = changed.filter((f) => !f.file.startsWith(".codeloom/"));
+    baseByRepo.set(repo.ref.id, base);
     if (changed.length === 0) continue;
     changesByRepo.set(repo.ref.id, new Map(changed.map((f) => [f.file, f])));
 
@@ -121,7 +162,7 @@ export function impactOfDiff(start: string, range?: string): Record<string, unkn
     let e = extentCache.get(key);
     if (!e) {
       const abs = state.ws.repos.find((r) => r.ref.id === repoId)!.abs;
-      e = functionExtents(abs, file);
+      e = functionExtents(abs, baseByRepo.get(repoId)!, file);
       extentCache.set(key, e);
     }
     return e;
@@ -155,6 +196,7 @@ export function impactOfDiff(start: string, range?: string): Record<string, unkn
     tables: [...tables].sort(compare),
     queues: [...queues].sort(compare),
     skippedRepos,
+    notes: notes.sort(compare),
     truncated,
   };
 }
@@ -182,10 +224,11 @@ export function registerCheckTools(server: McpServer, opts: ServerOptions): void
     {
       title: "Impact of a diff",
       description:
-        "What a code change touches in the map. Without `range`: uncommitted changes (staged, unstaged and " +
-        'untracked files). With `range`: "base..head", or one commit/branch meaning base..HEAD. Returns the changed ' +
+        "What a code change touches in the map. Without `range`: everything since the map was indexed (commits " +
+        'since, staged, unstaged and untracked files). With `range`: "base..head", or one commit/branch meaning base..HEAD. Returns the changed ' +
         "files and graph nodes per repo, the request chains with a stop in a changed line (an edit anywhere in a " +
-        "handler's body counts), the journeys holding those chains, and the tables and queues those chains reach.",
+        "handler's body counts), the journeys holding those chains, and the tables and queues those chains reach. " +
+        "`notes` flags repos whose map was indexed at another commit than the range's base.",
       inputSchema: { range: z.string().max(200).optional() },
     },
     withErrors((args: { range?: string }) => impactOfDiff(opts.start, args.range)),

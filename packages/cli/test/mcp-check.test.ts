@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -31,6 +31,19 @@ async function sc(name: string, args: Record<string, unknown> = {}): Promise<any
   if (item?.type !== "text") throw new Error("expected a text item");
   expect(JSON.parse(item.text)).toEqual(r.structuredContent);
   return r.structuredContent;
+}
+
+/** The commit each repo was indexed at (fingerprints.json). */
+const indexed = (repo: string): string =>
+  JSON.parse(readFileSync(join(demo, repo, ".codeloom", "fingerprints.json"), "utf8")).gitCommitHash;
+
+/** The reviewer's probe: two comment lines above store() shift the file, and show()'s body is edited. */
+function shiftAndEditShow(): void {
+  const rel = "api/app/controllers/customers_controller.ts";
+  const rows = readFileSync(join(demo, rel), "utf8").split("\n");
+  rows[14] = "    return new CustomerService().find(Number(params.id) + 0);"; // show() body, line 15
+  rows.splice(8, 0, "  // a comment", "  // another"); // above store() (line 9)
+  writeFileSync(join(demo, rel), rows.join("\n"));
 }
 
 /** Rewrite one line (1-based) of a file in the demo workspace. */
@@ -94,7 +107,8 @@ describe("check_chains", () => {
 describe("impact_of_diff", () => {
   it("is empty on a clean workspace", async () => {
     expect(await sc("impact_of_diff")).toEqual({
-      range: null, repos: [], chains: [], chainsTruncated: false, journeys: [], tables: [], queues: [], skippedRepos: [], truncated: false,
+      range: null, repos: [], chains: [], chainsTruncated: false, journeys: [], tables: [], queues: [], skippedRepos: [], notes: [],
+      truncated: false,
     });
   });
 
@@ -158,6 +172,10 @@ describe("impact_of_diff", () => {
       expect(r.repos[0].changedFiles).toEqual(["app/services/customer_service.ts"]);
       expect(r.chains).toEqual([showId]);
       expect(r.skippedRepos.map((x: { id: string }) => x.id)).toEqual(["billing", "web"]);
+      // The map was indexed one commit before `base` (the .codeloom commit).
+      expect(r.notes).toEqual([
+        `api: map indexed at ${indexed("api").slice(0, 7)}, not at ${base.slice(0, 7)}; line matches are approximate`,
+      ]);
     } finally {
       sh(api, "reset", "-q", "--hard", base);
     }
@@ -167,6 +185,47 @@ describe("impact_of_diff", () => {
     for (const range of ["nope..HEAD", "--output=/tmp/x", "-p"]) {
       const r = await call("impact_of_diff", { range });
       expect(r.isError, range).toBe(true);
+    }
+  });
+
+  it("matches in the map's line space: lines added above store() plus an edit in show() list only show", async () => {
+    shiftAndEditShow();
+    const r = await sc("impact_of_diff");
+    expect(r.chains).toEqual([showId]);
+    expect(r.journeys).toEqual([{ id: SHOW, name: "View a customer" }]);
+    expect(r.notes).toEqual([]);
+  });
+
+  it("matches in the base's line space for a range too", async () => {
+    const api = join(demo, "api");
+    const base = sh(api, "rev-parse", "HEAD");
+    shiftAndEditShow();
+    commitAll(api);
+    try {
+      const r = await sc("impact_of_diff", { range: `${base}..HEAD` });
+      expect(r.chains).toEqual([showId]);
+    } finally {
+      sh(api, "reset", "-q", "--hard", base);
+    }
+  });
+
+  it("ignores changes under .codeloom/ (the map itself)", async () => {
+    writeFileSync(join(demo, "api", ".codeloom", "scratch.json"), "{}\n");
+    const r = await sc("impact_of_diff");
+    expect(r.repos).toEqual([]);
+    expect(r.chains).toEqual([]);
+  });
+
+  it("skips a repo that is not a git repo in working-tree mode", async () => {
+    const web = join(demo, "web");
+    renameSync(join(web, ".git"), join(web, ".git-off"));
+    try {
+      editLine("api/app/controllers/customers_controller.ts", 11, "    return response.created({ ...customer });");
+      const r = await sc("impact_of_diff");
+      expect(r.skippedRepos).toEqual([{ id: "web", reason: expect.stringMatching(/not a git repository/) }]);
+      expect(r.chains).toEqual([createId]);
+    } finally {
+      renameSync(join(web, ".git-off"), join(web, ".git"));
     }
   });
 });
