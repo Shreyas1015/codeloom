@@ -3,10 +3,22 @@ import { join } from "node:path";
 import ignore from "ignore";
 import { createIgnoreFilter } from "@codeloom/core";
 import { CODELOOM_DIR } from "../store/paths.js";
-import { git } from "./git.js";
+import { git, gitAsync } from "./git.js";
+
+const LS_FILES = ["ls-files", "--cached", "--others", "--exclude-standard", "-z"];
+const LS_MAX_BUFFER = 256 * 1024 * 1024;
 
 export function listFiles(repoAbs: string, extraIgnore: string[] = []): string[] {
-  const out = git(repoAbs, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { maxBuffer: 256 * 1024 * 1024 });
+  return filterListedFiles(repoAbs, git(repoAbs, LS_FILES, { maxBuffer: LS_MAX_BUFFER }), extraIgnore);
+}
+
+/** listFiles without blocking the event loop on git (the dashboard server). */
+export async function listFilesAsync(repoAbs: string, extraIgnore: string[] = []): Promise<string[]> {
+  return filterListedFiles(repoAbs, await gitAsync(repoAbs, LS_FILES, { maxBuffer: LS_MAX_BUFFER }), extraIgnore);
+}
+
+/** The indexable files from `git ls-files -z` output: ignore rules applied, regular files only, sorted. */
+function filterListedFiles(repoAbs: string, out: string, extraIgnore: string[]): string[] {
   const defaults = createIgnoreFilter(repoAbs);
   const extra = ignore().add([`${CODELOOM_DIR}/`, ...extraIgnore]);
   const isFile = (rel: string) => {

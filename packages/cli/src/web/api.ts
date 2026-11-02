@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
-import { indexStatus, workspaceOverview } from "../mcp/tools/workspace.js";
+import { indexStatusAsync, workspaceOverview } from "../mcp/tools/workspace.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import { sendJson } from "./http.js";
 
@@ -36,12 +36,13 @@ export interface ApiRoute {
 }
 
 /** /api/overview: workspaceOverview & { indexStatus, mcpConnected } — mcpConnected is whether .mcp.json
- * at the workspace root has a codeloom entry (the same read-only check `codeloom doctor` uses). */
-export function overview(start: string): Record<string, unknown> {
+ * at the workspace root has a codeloom entry (the same read-only check `codeloom doctor` uses). The git
+ * calls behind indexStatus run async (execFile), so a slow git never blocks other requests. */
+export async function overview(start: string): Promise<Record<string, unknown>> {
   const base = workspaceOverview(start);
   const root = loadWorkspace(start).root;
   const mcp = mcpEntryState(root);
-  return { ...base, indexStatus: indexStatus(start), mcpConnected: mcp === "present" || mcp === "kept-custom" };
+  return { ...base, indexStatus: await indexStatusAsync(start), mcpConnected: mcp === "present" || mcp === "kept-custom" };
 }
 
 /** The route table. Every handler reads the store fresh on each request (no cache), like the MCP tools. */

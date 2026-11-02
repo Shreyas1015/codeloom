@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
@@ -322,6 +323,33 @@ describe("/api/overview", () => {
     expect(body.chains.total).toBeGreaterThan(0);
     expect(body.indexStatus.repos.map((x: { id: string }) => x.id)).toEqual(["api", "billing", "web"]);
     expect(body.mcpConnected).toBe(false);
+  });
+
+  it("does not block the server: a static request answers while an overview waits on a slow git", async () => {
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const bin = mkdtempSync(join(tmpdir(), "codeloom-slowgit-"));
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 0.4\nexec "${realGit}" "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const fast = JSON.parse((await get(server.port, "/api/overview", cookie())).body);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${savedPath}`;
+    try {
+      const t0 = Date.now();
+      const overview = get(server.port, "/api/overview", cookie());
+      await new Promise((r) => setTimeout(r, 150));
+      const page = await get(server.port, "/");
+      const pageAt = Date.now() - t0;
+      const slow = await overview;
+      const overviewAt = Date.now() - t0;
+      expect(page.status).toBe(200);
+      expect(slow.status).toBe(200);
+      // The overview runs several git calls of 0.4 s each; the page must not wait for them.
+      expect(overviewAt).toBeGreaterThan(1000);
+      expect(pageAt).toBeLessThan(overviewAt - 500);
+      expect(JSON.parse(slow.body).indexStatus).toEqual(fast.indexStatus);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
   it("mcpConnected is true once .mcp.json has a codeloom entry (read fresh)", async () => {
