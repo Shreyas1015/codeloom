@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { connect, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -104,17 +104,33 @@ describe("startDashboardServer", () => {
     );
   });
 
-  it("close() frees the port", async () => {
+  it("close() frees the port promptly even with a kept-alive connection open", async () => {
     const s = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
     const port = s.port;
-    // A kept-alive connection must not hold the server open.
-    await get(port, "/api/overview", cookie());
-    await s.close();
-    await new Promise<void>((resolve, reject) => {
-      const probe = createNetServer();
-      probe.once("error", reject);
-      probe.listen(port, "127.0.0.1", () => probe.close(() => resolve()));
-    });
+    const agent = new http.Agent({ keepAlive: true, keepAliveMsecs: 60_000 });
+    try {
+      const r = await new Promise<{ status: number; free: number }>((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port, path: "/", agent }, (res) => {
+          res.resume();
+          res.on("end", () => setImmediate(() => resolve({ status: res.statusCode ?? 0, free: Object.keys(agent.freeSockets).length })));
+        });
+        req.on("error", reject);
+        req.end();
+      });
+      expect(r.status).toBe(200);
+      // The socket is parked in the agent's free pool: a live keep-alive connection to the server.
+      expect(r.free).toBe(1);
+      const t0 = Date.now();
+      await s.close();
+      expect(Date.now() - t0).toBeLessThan(1000);
+      await new Promise<void>((resolve, reject) => {
+        const probe = createNetServer();
+        probe.once("error", reject);
+        probe.listen(port, "127.0.0.1", () => probe.close(() => resolve()));
+      });
+    } finally {
+      agent.destroy();
+    }
   });
 
   it("an explicit port that is in use → CodeloomError naming the port", async () => {
@@ -123,14 +139,28 @@ describe("startDashboardServer", () => {
     ).rejects.toThrow(new RegExp(`Port ${server.port} is in use`));
   });
 
-  it("with no port, takes the first free port from 4747 upward", async () => {
-    const s = await startDashboardServer({ start: demo, assetsDir: assets, token: TOKEN, watch: false });
+  it("with no port, takes the first free port from 4747 upward (4747 busy → 4748)", async () => {
+    const occupy = (port: number) =>
+      new Promise<ReturnType<typeof createNetServer> | null>((resolve) => {
+        const blocker = createNetServer();
+        blocker.once("error", () => resolve(null)); // already busy (someone else holds it): fine too
+        blocker.listen(port, "127.0.0.1", () => resolve(blocker));
+      });
+    const blocker = await occupy(4747);
+    // 4748 must be free for the assertion to mean anything.
+    const probe = await occupy(4748);
+    expect(probe, "port 4748 is busy on this machine").not.toBeNull();
+    await new Promise<void>((r) => probe!.close(() => r()));
     try {
-      expect(s.port).toBeGreaterThanOrEqual(4747);
-      // Unless all 20 are taken on this machine, in which case the OS picks one.
-      if (s.port > 4766) expect(s.port).toBeGreaterThan(0);
+      const s = await startDashboardServer({ start: demo, assetsDir: assets, token: TOKEN, watch: false });
+      try {
+        expect(s.port).toBe(4748);
+        expect(s.url).toBe(`http://127.0.0.1:4748/?token=${TOKEN}`);
+      } finally {
+        await s.close();
+      }
     } finally {
-      await s.close();
+      await new Promise<void>((r) => (blocker ? blocker.close(() => r()) : r()));
     }
   });
 });
@@ -202,6 +232,30 @@ describe("Host guard (DNS rebinding)", () => {
     expect((await get(server.port, "/api/overview", { host: "evil.example.com", ...cookie() })).status).toBe(403);
     expect((await get(server.port, `/?token=${TOKEN}`, { host: "evil.example.com" })).headers["set-cookie"]).toBeUndefined();
   });
+
+  it("[::1]:<port> → 403 (the server binds 127.0.0.1; only 127.0.0.1 and localhost names are allowed)", async () => {
+    expect((await get(server.port, "/", { host: `[::1]:${server.port}` })).status).toBe(403);
+  });
+
+  it("a port mismatch → 403 (127.0.0.1 or localhost with another port, or no port)", async () => {
+    const other = server.port === 65535 ? 65534 : server.port + 1;
+    expect((await get(server.port, "/", { host: `localhost:${other}` })).status).toBe(403);
+    expect((await get(server.port, "/", { host: `127.0.0.1:${other}` })).status).toBe(403);
+    expect((await get(server.port, "/", { host: "127.0.0.1" })).status).toBe(403);
+    expect((await get(server.port, "/", { host: "localhost" })).status).toBe(403);
+  });
+
+  it("a missing Host header (HTTP/1.0) → 403", async () => {
+    const raw = await new Promise<string>((resolve, reject) => {
+      const sock = connect(server.port, "127.0.0.1", () => sock.write("GET / HTTP/1.0\r\n\r\n"));
+      let out = "";
+      sock.setEncoding("utf8");
+      sock.on("data", (c) => (out += c));
+      sock.on("end", () => resolve(out));
+      sock.on("error", reject);
+    });
+    expect(raw).toMatch(/^HTTP\/1\.[01] 403 /);
+  });
 });
 
 describe("static files", () => {
@@ -264,6 +318,44 @@ describe("static files", () => {
       expect(r.status, path).toBe(404);
       expect(r.body, path).not.toContain("root:");
     }
+  });
+
+  it("a symlink inside the assets folder that points outside → 404", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "codeloom-secret-"));
+    writeFileSync(join(outside, "secret.txt"), "TOP SECRET");
+    symlinkSync(join(outside, "secret.txt"), join(assets, "leak.txt"));
+    symlinkSync(outside, join(assets, "leakdir"));
+    for (const path of ["/leak.txt", "/leakdir/secret.txt"]) {
+      const r = await get(server.port, path);
+      expect(r.status, path).toBe(404);
+      expect(r.body, path).not.toContain("TOP SECRET");
+    }
+  });
+
+  it("HEAD answers with the headers and no body (static and API)", async () => {
+    const head = (path: string, headers: Record<string, string> = {}) =>
+      new Promise<Res>((resolve, reject) => {
+        const req = http.request(
+          { host: "127.0.0.1", port: server.port, path, method: "HEAD", headers, agent: false },
+          (res) => {
+            let body = "";
+            res.on("data", (c) => (body += c));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      });
+    const page = await head("/");
+    expect(page.status).toBe(200);
+    expect(page.body).toBe("");
+    expect(page.headers["content-length"]).toBe(String(Buffer.byteLength(INDEX_HTML)));
+    expect(page.headers["content-type"]).toBe("text/html; charset=utf-8");
+    const api = await head("/api/overview", cookie());
+    expect(api.status).toBe(200);
+    expect(api.body).toBe("");
+    expect(Number(api.headers["content-length"])).toBeGreaterThan(0);
+    expect((await head("/api/overview")).status).toBe(401);
   });
 
   it("only GET and HEAD are allowed", async () => {
