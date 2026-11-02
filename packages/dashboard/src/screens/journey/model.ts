@@ -6,11 +6,10 @@ export interface JourneyStop {
   view: StopView;
   /** Chains that pass through it, in chain order. */
   chainIds: string[];
-  /** An unresolved item sits on this stop: the trail stops here. */
-  unresolved: boolean;
 }
 
-/** A hop between two consecutive stops of one chain. Its confidence is the arriving stop's. */
+/** A hop the linker recorded: from `stops[from]` to a stop of the same chain, with the arriving stop's
+ * confidence and reason. When two chains make the same hop, the worse confidence wins. */
 export interface JourneyHop {
   from: number;
   to: number;
@@ -44,36 +43,52 @@ export function stopTitle(s: StopView): string {
   return s.label ?? s.symbol;
 }
 
+// TODO(from): drop this cast once StopView carries `from` in codeloom's api-types.
+/** Index, within the same chain's stops, of the stop this one was reached from. */
+export function stopFrom(s: StopView): number | undefined {
+  const from = (s as { from?: number }).from;
+  return typeof from === "number" && Number.isInteger(from) ? from : undefined;
+}
+
 export function buildJourneyModel(r: JourneyResult): JourneyModel {
   const byKey = new Map<string, JourneyStop>();
   const stops: JourneyStop[] = [];
   const hops: JourneyHop[] = [];
-  const hopSeen = new Set<string>();
+  const hopAt = new Map<string, JourneyHop>();
   const chainStops = new Map<string, number[]>();
-  const unresolvedAt = new Set(r.chains.flatMap((c) => c.unresolved.map((u) => `${u.at.repo}\0${u.at.file}\0${u.at.line}`)));
 
   for (const c of r.chains) {
     const nums: number[] = [];
-    let prev: JourneyStop | undefined;
     for (const s of c.stops) {
       const key = stopKey(s);
       let stop = byKey.get(key);
       if (!stop) {
-        stop = { n: stops.length + 1, view: s, chainIds: [], unresolved: unresolvedAt.has(`${s.repo}\0${s.file}\0${s.line}`) };
+        stop = { n: stops.length + 1, view: s, chainIds: [] };
         byKey.set(key, stop);
         stops.push(stop);
       }
       if (!stop.chainIds.includes(c.id)) stop.chainIds.push(c.id);
       nums.push(stop.n);
-      if (prev && prev.n !== stop.n) {
-        const hk = `${prev.n}>${stop.n}`;
-        if (!hopSeen.has(hk)) {
-          hopSeen.add(hk);
-          hops.push({ from: prev.n, to: stop.n, confidence: s.confidence, ...(s.reason ? { reason: s.reason } : {}) });
-        }
-      }
-      prev = stop;
     }
+    // only the hops the linker recorded: never inferred from list order
+    c.stops.forEach((s, i) => {
+      const from = stopFrom(s);
+      if (from === undefined || from === i || from < 0 || from >= nums.length) return;
+      const a = nums[from]!;
+      const b = nums[i]!;
+      if (a === b) return;
+      const hk = `${a}>${b}`;
+      const seen = hopAt.get(hk);
+      if (!seen) {
+        const hop: JourneyHop = { from: a, to: b, confidence: s.confidence, ...(s.reason ? { reason: s.reason } : {}) };
+        hopAt.set(hk, hop);
+        hops.push(hop);
+      } else if (RANK[s.confidence] > RANK[seen.confidence]) {
+        seen.confidence = s.confidence;
+        if (s.reason) seen.reason = s.reason;
+        else delete seen.reason;
+      }
+    });
     chainStops.set(c.id, nums);
   }
 
