@@ -186,10 +186,91 @@ describe("trace_route", () => {
     expect(ids(r.matches)).toEqual([showId]);
   });
 
-  it('"table:<name>" and "queue:<name>"', async () => {
+  // The web page's own route is stored as "/customers/[id]" (Next.js bracket form, straight from the
+  // fixture's folder name) — unlike the api route, which is already ":id". Querying it with a concrete
+  // value or a colon param only matches because normalisePath also runs on the *stored* stop path inside
+  // pathMatches, not just on the query. If normalisePath were the identity function, "[id]" would stay a
+  // literal segment and neither query would match: this is the test that would catch that regression.
+  it("normalises the stored page route ([id]) against a concrete value or a colon param", async () => {
+    for (const from of ["/customers/42", "/customers/:id"]) {
+      const r = await sc("trace_route", { from });
+      expect(ids(r.matches), from).toEqual([showId]);
+    }
+  });
+
+  it('"METHOD /path" never matches page stops, only route stops', async () => {
+    // The web page lives at "/customers/[id]"; prefixing a method must not fall through to it.
+    const withMethod = await sc("trace_route", { from: "GET /customers/[id]" });
+    expect(withMethod.matches).toEqual([]);
+    // Sanity: the bare path (no method) does match it.
+    const bare = await sc("trace_route", { from: "/customers/[id]" });
+    expect(ids(bare.matches)).toEqual([showId]);
+  });
+
+  it('"table:<name>" and "queue:<name>" match in any repo', async () => {
     expect(ids((await sc("trace_route", { from: "table:customers" })).matches)).toEqual([createId, showId].sort());
     expect(ids((await sc("trace_route", { from: "queue:emails" })).matches)).toEqual([emailId, payId].sort());
     expect(ids((await sc("trace_route", { from: "queue:invoice.paid" })).matches)).toEqual([payId]);
+  });
+
+  it('"table:<repo>:<name>" and "queue:<repo>:<name>" restrict matching to that repo', async () => {
+    // "customers" only exists as a db stop in the api repo: the repo-qualified form matches the same
+    // chains as the bare form, but a different repo qualifier matches nothing.
+    expect(ids((await sc("trace_route", { from: "table:api:customers" })).matches)).toEqual([createId, showId].sort());
+    expect((await sc("trace_route", { from: "table:billing:customers" })).matches).toEqual([]);
+    expect((await sc("trace_route", { from: "table:web:customers" })).matches).toEqual([]);
+    // "emails" queue stops are in the billing repo.
+    expect(ids((await sc("trace_route", { from: "queue:billing:emails" })).matches)).toEqual([emailId, payId].sort());
+    expect((await sc("trace_route", { from: "queue:web:emails" })).matches).toEqual([]);
+    // The queue label "billing:invoice.paid" itself contains ":" and happens to start with a real repo id
+    // ("billing"): it still matches, because disambiguation only strips a recognised repo id, and the
+    // remaining name ("invoice.paid") is a suffix of the label either way.
+    expect(ids((await sc("trace_route", { from: "queue:billing:invoice.paid" })).matches)).toEqual([payId]);
+  });
+
+  it('"table:" or "queue:" with a blank name is a tool error', async () => {
+    for (const from of ["table:", "queue:", "table: ", "table:api:", "queue:billing:"]) {
+      const r = await call("trace_route", { from });
+      expect(r.isError, from).toBe(true);
+    }
+  });
+
+  it("more than 50 matches is capped at 50 with truncated: true", async () => {
+    const raw = readFileSync(join(demo, ".codeloom", "chains.json"), "utf8");
+    try {
+      const file = JSON.parse(raw);
+      const extra = Array.from({ length: 60 }, (_, i) => ({
+        id: `ch_fff${i.toString(16).padStart(9, "0")}`,
+        entry: `queue:api:synthetic#${i}`,
+        routeKey: `api:synthetic-${i}`,
+        name: `synthetic ${i}`,
+        stops: [
+          {
+            lane: "db",
+            kind: "db",
+            repo: "api",
+            file: "synthetic.ts",
+            line: 1,
+            symbol: "synthetic",
+            label: "customers",
+            hop: { confidence: "exact" },
+          },
+        ],
+        unresolved: [],
+        confidence: "exact",
+        complete: true,
+      }));
+      file.chains = [...file.chains, ...extra];
+      writeFileSync(join(demo, ".codeloom", "chains.json"), JSON.stringify(file, null, 2) + "\n");
+
+      const r = await sc("trace_route", { from: "table:customers" });
+      expect(r.matches).toHaveLength(50);
+      expect(r.truncated).toBe(true);
+      const expectedFirst50 = [...[createId, showId], ...extra.map((c) => c.id)].sort().slice(0, 50);
+      expect(ids(r.matches)).toEqual(expectedFirst50);
+    } finally {
+      writeFileSync(join(demo, ".codeloom", "chains.json"), raw);
+    }
   });
 
   it("a node ref", async () => {
@@ -219,6 +300,36 @@ describe("save_journeys", () => {
     const badShape = await call("save_journeys", { ops: [{ op: "rename", id: SIGNUP }] });
     expect(badShape.isError).toBe(true);
     expect(readFileSync(journeysPath, "utf8")).toBe(before);
+  });
+
+  it("a journeys.json with a duplicate journey id is a clear dataError, nothing written", async () => {
+    const before = readFileSync(journeysPath, "utf8");
+    try {
+      writeFileSync(
+        journeysPath,
+        JSON.stringify({
+          version: 1,
+          journeys: [
+            { id: SIGNUP, name: "Sign up a customer", area: "customers", note: "", chainIds: [createId], status: "ok" },
+            { id: SIGNUP, name: "Duplicate", area: "", note: "", chainIds: [showId], status: "ok" },
+          ],
+        }) + "\n",
+      );
+      const r = await call("save_journeys", { ops: [{ op: "update", id: SIGNUP, name: "x" }] });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toMatch(new RegExp(`duplicate journey id ${SIGNUP} in journeys\\.json.*fix it by hand`));
+      expect(readFileSync(journeysPath, "utf8")).toBe(
+        JSON.stringify({
+          version: 1,
+          journeys: [
+            { id: SIGNUP, name: "Sign up a customer", area: "customers", note: "", chainIds: [createId], status: "ok" },
+            { id: SIGNUP, name: "Duplicate", area: "", note: "", chainIds: [showId], status: "ok" },
+          ],
+        }) + "\n",
+      );
+    } finally {
+      writeFileSync(journeysPath, before);
+    }
   });
 
   it("writes a valid journeys.json that a following index keeps", async () => {

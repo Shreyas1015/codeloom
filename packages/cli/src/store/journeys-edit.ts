@@ -85,8 +85,11 @@ export function applyJourneyOps(journeys: Journey[], ops: JourneyOp[], knownChai
           const names = op.parts.map((p, k) => {
             const name = cleanName(p.name, `parts[${k}].name`);
             if (p.chainIds.length === 0) throw new OpError(`parts[${k}] names no chains`);
+            const partSeen = new Set<string>();
             for (const c of p.chainIds) {
               if (!own.has(c)) throw new OpError(`parts[${k}]: chain ${c} is not in journey ${j.id}`);
+              if (partSeen.has(c)) throw new OpError(`chain ${c} is listed twice in part ${k}`);
+              partSeen.add(c);
               if (seen.has(c)) throw new OpError(`chain ${c} is in more than one part`);
               seen.add(c);
             }
@@ -123,10 +126,17 @@ export function applyJourneyOps(journeys: Journey[], ops: JourneyOp[], knownChai
 
 /** Read journeys.json fresh (hand-written: a bad file is reported, never overwritten), apply the ops
  * against the chain ids in chains.json, validate with JourneysFileSchema and write it atomically (only when
- * the content changes). All or nothing: a bad op writes nothing. */
+ * the content changes). All or nothing: a bad op writes nothing. A journeys.json with a duplicate journey
+ * id is reported as a dataError (nothing is written) rather than silently letting one shadow the other. */
 export function saveJourneys(state: MapState, ops: JourneyOp[]): JourneyOpsResult {
   const current = readJson(state.journeysPath, JourneysFileSchema, { handWritten: true });
-  const result = applyJourneyOps(current?.journeys ?? [], ops, new Set(state.chains.map((c) => c.id)));
+  const journeys = current?.journeys ?? [];
+  const seenIds = new Set<string>();
+  for (const j of journeys) {
+    if (seenIds.has(j.id)) throw dataError(`duplicate journey id ${j.id} in journeys.json — fix it by hand`);
+    seenIds.add(j.id);
+  }
+  const result = applyJourneyOps(journeys, ops, new Set(state.chains.map((c) => c.id)));
   const file: JourneysFile = JourneysFileSchema.parse({ version: 1, journeys: result.journeys });
   writeJsonIfChanged(state.journeysPath, file);
   return result;

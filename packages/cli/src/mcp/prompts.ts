@@ -34,7 +34,8 @@ function verifyJourneyText(journey: string): string {
    out by lane (ui / api / code / db / queue), each with a \`ref\` ("<repo>::<nodeId>") when it sits on a
    graph node.
 2. For every stop that has a \`ref\`, call \`explain_context\` with \`{ node: ref }\` to read its source
-   code and its neighbors.
+   code and its neighbors. A stop without a \`ref\` (often a DB or queue stop) still has \`repo\`, \`file\`
+   and \`line\`: read the code at that line yourself.
 3. Judge each hop against the code you just read, not against the chain's own claim:
    - "agrees" — the code does what the stop says (same route, same table, same call, same file/line).
    - "doubtful (why)" — say exactly what looks wrong, e.g. "doubtful (route path doesn't match the code)".
@@ -42,8 +43,9 @@ function verifyJourneyText(journey: string): string {
 5. Never change a stop's confidence. Confidence is not yours to change — you are only checking, not
    re-scoring.
 6. Only if I agree with your findings, save a short note on the journey with \`save_journeys\`, using an
-   \`update\` op: \`{ op: "update", id: "${journey}", note: "..." }\`. Do not call \`save_journeys\` until
-   I say so.`;
+   \`update\` op: \`{ op: "update", id: "<journey id>", note: "..." }\`. If you were given a chain id
+   (ch_…), use the id of the journey \`get_journey\` returned; if it returned no journey, there is nothing
+   to save — just report. Do not call \`save_journeys\` until I say so.`;
 }
 
 // ---- registration -------------------------------------------------------------------------------

@@ -138,8 +138,8 @@ const METHODS = new Set<string>(HttpMethodSchema.options);
 
 type From =
   | { kind: "path"; method?: HttpMethod; path: string }
-  | { kind: "table"; name: string }
-  | { kind: "queue"; name: string }
+  | { kind: "table"; name: string; repo?: string }
+  | { kind: "queue"; name: string; repo?: string }
   | { kind: "node"; ref: string };
 
 /** `{id}` and `[id]` → `:id`; `[...slug]` / `[[...slug]]` → `:slug*` (the matcher's param/splat forms). */
@@ -155,10 +155,29 @@ export function normalisePath(path: string): string {
     .join("/");
 }
 
-function parseFrom(from: string): From {
+/** `table:<name>` / `queue:<name>` (any repo), or the repo-qualified form `search` returns, `table:<repo>:<name>` /
+ * `queue:<repo>:<name>` (that repo only). A queue label itself may contain ":" (`exchange:key`), so the segment
+ * before the first ":" is only ever read as a repo id when it names a known repo; otherwise the whole remainder
+ * is the name. Either form with a blank name is a tool error. */
+function parseNamed(kind: "table" | "queue", rest: string, from: string, repoIds: Set<string>): From {
+  const trimmed = rest.trim();
+  if (!trimmed) throw dataError(`"${from}": the name after "${kind}:" is blank.`);
+  const at = trimmed.indexOf(":");
+  if (at >= 0) {
+    const repo = trimmed.slice(0, at);
+    const name = trimmed.slice(at + 1);
+    if (repoIds.has(repo)) {
+      if (!name) throw dataError(`"${from}": the name after "${kind}:${repo}:" is blank.`);
+      return { kind, name, repo };
+    }
+  }
+  return { kind, name: trimmed };
+}
+
+function parseFrom(from: string, repoIds: Set<string>): From {
   const s = from.trim();
-  const named = s.match(/^(table|queue):(.+)$/);
-  if (named) return { kind: named[1] as "table" | "queue", name: named[2]!.trim() };
+  const named = s.match(/^(table|queue):(.*)$/);
+  if (named) return parseNamed(named[1] as "table" | "queue", named[2]!, from, repoIds);
   if (s.includes("::")) return { kind: "node", ref: s };
   const withMethod = s.match(/^([A-Za-z]+)\s+(\/\S*)$/);
   if (withMethod && METHODS.has(withMethod[1]!.toUpperCase())) {
@@ -197,7 +216,8 @@ function queueMatches(label: string | undefined, name: string): boolean {
 
 export function traceRoute(start: string, from: string): Record<string, unknown> {
   const state = loadMapState(start);
-  const f = parseFrom(from);
+  const repoIds = new Set(state.ws.repos.map((r) => r.ref.id));
+  const f = parseFrom(from, repoIds);
   let hits: Chain[];
   if (f.kind === "node") {
     const ref = parseNodeRef(f.ref);
@@ -208,9 +228,9 @@ export function traceRoute(start: string, from: string): Record<string, unknown>
       c.stops.some((s) => {
         switch (f.kind) {
           case "table":
-            return s.lane === "db" && s.label === f.name;
+            return (f.repo === undefined || s.repo === f.repo) && s.lane === "db" && s.label === f.name;
           case "queue":
-            return s.lane === "queue" && queueMatches(s.label, f.name);
+            return (f.repo === undefined || s.repo === f.repo) && s.lane === "queue" && queueMatches(s.label, f.name);
           case "path": {
             if (s.kind === "route") {
               const r = routeOf(c, s);
@@ -295,8 +315,9 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
       title: "Trace route",
       description:
         'Find the chains that pass through a point: "METHOD /path" or "/path" (an API route in any repo, or a UI page ' +
-        'route; :id, {id} and [id] are treated alike, and concrete values like /users/42 match), "table:<name>", ' +
-        '"queue:<name>", or a node reference "<repo>::<nodeId>". At most 50 chains.',
+        'route; :id, {id} and [id] are treated alike, and concrete values like /users/42 match), "table:<name>" or ' +
+        '"table:<repo>:<name>", "queue:<name>" or "queue:<repo>:<name>" (the repo-qualified forms, as `search` returns ' +
+        "them, restrict matching to that repo), or a node reference \"<repo>::<nodeId>\". At most 50 chains.",
       inputSchema: { from: z.string().min(1).max(500) },
     },
     withErrors((args: { from: string }) => traceRoute(opts.start, args.from)),
@@ -310,7 +331,8 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         "Name and organise user journeys in .codeloom/journeys.json (committed with the code). Ops run in order, all or " +
         "nothing: create {name, area?, note?, chainIds}, update {id, name?, area?, note?}, merge {ids (≥2), name, …}, " +
         "split {id, parts: [{name, chainIds}, …] covering the journey's chains with no overlap}, delete {id}. A journey's " +
-        "id comes from its chain ids and never changes; merge and split make new journeys and delete the old ones.",
+        "id comes from its chain ids and never changes; merge and split make new journeys and delete the old ones. " +
+        "Unknown extra keys on a journey in journeys.json are not kept — the file is rewritten from the known fields.",
       inputSchema: { ops: z.array(JourneyOpSchema).min(1).max(100) },
     },
     withErrors((args: { ops: JourneyOp[] }) => saveJourneysTool(opts.start, args.ops)),

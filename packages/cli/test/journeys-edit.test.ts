@@ -3,6 +3,7 @@ import { CodeloomError } from "../src/errors.js";
 import { journeyId } from "../src/linker/chains.js";
 import { applyJourneyOps, type JourneyOp } from "../src/store/journeys-edit.js";
 import type { Journey } from "../src/store/schemas.js";
+import { compare } from "../src/util.js";
 
 const A = "ch_aaaaaaaaaaaa";
 const B = "ch_bbbbbbbbbbbb";
@@ -84,6 +85,16 @@ describe("applyJourneyOps", () => {
     expect(r.journeys.map((x) => x.id)).toEqual([journeyId([A, B])]);
   });
 
+  it("returns output sorted by id even when the input is unsorted", () => {
+    const ab = j([A, B], "Buy");
+    const c = j([C], "Pay");
+    // Deliberately given with C before AB, whichever order that actually sorts to.
+    const input = [c, ab];
+    const r = applyJourneyOps(input, [], known);
+    const expected = [ab.id, c.id].sort(compare);
+    expect(r.journeys.map((x) => x.id)).toEqual(expected);
+  });
+
   it("applies ops in order (create then update the new id)", () => {
     const id = journeyId([D]);
     const r = applyJourneyOps(base(), [{ op: "create", name: "D", chainIds: [D] }, { op: "update", id, name: "Dee" }], known);
@@ -117,6 +128,11 @@ describe("applyJourneyOps", () => {
       expectOpError([{ op: "split", id: journeyId([A, B]), parts: [{ name: "x", chainIds: [A, B] }] }], /ops\[0\]: .*2/));
     it("split with overlapping parts", () =>
       expectOpError([{ op: "split", id: journeyId([A, B]), parts: [{ name: "x", chainIds: [A, B] }, { name: "y", chainIds: [B] }] }], /ops\[0\]: .*more than one part/));
+    it("split with the same chain listed twice in one part", () =>
+      expectOpError(
+        [{ op: "split", id: journeyId([A, B]), parts: [{ name: "x", chainIds: [A, A] }, { name: "y", chainIds: [B] }] }],
+        /ops\[0\]: .*chain ch_aaaaaaaaaaaa is listed twice in part 0/,
+      ));
     it("split that does not cover every chain", () =>
       expectOpError([{ op: "split", id: journeyId([A, B]), parts: [{ name: "x", chainIds: [A] }, { name: "y", chainIds: [] }] }], /ops\[0\]: /));
     it("split that leaves a chain out", () => {
