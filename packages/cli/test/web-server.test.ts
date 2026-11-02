@@ -281,6 +281,35 @@ describe("static files", () => {
   });
 });
 
+describe("security headers on every response", () => {
+  it("nosniff and no-referrer on 200/302/401/403/404/405 and API JSON", async () => {
+    const p = server.port;
+    const responses: Array<[string, Res]> = [
+      ["static 200", await get(p, "/")],
+      ["api 200", await get(p, "/api/overview", cookie())],
+      ["redirect 302", await get(p, `/?token=${TOKEN}`)],
+      ["api 401", await get(p, "/api/overview")],
+      ["static 401", await get(p, "/?token=nope")],
+      ["403", await get(p, "/", { host: "evil.example.com" })],
+      ["api 404", await get(p, "/api/nope", cookie())],
+      ["static 404", await get(p, "/../x")],
+    ];
+    const post = await new Promise<Res>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port: p, path: "/", method: "POST", agent: false }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: "" }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    responses.push(["405", post]);
+    for (const [name, r] of responses) {
+      expect(r.headers["x-content-type-options"], name).toBe("nosniff");
+      expect(r.headers["referrer-policy"], name).toBe("no-referrer");
+    }
+  });
+});
+
 describe("/api/overview", () => {
   it("is workspaceOverview plus indexStatus and mcpConnected", async () => {
     const r = await get(server.port, "/api/overview", cookie());

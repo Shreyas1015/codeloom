@@ -3,6 +3,7 @@ import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
 import { indexStatus, workspaceOverview } from "../mcp/tools/workspace.js";
 import { loadWorkspace } from "../workspace/repos.js";
+import { sendJson } from "./http.js";
 
 /** An error with an HTTP status, thrown by a route handler (bad query → 400, unknown id → 404). */
 export class HttpError extends Error {
@@ -92,16 +93,6 @@ export function errorResponse(err: unknown): { status: number; body: { error: st
   }
   const message = err instanceof Error ? err.message : String(err);
   return { status: 500, body: { error: `codeloom hit an unexpected error: ${message}` } };
-}
-
-export function sendJson(res: ServerResponse, status: number, body: unknown, head = false): void {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": Buffer.byteLength(text),
-    "Cache-Control": "no-store",
-  });
-  res.end(head ? undefined : text);
 }
 
 /** Answer one (already authenticated) /api/* GET from the route table. Unknown path → 404. */

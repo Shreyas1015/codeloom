@@ -4,8 +4,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { extname, join, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
-import { handleApi, sendJson } from "./api.js";
+import { handleApi } from "./api.js";
 import { locateDashboardAssets } from "./assets.js";
+import { BASE_HEADERS, sendJson, sendText } from "./http.js";
 
 export interface DashboardServerOptions {
   /** Workspace or repo folder. */
@@ -58,9 +59,6 @@ const CONTENT_TYPES: Record<string, string> = {
 /** Vite's content-hashed output: assets/<name>-<hash>.<ext> (the hash is 8+ base64url characters). */
 const HASHED = /[-.][A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/;
 
-/** Headers on every response: no MIME sniffing, and never leak the ?token= URL through a Referer. */
-const BASE_HEADERS = { "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" };
-
 function sameToken(given: string | undefined, token: string): boolean {
   if (given === undefined) return false;
   const a = Buffer.from(given);
@@ -75,16 +73,6 @@ function cookieValue(req: IncomingMessage, name: string): string | undefined {
     if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
   }
   return undefined;
-}
-
-function sendText(res: ServerResponse, status: number, text: string, head = false): void {
-  res.writeHead(status, {
-    ...BASE_HEADERS,
-    "Content-Type": "text/plain; charset=utf-8",
-    "Content-Length": Buffer.byteLength(text),
-    "Cache-Control": "no-store",
-  });
-  res.end(head ? undefined : text);
 }
 
 /** The file under `root` that the raw request path names, or null when it would escape `root`, names
