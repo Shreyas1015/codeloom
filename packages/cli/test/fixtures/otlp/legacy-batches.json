@@ -1,0 +1,27 @@
+{
+  "batches": [
+    {
+      "resource": {
+        "attributes": [{ "key": "service.name", "value": { "stringValue": "billing" } }]
+      },
+      "instrumentationLibrarySpans": [
+        {
+          "instrumentationLibrary": { "name": "billing-worker" },
+          "spans": [
+            {
+              "traceId": "CvdlGRbNQ92ESOshHIAxnA==",
+              "spanId": "ucfJifl5GOE=",
+              "parentSpanId": "obLD1OX2p7g=",
+              "name": "consume invoice.created",
+              "kind": 5,
+              "attributes": [
+                { "key": "messaging.destination.name", "value": { "stringValue": "invoice.created" } },
+                { "key": "messaging.operation.type", "value": { "stringValue": "process" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

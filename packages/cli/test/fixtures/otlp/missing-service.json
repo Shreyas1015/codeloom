@@ -1,0 +1,23 @@
+{
+  "resourceSpans": [
+    {
+      "resource": { "attributes": [] },
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "9f1e2d3c4b5a69788716253443526170",
+              "spanId": "aabbccddeeff0011",
+              "name": "GET /health",
+              "kind": 2,
+              "attributes": [
+                { "key": "http.request.method", "value": { "stringValue": "GET" } },
+                { "key": "http.route", "value": { "stringValue": "/health" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
