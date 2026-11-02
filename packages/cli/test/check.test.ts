@@ -356,14 +356,14 @@ function demoShopWorkspace() {
 }
 
 describe("buildReport", () => {
-  it("is the report runCheck prints with --json, and ignores traces until Task 9", async () => {
+  it("is the report runCheck prints with --json; traces only add a traces section", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
     const report = await buildReport(root);
     expect(report.summary.chains).toBe(7);
     const { output } = await runCheck(root, { json: true });
     expect(JSON.parse(output)).toEqual(report);
-    expect(await buildReport(root, { traces: true })).toEqual(report);
+    expect(await buildReport(root, { traces: true })).toEqual({ ...report, traces: { skipped: "no trace source in codeloom.workspace.json" } });
   });
 
   it("throws exit 2 when chains.json is missing", async () => {

@@ -99,8 +99,10 @@ describe("check_chains", () => {
     expect(r.summary.chains).toBe(7);
   });
 
-  it("accepts traces: true (ignored until trace support lands)", async () => {
-    expect(await sc("check_chains", { traces: true })).toEqual(await sc("check_chains"));
+  it("passes traces: true through: no trace source → a skipped traces section", async () => {
+    const plain = await sc("check_chains");
+    expect(plain.traces).toBeUndefined();
+    expect(await sc("check_chains", { traces: true })).toEqual({ ...plain, traces: { skipped: "no trace source in codeloom.workspace.json" } });
   });
 });
 

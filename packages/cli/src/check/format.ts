@@ -1,4 +1,4 @@
-import type { CheckItem, CheckReport } from "../store/schemas.js";
+import type { CheckItem, CheckReport, TracesReport } from "../store/schemas.js";
 import { completePercent } from "./report.js";
 
 interface Group {
@@ -48,6 +48,31 @@ function unreadableUrlLine(r: CheckReport): string | undefined {
   return n === 1 ? "1 call with a URL codeloom could not read" : `${n} calls with URLs codeloom could not read`;
 }
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** The `--traces` section: one summary line, then each non-empty group. */
+function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
+  if ("skipped" in t) return [`Traces: skipped — ${t.skipped}`];
+  const r = t as TracesReport;
+  const lines = [
+    `Traces (${r.source}, ${plural(r.spans, "span", "spans")}): ${plural(r.confirmed.length, "route", "routes")} confirmed, ` +
+      `${plural(r.missingInMap.length, "link", "links")} seen in traffic but missing from the map, ` +
+      `${plural(r.neverHit.length, "route", "routes")} never hit`,
+    "",
+  ];
+  const group = (label: string, items: string[]) => {
+    if (items.length === 0) return;
+    lines.push(`${label} (${items.length}):`, ...items.map((i) => `  ${i}`), "");
+  };
+  group("Seen in traffic but missing from the map", r.missingInMap.map((m) =>
+    `${m.repo} ${m.method ?? ""} ${m.route ?? ""}${m.store ? ` → ${m.store}` : ""} — ${m.detail} (${plural(m.hits, "hit", "hits")})`));
+  group("Routes confirmed by traffic", r.confirmed.map((c) =>
+    `${c.routeKey} — ${plural(c.hits, "hit", "hits")}${c.stores.length > 0 ? `; ${c.stores.join(", ")}` : ""}`));
+  group("Routes never hit", r.neverHit);
+  group("Services that match no repo", r.unmatchedServices);
+  return lines;
+}
+
 export function formatCheckText(r: CheckReport): string {
   const trailer = unreadableUrlLine(r);
   const lines = [summaryLine(r), ...(trailer ? [trailer] : []), `complete: ${completePercent(r)}%`, ""];
@@ -58,7 +83,8 @@ export function formatCheckText(r: CheckReport): string {
     for (const item of group) lines.push(itemLine(item));
     lines.push("");
   }
-  if (r.items.length === 0) lines.push("No issues found.");
+  if (r.items.length === 0) lines.push("No issues found.", "");
+  if (r.traces) lines.push(...tracesLines(r.traces));
   return lines.join("\n").trimEnd();
 }
 

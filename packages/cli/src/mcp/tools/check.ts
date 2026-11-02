@@ -23,7 +23,7 @@ const MAX_CHAINS = 500;
 // ---- check_chains -----------------------------------------------------------------------------
 
 export async function checkChains(opts: ServerOptions, traces: boolean): Promise<Record<string, unknown>> {
-  // `traces` is passed through, but buildReport ignores it until Plan 2b Task 9 adds the trace comparison.
+  // `traces` is passed through to buildReport, which adds the trace comparison (check/traces/run.ts).
   const report = await buildReport(opts.start, { traces, fetchImpl: opts.fetchImpl, now: opts.now });
   return report as unknown as Record<string, unknown>;
 }
