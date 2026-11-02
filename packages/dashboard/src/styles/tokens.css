@@ -1,0 +1,121 @@
+/* Gallery Guide tokens, as shadcn/ui CSS variables. Light theme only.
+ * Fonts are self-hosted through @fontsource (no network at runtime). */
+@import "@fontsource/schibsted-grotesk/400.css";
+@import "@fontsource/schibsted-grotesk/600.css";
+@import "@fontsource/schibsted-grotesk/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+:root {
+  --radius: 0.5rem;
+
+  /* ground and ink */
+  --background: #F3F4F1;
+  --foreground: #1A1D1C;
+  --card: #FFFFFF;
+  --card-foreground: #1A1D1C;
+  --popover: #FFFFFF;
+  --popover-foreground: #1A1D1C;
+
+  /* viridian wall, ochre audio-guide stops, oxblood only for errors and broken hops */
+  --primary: #1F4D45;
+  --primary-foreground: #FFFFFF;
+  --secondary: #E8EBE6;
+  --secondary-foreground: #1A1D1C;
+  --muted: #E8EBE6;
+  --muted-foreground: #5C6661;
+  --accent: #E3A72F;
+  --accent-foreground: #3A2A06;
+  --accent-soft: #FBF0D6;
+  --destructive: #B5483D;
+  --destructive-foreground: #FFFFFF;
+  --destructive-soft: #F7E3E0;
+  --success: #3E8A6E;
+  --success-soft: #DDEEE6;
+
+  --border: #D9DDD8;
+  --input: #D9DDD8;
+  /* deep ochre: an ochre focus ring that still reads at 3:1 on gallery white */
+  --ring: #8F6410;
+
+  /* lanes: UI blue, API viridian, DB umber, queue a lighter umber */
+  --lane-ui: #2F5E9E;
+  --lane-ui-soft: #E3ECF8;
+  --lane-api: #1F4D45;
+  --lane-api-soft: #E0ECE8;
+  --lane-db: #8A5A2B;
+  --lane-db-soft: #F3E9DE;
+  --lane-queue: #B07E4A;
+  --lane-queue-soft: #F8F0E6;
+
+  /* the painted gallery wall (shell rail) */
+  --rail: #1F4D45;
+  --rail-foreground: #D5E5DF;
+  --rail-strong: #FFFFFF;
+  --rail-muted: #BCD5CC;
+  --rail-active: #2A5F55;
+  --rail-deep: #174039;
+  --rail-border: #3A6E63;
+  --rail-ring: #E3A72F;
+  /* lane tints that read on the wall */
+  --rail-dot-ui: #7FA0D6;
+  --rail-dot-api: #7FD3A8;
+  --rail-dot-worker: #D9B48A;
+  --rail-dot-lib: #BCD5CC;
+}
+
+@theme inline {
+  --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-lane-ui: var(--lane-ui);
+  --color-lane-ui-soft: var(--lane-ui-soft);
+  --color-lane-api: var(--lane-api);
+  --color-lane-api-soft: var(--lane-api-soft);
+  --color-lane-db: var(--lane-db);
+  --color-lane-db-soft: var(--lane-db-soft);
+  --color-lane-queue: var(--lane-queue);
+  --color-lane-queue-soft: var(--lane-queue-soft);
+
+  --color-rail: var(--rail);
+  --color-rail-foreground: var(--rail-foreground);
+  --color-rail-strong: var(--rail-strong);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-active: var(--rail-active);
+  --color-rail-deep: var(--rail-deep);
+  --color-rail-border: var(--rail-border);
+  --color-rail-ring: var(--rail-ring);
+  --color-rail-dot-ui: var(--rail-dot-ui);
+  --color-rail-dot-api: var(--rail-dot-api);
+  --color-rail-dot-worker: var(--rail-dot-worker);
+  --color-rail-dot-lib: var(--rail-dot-lib);
+}
