@@ -38,19 +38,43 @@ function jsonEqual(a: unknown, b: unknown): boolean {
  * ("kept-custom"), or a file it cannot safely merge into ("invalid"). */
 export type McpEntryState = "missing-file" | "missing-entry" | "present" | "kept-custom" | "invalid";
 
-function inspectMcp(root: string): { state: McpEntryState; obj?: Record<string, unknown>; servers?: Record<string, unknown> } {
+/** Why an "invalid" .mcp.json cannot be merged into. */
+export type McpInvalidReason = "not-json" | "not-object" | "servers-not-object";
+
+/** The plain-language problem for an McpInvalidReason (shared by init and doctor). */
+export function mcpInvalidText(reason: McpInvalidReason): string {
+  switch (reason) {
+    case "not-json":
+      return ".mcp.json is not valid JSON";
+    case "not-object":
+      return ".mcp.json is not a JSON object";
+    case "servers-not-object":
+      return '"mcpServers" in .mcp.json is not an object';
+  }
+}
+
+interface McpInspection {
+  state: McpEntryState;
+  reason?: McpInvalidReason;
+  obj?: Record<string, unknown>;
+  servers?: Record<string, unknown>;
+}
+
+function inspectMcp(root: string): McpInspection {
   const path = join(root, MCP_FILE);
   if (!existsSync(path)) return { state: "missing-file" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    return { state: "invalid" };
+    return { state: "invalid", reason: "not-json" };
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { state: "invalid" };
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { state: "invalid", reason: "not-object" };
   const obj = parsed as Record<string, unknown>;
   const servers = obj.mcpServers;
-  if (servers !== undefined && (servers === null || typeof servers !== "object" || Array.isArray(servers))) return { state: "invalid" };
+  if (servers !== undefined && (servers === null || typeof servers !== "object" || Array.isArray(servers))) {
+    return { state: "invalid", reason: "servers-not-object" };
+  }
   const serversObj = (servers as Record<string, unknown> | undefined) ?? {};
   if ("codeloom" in serversObj) {
     return { state: jsonEqual(serversObj.codeloom, MCP_ENTRY) ? "present" : "kept-custom" };
@@ -61,6 +85,11 @@ function inspectMcp(root: string): { state: McpEntryState; obj?: Record<string, 
 /** Read-only: the state of codeloom's entry in <root>/.mcp.json (used by `codeloom doctor`). */
 export function mcpEntryState(root: string): McpEntryState {
   return inspectMcp(root).state;
+}
+
+/** Read-only: why <root>/.mcp.json is "invalid", or undefined when it is not. */
+export function mcpInvalidReason(root: string): McpInvalidReason | undefined {
+  return inspectMcp(root).reason;
 }
 
 /** Merge mcpServers.codeloom into <root>/.mcp.json, keeping every other key/entry.
@@ -98,6 +127,8 @@ export interface InitResult {
   skipped: Array<{ repo: string; reason: string }>;
   /** Result of merging codeloom's entry into the workspace root's .mcp.json. */
   mcp: McpFileResult;
+  /** Why, when `mcp` is "invalid". */
+  mcpInvalid?: McpInvalidReason;
 }
 
 export type HookResult =
@@ -264,10 +295,11 @@ export function runInit(dir: string): InitResult {
   // that's the enclosing root, not the repo itself.
   const mcpRoot = insideWorkspace ? enclosingWorkspaceRoot! : root;
   const mcp = ensureMcpEntry(mcpRoot);
-  return { root, repos, created, present, skipped, mcp };
+  const mcpInvalid = mcp === "invalid" ? mcpInvalidReason(mcpRoot) : undefined;
+  return { root, repos, created, present, skipped, mcp, ...(mcpInvalid ? { mcpInvalid } : {}) };
 }
 
-function mcpLine(mcp: McpFileResult): string {
+function mcpLine(mcp: McpFileResult, reason: McpInvalidReason = "not-json"): string {
   switch (mcp) {
     case "added":
       return "Added codeloom to .mcp.json";
@@ -276,7 +308,7 @@ function mcpLine(mcp: McpFileResult): string {
     case "kept-custom":
       return "kept your own codeloom entry in .mcp.json";
     case "invalid":
-      return `.mcp.json is not valid JSON — add this entry by hand: ${JSON.stringify({ mcpServers: { codeloom: MCP_ENTRY } })}`;
+      return `${mcpInvalidText(reason)} — add this entry by hand: ${JSON.stringify({ mcpServers: { codeloom: MCP_ENTRY } })}`;
   }
 }
 
@@ -296,7 +328,7 @@ export function formatInit(r: InitResult): string {
         ]
       : []),
     "",
-    mcpLine(r.mcp),
+    mcpLine(r.mcp, r.mcpInvalid),
     "",
     'Next: run "codeloom index" to build the map.',
   ];

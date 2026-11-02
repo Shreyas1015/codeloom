@@ -434,6 +434,25 @@ describe("runInit writes .mcp.json", () => {
   });
 });
 
+describe("formatInit: an unusable .mcp.json", () => {
+  it("names the problem: mcpServers not an object, or not a JSON object, is not 'not valid JSON'", () => {
+    for (const [content, expected] of [
+      [JSON.stringify({ mcpServers: "nope" }), '"mcpServers" in .mcp.json is not an object'],
+      ["[1, 2, 3]", ".mcp.json is not a JSON object"],
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+      makeRepo({ "a.ts": "" }, join(root, "web"));
+      writeFileSync(join(root, ".mcp.json"), content);
+      const res = runInit(root);
+      expect(res.mcp).toBe("invalid");
+      const text = formatInit(res);
+      expect(text).toContain(expected);
+      expect(text).not.toContain("not valid JSON");
+      expect(text).toContain("add this entry by hand");
+    }
+  });
+});
+
 describe("formatInit on an already-initialized workspace", () => {
   it("mentions every repo, including ones whose hook is already installed", () => {
     const root = mkdtempSync(join(tmpdir(), "codeloom-init2-"));

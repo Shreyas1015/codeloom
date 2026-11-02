@@ -21,7 +21,16 @@ import {
 import { compare } from "../util.js";
 import { listFiles } from "../workspace/files.js";
 import { findWorkspaceRoot, loadWorkspace } from "../workspace/repos.js";
-import { ensureGitignore, ensureMcpEntry, hasGitignoreLine, hookState, installHook, mcpEntryState } from "./init.js";
+import {
+  ensureGitignore,
+  ensureMcpEntry,
+  hasGitignoreLine,
+  hookState,
+  installHook,
+  mcpEntryState,
+  mcpInvalidReason,
+  mcpInvalidText,
+} from "./init.js";
 
 export type DoctorStatus = "ok" | "warn" | "error" | "fixed";
 /** fix = what --fix would do (warn/error items it can repair) or did (fixed items). */
@@ -235,7 +244,7 @@ function checkMcp(d: Doctor, root: string): void {
     case "kept-custom":
       return d.add("mcp", undefined, "ok", "custom codeloom entry");
     case "invalid":
-      return d.add("mcp", undefined, "error", ".mcp.json is not valid JSON (or not an object): fix it by hand");
+      return d.add("mcp", undefined, "error", `${mcpInvalidText(mcpInvalidReason(root) ?? "not-json")}: fix it by hand`);
     case "missing-file":
     case "missing-entry":
       return d.fixable(

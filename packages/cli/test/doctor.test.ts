@@ -278,6 +278,20 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(readFileSync(join(root, "codeloom.workspace.json"), "utf8")).toBe("{ nope");
   });
 
+  it("an unusable .mcp.json says which problem it has: not valid JSON vs mcpServers not an object", () => {
+    const root = shop();
+    const mcpItem = () => runDoctor(root, {}).items.find((i) => i.check === "mcp")!;
+    writeFileSync(join(root, ".mcp.json"), "{ nope");
+    expect(mcpItem().status).toBe("error");
+    expect(mcpItem().message).toContain(".mcp.json is not valid JSON");
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: "nope" }));
+    expect(mcpItem().status).toBe("error");
+    expect(mcpItem().message).toContain('"mcpServers" in .mcp.json is not an object');
+    expect(mcpItem().message).not.toContain("not valid JSON");
+    writeFileSync(join(root, ".mcp.json"), "[1, 2]");
+    expect(mcpItem().message).toContain(".mcp.json is not a JSON object");
+  });
+
   it("an invalid workspace file is hand-written: fix by hand, never delete; per-repo checks are skipped", () => {
     const root = shop();
     writeJsonAtomic(join(root, "codeloom.workspace.json"), { version: 1, name: "x", repos: "nope" });
