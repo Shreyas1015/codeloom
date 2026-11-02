@@ -1,6 +1,7 @@
 // Stdio smoke test: the built `codeloom serve` bin, driven by the SDK's own stdio client. If anything
 // but MCP frames reached stdout, the client would fail to parse it and these calls would error.
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,6 +16,19 @@ import { CATALOGUE } from "./mcp-catalogue.js";
 const CLI_DIR = fileURLToPath(new URL("..", import.meta.url));
 const BIN = join(CLI_DIR, "dist", "bin.js");
 
+/** Skip the rebuild when CI is set and dist/bin.js already exists (CI runs `build` before `test`). */
+function skipBuild(env: NodeJS.ProcessEnv, binExists: boolean): boolean {
+  return Boolean(env.CI) && binExists;
+}
+
+describe("skipBuild", () => {
+  it("skips only in CI with an existing dist/bin.js", () => {
+    expect(skipBuild({ CI: "true" }, true)).toBe(true);
+    expect(skipBuild({ CI: "true" }, false)).toBe(false);
+    expect(skipBuild({}, true)).toBe(false);
+  });
+});
+
 describe("codeloom serve over stdio", { timeout: 120_000 }, () => {
   let shop: string;
   let client: Client;
@@ -23,8 +37,11 @@ describe("codeloom serve over stdio", { timeout: 120_000 }, () => {
   const protocolErrors: Error[] = [];
 
   beforeAll(async () => {
-    // Build codeloom and the workspace packages it depends on, so dist/bin.js matches src.
-    execFileSync("pnpm", ["--filter", "codeloom...", "build"], { cwd: CLI_DIR, stdio: "pipe" });
+    // Build codeloom and the workspace packages it depends on, so dist/bin.js matches src. CI builds
+    // before it tests, so there the existing dist is used as is.
+    if (!skipBuild(process.env, existsSync(BIN))) {
+      execFileSync("pnpm", ["--filter", "codeloom...", "build"], { cwd: CLI_DIR, stdio: "pipe" });
+    }
     shop = materializeFixture("demo-shop");
     runInit(shop);
     for (const r of ["api", "billing", "web"]) commitAll(join(shop, r));
