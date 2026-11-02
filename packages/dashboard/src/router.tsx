@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, createRoute, createRouter, Outlet, type RouterHistory } from "@tanstack/react-router";
+import { useMapEvents } from "@/api/events";
 import { useOverview } from "@/api/queries";
 import { Rail } from "@/components/shell/Rail";
 import { HomeRoute } from "@/routes/index";
@@ -13,9 +14,10 @@ export interface RouterContext {
 /** The shell: viridian rail on the left, the screen on the gallery-white ground. */
 function Shell() {
   const { data } = useOverview();
+  const { paused } = useMapEvents();
   return (
     <div className="flex h-dvh min-h-0 bg-background">
-      <Rail overview={data} />
+      <Rail overview={data} livePaused={paused} />
       <main className="flex min-w-0 flex-1 flex-col gap-5.5 overflow-y-auto px-9 py-7">
         <Outlet />
       </main>

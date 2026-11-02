@@ -45,8 +45,8 @@ function NavItem({ to, icon, label, count, countLabel, current }: { to: "/" | "/
   );
 }
 
-/** The painted gallery wall: brand, workspace, nav with counts, repo list, agent status. */
-export function Rail({ overview }: { overview: Overview | undefined }) {
+/** The painted gallery wall: brand, workspace, nav with counts, repo list, live-updates and agent status. */
+export function Rail({ overview, livePaused = false }: { overview: Overview | undefined; livePaused?: boolean }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const onMap = pathname === "/map" || pathname.startsWith("/map/");
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
@@ -104,25 +104,36 @@ export function Rail({ overview }: { overview: Overview | undefined }) {
         </div>
       )}
 
-      {overview && (
-        <div className="mt-auto flex items-center gap-2 rounded-[9px] bg-rail-deep px-3 py-2.5 text-[12.5px]">
-          <i aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", overview.mcpConnected ? "bg-rail-dot-api" : "border border-rail-muted")} />
-          <div>
-            <div className="text-rail-strong">{overview.mcpConnected ? "MCP set up" : "MCP not set up"}</div>
-            <div className="text-rail-muted">
-              {overview.mcpConnected ? (
-                <>
-                  codeloom in <code className="text-[11.5px]">.mcp.json</code>
-                </>
-              ) : (
-                <>
-                  Run <code className="text-[11.5px]">codeloom init</code>
-                </>
-              )}
+      <div className="mt-auto flex flex-col gap-2">
+        {/* A polite live region that is always there, so screen readers hear the chip appear. */}
+        <div role="status" className="empty:hidden">
+          {livePaused && (
+            <div className="flex items-center gap-2 px-3 text-xs text-rail-muted" title="Lost the connection to codeloom dashboard. Reconnecting…">
+              <i aria-hidden="true" className="size-1.5 shrink-0 rounded-full border border-rail-muted" />
+              Live updates paused
+            </div>
+          )}
+        </div>
+        {overview && (
+          <div className="flex items-center gap-2 rounded-[9px] bg-rail-deep px-3 py-2.5 text-[12.5px]">
+            <i aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", overview.mcpConnected ? "bg-rail-dot-api" : "border border-rail-muted")} />
+            <div>
+              <div className="text-rail-strong">{overview.mcpConnected ? "MCP set up" : "MCP not set up"}</div>
+              <div className="text-rail-muted">
+                {overview.mcpConnected ? (
+                  <>
+                    codeloom in <code className="text-[11.5px]">.mcp.json</code>
+                  </>
+                ) : (
+                  <>
+                    Run <code className="text-[11.5px]">codeloom init</code>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </aside>
   );
 }

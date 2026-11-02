@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { createAppRouter } from "@/router";
@@ -89,6 +89,31 @@ describe("shell", () => {
     stubFetch({ ...overview, mcpConnected: false });
     renderAt("/");
     expect(await screen.findByText("MCP not set up")).toBeInTheDocument();
+  });
+
+  it("listens to /api/events once and shows a quiet 'live updates paused' chip in the rail while disconnected", async () => {
+    const sources: Array<{ url: string; onopen: (() => void) | null; onerror: (() => void) | null; close: () => void }> = [];
+    vi.stubGlobal(
+      "EventSource",
+      class {
+        onopen: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        constructor(readonly url: string) {
+          sources.push(this);
+        }
+        addEventListener() {}
+        close() {}
+      },
+    );
+    stubFetch(overview);
+    renderAt("/");
+    const rail = await screen.findByRole("complementary", { name: "codeloom" });
+    await within(rail).findByText("demo-workspace");
+    expect(sources.map((s) => s.url)).toEqual(["/api/events"]);
+    expect(within(rail).queryByText("Live updates paused")).not.toBeInTheDocument();
+
+    act(() => sources[0]!.onerror?.());
+    expect(within(rail).getByRole("status")).toHaveTextContent("Live updates paused");
   });
 
   it("still renders the rail when the overview fails", async () => {
