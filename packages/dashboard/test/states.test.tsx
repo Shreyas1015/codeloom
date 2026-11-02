@@ -67,7 +67,7 @@ const emptyJourneys: Reply = { body: { journeys: [], unnamedChains: [] } };
 
 // The Map screen is lazy-loaded; transform it up front so a busy run does not time out waiting for the chunk.
 beforeAll(async () => {
-  await import("@/screens/map/MapScreen");
+  await Promise.all([import("@/screens/map/MapScreen"), import("@/screens/journey/JourneyScreen")]);
 }, 60_000);
 
 beforeEach(() => {

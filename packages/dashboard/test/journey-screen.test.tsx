@@ -2,7 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { CodeResponse, NeighborsResult, NodeResult, Overview } from "@/api/types";
 import { createAppRouter } from "@/router";
@@ -83,6 +83,11 @@ const urls = (fetch: ReturnType<typeof stubApi>) => fetch.mock.calls.map((c) => 
 
 const pressKey = (key: string, target: Element = document.body) => act(() => void fireEvent.keyDown(target, { key }));
 const opened = () => screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+
+// The Journey screen is lazy-loaded; transform it up front so the first test does not time out on the chunk.
+beforeAll(async () => {
+  await import("@/screens/journey/JourneyScreen");
+}, 60_000);
 
 describe("Journey screen", () => {
   it("shows the nameplate with name, area, note, confidence, completeness and counts", async () => {

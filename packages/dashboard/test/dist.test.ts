@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,4 +69,15 @@ describe("built dist", () => {
     const hits = scanDir(out);
     expect(hits).toEqual([]);
   }, 120_000);
+
+  it("splits vendors and lazy screens, keeping every chunk under Vite's 500 kB warning", () => {
+    const html = readFileSync(join(out, "index.html"), "utf8");
+    const entry = /src="\/assets\/(index-[^"]+\.js)"/.exec(html)![1]!;
+    const assets = readdirSync(join(out, "assets"));
+    expect(assets.some((f) => f.startsWith("vendor-react-"))).toBe(true);
+    expect(assets.some((f) => f.startsWith("vendor-tanstack-"))).toBe(true);
+    expect(assets.some((f) => f.startsWith("JourneyScreen-"))).toBe(true);
+    expect(statSync(join(out, "assets", entry)).size).toBeLessThan(500 * 1000);
+    for (const f of assets.filter((a) => a.endsWith(".js"))) expect(statSync(join(out, "assets", f)).size, f).toBeLessThan(500 * 1024);
+  });
 });
