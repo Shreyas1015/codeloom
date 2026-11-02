@@ -151,6 +151,15 @@ describe("LaneColumn", () => {
     expect(screen.getByRole("img", { name: "Exact link" })).toBeInTheDocument();
   });
 
+  it("draws no connector, only a plain gap, before a stop that is not connected to the one above", () => {
+    render(<LaneColumn lane="db" stops={[{ index: 5, label: "invoices" }, { index: 6, label: "invoice_lines", connected: false }]} />);
+    const items = within(screen.getByRole("list", { name: "DB stops" })).getAllByRole("listitem");
+    expect(items[1]!.querySelector('[data-slot="confidence-line"]')).toBeNull();
+    const gap = items[1]!.querySelector('[data-slot="lane-gap"]');
+    expect(gap).not.toBeNull();
+    expect(gap).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("makes stops buttons when selectable, marks the selected one, and reports clicks", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();

@@ -1,14 +1,13 @@
-import { useParams } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
+import { JourneyScreen } from "@/screens/journey/JourneyScreen";
 
-/** One journey (`/journeys/$id`, search `stop`). Task 7 builds the lanes here. */
+/** One journey or chain (`/journeys/$id`, search `stop` = the selected stop's number, 1-based). */
 export function JourneyRoute() {
-  const { id } = useParams({ strict: false });
+  const { id } = useParams({ from: "/journeys/$id" });
+  const { stop } = useSearch({ from: "/journeys/$id" });
   return (
-    <section data-testid="screen-journey" aria-labelledby="journey-title">
-      <h1 id="journey-title" className="text-[32px] leading-[1.1] font-bold tracking-[-0.03em]">
-        Journey
-      </h1>
-      <p className="mt-1 font-mono text-[12.5px] text-muted-foreground">{id}</p>
+    <section data-testid="screen-journey" className="flex min-w-0 flex-col gap-4">
+      <JourneyScreen key={id} id={id} stop={stop} />
     </section>
   );
 }
