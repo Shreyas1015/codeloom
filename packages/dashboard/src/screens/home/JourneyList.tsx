@@ -109,6 +109,7 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
   // A live update can remove the area or repo a menu is set to: fall back to "All" rather than keep
   // filtering by a value the menu no longer lists.
   const stale = (f.area !== "" && !areas.includes(f.area)) || (f.repo !== "" && !repos.includes(f.repo));
+  // Setting state during render is React's "adjust state when a prop changes" (derived state) pattern.
   if (stale) setF({ ...f, area: areas.includes(f.area) ? f.area : "", repo: repos.includes(f.repo) ? f.repo : "" });
   const shown = useMemo(() => sortJourneys(filterJourneys(rows, f), sort), [rows, f, sort]);
   const [limit, more] = useLimit(JSON.stringify([f, sort]));

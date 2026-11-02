@@ -220,7 +220,7 @@ export function MapScreen() {
           ) : level.isError ? (
             isBlocking(level.error) ? (
               <div className="h-full min-h-[520px] overflow-y-auto bg-card px-8">
-                <MapStateScreen error={level.error} />
+                <MapStateScreen error={level.error} level={2} />
               </div>
             ) : (
               <Message alert>{level.error.message}</Message>

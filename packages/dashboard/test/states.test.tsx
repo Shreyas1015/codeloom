@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { Overview } from "@/api/types";
@@ -58,8 +58,8 @@ function renderAt(path = "/") {
   stub();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: [path] }) });
-  render(<App router={router} queryClient={queryClient} />);
-  return queryClient;
+  const { unmount } = render(<App router={router} queryClient={queryClient} />);
+  return { qc: queryClient, unmount };
 }
 
 const notIndexed: Reply = { status: 409, body: { error: 'Repo "api" has no .codeloom data yet. Run "codeloom index" first.', code: "not-indexed" } };
@@ -136,7 +136,7 @@ describe("full-screen states", () => {
   it("bad data: the server's message and codeloom doctor", async () => {
     replies["/api/overview"] = { status: 409, body: { error: "api/.codeloom/graph.json is not valid JSON.", code: "bad-data" } };
     renderAt("/");
-    const state = await screen.findByRole("region", { name: /can't read its map/ });
+    const state = await screen.findByRole("alert", { name: /can't read its map/ });
     expect(state).toHaveTextContent("api/.codeloom/graph.json is not valid JSON.");
     expect(within(state).getByText("codeloom doctor")).toBeInTheDocument();
   });
@@ -144,7 +144,7 @@ describe("full-screen states", () => {
   it("session expired (401 on the overview): reopen the dashboard from your terminal", async () => {
     replies["/api/overview"] = { status: 401, body: { error: "no session" } };
     renderAt("/");
-    const state = await screen.findByRole("region", { name: /session expired/i });
+    const state = await screen.findByRole("alert", { name: /session expired/i });
     expect(state).toHaveTextContent("Reopen the dashboard from your terminal");
     expect(within(state).getByText("codeloom dashboard")).toBeInTheDocument();
   });
@@ -152,7 +152,7 @@ describe("full-screen states", () => {
   it("session expired (401 on any screen request) takes over the whole screen", async () => {
     replies["/api/journeys"] = { status: 401, body: { error: "no session" } };
     renderAt("/");
-    expect(await screen.findByRole("region", { name: /session expired/i })).toBeInTheDocument();
+    expect(await screen.findByRole("alert", { name: /session expired/i })).toBeInTheDocument();
     expect(screen.queryByTestId("screen-home")).toBeNull();
   });
 
@@ -160,8 +160,48 @@ describe("full-screen states", () => {
     replies["/api/journeys"] = { status: 409, body: { error: ".codeloom/journeys.json: duplicate journey id", code: "bad-data" } };
     renderAt("/");
     const home = await screen.findByTestId("screen-home");
-    const state = await within(home).findByRole("region", { name: /can't read its map/ });
+    const state = await within(home).findByRole("alert", { name: /can't read its map/ });
     expect(state).toHaveTextContent("duplicate journey id");
+    // embedded under the screen's own h1: one h1 on the page
+    expect(within(state).getByRole("heading", { level: 2, name: /can't read its map/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("the journey screen embeds its state with an h2", async () => {
+    replies["/api/journeys/j_x"] = notIndexed;
+    renderAt("/journeys/j_x");
+    expect(await screen.findByRole("heading", { level: 2, name: /isn't mapped yet/ })).toBeInTheDocument();
+  });
+
+  it("a 401 in mid-use replaces the screen and moves focus to the state's heading", async () => {
+    const { qc } = renderAt("/");
+    await screen.findByRole("heading", { level: 1, name: "demo-shop" });
+    replies["/api/journeys"] = { status: 401, body: { error: "no session" } };
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ["journeys"] });
+    });
+    const state = await screen.findByRole("alert", { name: /session expired/i });
+    const h1 = within(state).getByRole("heading", { level: 1, name: /session expired/i });
+    expect(h1).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => expect(h1).toHaveFocus());
+  });
+
+  it("a state shown on first load does not steal focus", async () => {
+    replies["/api/overview"] = notIndexed;
+    renderAt("/");
+    const state = await screen.findByRole("region", { name: /isn't mapped yet/ });
+    expect(within(state).getByRole("heading", { level: 1 })).not.toHaveFocus();
+  });
+
+  it("not-indexed in mid-use (a live update) moves focus to the heading too", async () => {
+    const { qc } = renderAt("/");
+    await screen.findByRole("heading", { level: 1, name: "demo-shop" });
+    replies["/api/overview"] = notIndexed;
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ["overview"] });
+    });
+    const state = await screen.findByRole("region", { name: /isn't mapped yet/ });
+    await waitFor(() => expect(within(state).getByRole("heading", { level: 1 })).toHaveFocus());
   });
 
   it.each([
@@ -180,7 +220,7 @@ describe("banners", () => {
   it("index older than HEAD: says the map is behind and lists up to 3 changed files", async () => {
     replies["/api/overview"] = { body: stale };
     renderAt("/");
-    const banner = await screen.findByRole("region", { name: "Map is behind your code" });
+    const banner = await screen.findByRole("status", { name: "Map is behind your code" });
     expect(banner).toHaveTextContent("Map is behind your code — run codeloom index");
     const files = within(banner).getByRole("list", { name: "Changed files" });
     expect(within(files).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["api/app/a.ts", "api/app/b.ts", "api/app/c.ts"]);
@@ -191,40 +231,40 @@ describe("banners", () => {
   it("no banner when the index is current and the agent is connected", async () => {
     renderAt("/");
     await screen.findByTestId("screen-home");
-    expect(screen.queryByRole("region", { name: "Map is behind your code" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "Agent not connected" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Map is behind your code" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Agent not connected" })).toBeNull();
   });
 
   it("agent not connected: one setup line", async () => {
     replies["/api/overview"] = { body: { ...overview, mcpConnected: false } };
     renderAt("/");
-    const banner = await screen.findByRole("region", { name: "Agent not connected" });
+    const banner = await screen.findByRole("status", { name: "Agent not connected" });
     expect(banner).toHaveTextContent("Add codeloom to your agent: codeloom init adds it to .mcp.json");
   });
 
   it("are dismissible for the session", async () => {
     replies["/api/overview"] = { body: { ...stale, mcpConnected: false } };
-    renderAt("/");
-    const banner = await screen.findByRole("region", { name: "Map is behind your code" });
+    const first = renderAt("/");
+    const banner = await screen.findByRole("status", { name: "Map is behind your code" });
     fireEvent.click(within(banner).getByRole("button", { name: "Dismiss: Map is behind your code" }));
-    expect(screen.queryByRole("region", { name: "Map is behind your code" })).toBeNull();
-    expect(screen.getByRole("region", { name: "Agent not connected" })).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Map is behind your code" })).toBeNull();
+    expect(screen.getByRole("status", { name: "Agent not connected" })).toBeInTheDocument();
 
     // a reload in the same tab keeps it dismissed
-    document.body.innerHTML = "";
+    first.unmount();
     renderAt("/");
-    await screen.findByRole("region", { name: "Agent not connected" });
-    expect(screen.queryByRole("region", { name: "Map is behind your code" })).toBeNull();
+    await screen.findByRole("status", { name: "Agent not connected" });
+    expect(screen.queryByRole("status", { name: "Map is behind your code" })).toBeNull();
   });
 
   it("come back when the code moves again after a dismiss", async () => {
     replies["/api/overview"] = { body: stale };
-    const qc = renderAt("/");
-    const banner = await screen.findByRole("region", { name: "Map is behind your code" });
+    const { qc } = renderAt("/");
+    const banner = await screen.findByRole("status", { name: "Map is behind your code" });
     fireEvent.click(within(banner).getByRole("button", { name: /Dismiss/ }));
     const moved: Overview = { ...stale, indexStatus: { repos: [{ ...stale.indexStatus.repos[0]!, head: "d4" }] } };
     act(() => qc.setQueryData(["overview"], moved));
-    expect(await screen.findByRole("region", { name: "Map is behind your code" })).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "Map is behind your code" })).toBeInTheDocument();
   });
 
   it("still dismiss when session storage throws", async () => {
@@ -236,8 +276,8 @@ describe("banners", () => {
     });
     replies["/api/overview"] = { body: { ...overview, mcpConnected: false } };
     renderAt("/");
-    const banner = await screen.findByRole("region", { name: "Agent not connected" });
+    const banner = await screen.findByRole("status", { name: "Agent not connected" });
     fireEvent.click(within(banner).getByRole("button", { name: /Dismiss/ }));
-    expect(screen.queryByRole("region", { name: "Agent not connected" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Agent not connected" })).toBeNull();
   });
 });

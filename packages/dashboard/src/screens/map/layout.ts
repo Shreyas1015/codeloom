@@ -161,6 +161,7 @@ export interface MapStop {
   /** 1-based, in chain order over the whole journey; a stop shared by two chains keeps its first number.
    * Identity is [lane, repo, file, line, symbol], as on the Journey screen. */
   n: number;
+  lane: Lane;
   symbol: string;
   line: number;
   ref?: string;
@@ -178,7 +179,7 @@ export function journeyStops(journey: JourneyResult, repo: string): Map<string, 
       seen.add(key);
       const n = numbers.get(key)!;
       const list = out.get(s.file) ?? [];
-      list.push({ n, symbol: s.symbol, line: s.line, ...(s.ref ? { ref: s.ref } : {}) });
+      list.push({ n, lane: s.lane, symbol: s.symbol, line: s.line, ...(s.ref ? { ref: s.ref } : {}) });
       out.set(s.file, list);
     }
   }

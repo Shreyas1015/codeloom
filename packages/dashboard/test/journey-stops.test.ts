@@ -50,10 +50,13 @@ describe("journey stop numbering (shared by Journey and Map)", () => {
     const model = buildJourneyModel(journey);
     for (const s of model.stops) expect(s.n).toBe(nums.get(stopKey(s.view)));
 
-    const onMap = [...journeyStops(journey, "api").values(), ...journeyStops(journey, "web").values()].flat();
+    // the Map stop with number n is the very stop (same lane, repo, file, line, symbol) the Journey numbers n
+    const onMap = ["api", "web"].flatMap((repo) =>
+      [...journeyStops(journey, repo)].flatMap(([file, list]) => list.map((m) => ({ ...m, repo, file }))),
+    );
     for (const m of onMap) {
       const j = model.stops.find((s) => s.n === m.n)!;
-      expect([j.view.symbol, j.view.line]).toEqual([m.symbol, m.line]);
+      expect(stopKey(m)).toBe(stopKey(j.view));
     }
     expect(onMap.map((m) => m.n).sort((a, b) => a - b)).toEqual(model.stops.map((s) => s.n));
   });

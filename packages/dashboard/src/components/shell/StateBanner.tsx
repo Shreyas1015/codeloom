@@ -1,5 +1,5 @@
 import { FileWarning, FolderSearch, GitCommitHorizontal, KeyRound, Plug, ScanSearch, X } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { MapStateError, SessionError } from "@/api/client";
 import type { Overview } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
@@ -69,11 +69,30 @@ function copyFor(err: BlockingError): StateCopy {
 
 /** The full-screen state for a blocking error: what happened, the one command that fixes it, and the
  * server's own words. Not dismissible: there is nothing to show behind it. */
-export function MapStateScreen({ error }: { error: BlockingError }) {
+export function MapStateScreen({
+  error,
+  level = 1,
+  focusOnShow = false,
+}: {
+  error: BlockingError;
+  /** 1 when it stands in for the whole screen (the shell); 2 when embedded under a screen's own title. */
+  level?: 1 | 2;
+  /** Move focus to the heading when shown: set when it replaces a screen the viewer was already using. */
+  focusOnShow?: boolean;
+}) {
   const c = copyFor(error);
   const id = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusOnShow) heading.current?.focus();
+  }, [focusOnShow]);
+  const H = level === 1 ? "h1" : "h2";
   return (
-    <section aria-labelledby={id} data-state={error instanceof SessionError ? "session-expired" : error.code} className="flex max-w-[64ch] flex-col items-start gap-4 py-6">
+    <section
+      aria-labelledby={id}
+      // errors (session expired, bad data) are announced at once; the setup states stay a calm region
+      role={c.error ? "alert" : undefined}
+      data-state={error instanceof SessionError ? "session-expired" : error.code} className="flex max-w-[64ch] flex-col items-start gap-4 py-6">
       <span
         aria-hidden
         className={
@@ -85,9 +104,9 @@ export function MapStateScreen({ error }: { error: BlockingError }) {
         {c.icon}
       </span>
       <div className="flex flex-col gap-1.5">
-        <h1 id={id} className="text-[28px] leading-[1.15] font-bold tracking-[-0.03em] text-balance">
+        <H ref={heading} id={id} tabIndex={-1} className="text-[28px] leading-[1.15] font-bold tracking-[-0.03em] text-balance outline-none">
           {c.title}
-        </h1>
+        </H>
         <p className="text-[14px] text-muted-foreground text-pretty">{c.body}</p>
       </div>
       <div className="flex items-center rounded-xl border border-border bg-card py-2 pr-2 pl-3">
@@ -109,7 +128,7 @@ export function MapStateScreen({ error }: { error: BlockingError }) {
 
 /** A screen's own query error: the shared full state when it is blocking, else a plain alert. */
 export function ScreenError({ error, fallback = "Something went wrong loading this screen." }: { error: Error; fallback?: string }) {
-  if (isBlocking(error)) return <MapStateScreen error={error} />;
+  if (isBlocking(error)) return <MapStateScreen error={error} level={2} />;
   return (
     <p role="alert" className="max-w-[70ch] rounded-xl border border-destructive/40 bg-destructive-soft px-5 py-4 text-[13.5px] text-foreground">
       {error.message || fallback}
@@ -151,7 +170,8 @@ function useDismissed() {
 
 function Banner({ title, icon, onDismiss, children }: { title: string; icon: ReactNode; onDismiss: () => void; children: ReactNode }) {
   return (
-    <section aria-label={title} className="flex items-start gap-3 rounded-xl border border-border bg-card py-2.5 pr-2 pl-4 text-[13.5px]">
+    // a polite live region, so a banner that appears after a live update is announced
+    <section role="status" aria-label={title} className="flex items-start gap-3 rounded-xl border border-border bg-card py-2.5 pr-2 pl-4 text-[13.5px]">
       <span aria-hidden className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
         {icon}
       </span>

@@ -377,7 +377,7 @@ describe("Home", () => {
         "/api/overview": { status: 401, body: { error: "no session" } },
         "/api/journeys": { status: 401, body: { error: "no session" } },
       });
-      expect(await screen.findByRole("region", { name: /session expired/i })).toHaveTextContent("Reopen the dashboard from your terminal");
+      expect(await screen.findByRole("alert", { name: /session expired/i })).toHaveTextContent("Reopen the dashboard from your terminal");
     });
   });
 });
