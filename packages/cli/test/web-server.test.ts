@@ -483,6 +483,20 @@ describe("/api/overview", () => {
     }
   });
 
+  it("a folder that is neither a workspace nor a git repo → 409 with code no-workspace", async () => {
+    const plain = mkdtempSync(join(tmpdir(), "codeloom-plain-"));
+    const s = await startDashboardServer({ start: plain, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+    try {
+      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie(TOKEN, s.port) });
+      expect(r.status).toBe(409);
+      const body = JSON.parse(r.body);
+      expect(body.code).toBe("no-workspace");
+      expect(body.error).toContain("codeloom init");
+    } finally {
+      await s.close();
+    }
+  });
+
   it("a bad data file → 409 with code bad-data", async () => {
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
     await runIndex(repo);

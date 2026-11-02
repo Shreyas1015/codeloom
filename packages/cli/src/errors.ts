@@ -1,6 +1,6 @@
 /** What kind of problem a CodeloomError is, for callers that branch on it (the dashboard API maps
- * "not-indexed" to a 409 that tells the user to run "codeloom index"). */
-export type CodeloomErrorCode = "not-indexed";
+ * "not-indexed" and "no-workspace" to a 409 telling the user to run "codeloom index" or "codeloom init"). */
+export type CodeloomErrorCode = "not-indexed" | "no-workspace";
 
 /** An error whose message is meant for the user; the CLI prints it without a stack trace.
  * exitCode is what the CLI process exits with (default 1); a data/usage problem exits 2. */

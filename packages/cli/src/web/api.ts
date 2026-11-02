@@ -78,7 +78,8 @@ export function matchRoute(
 }
 
 /** The HTTP status and body for an error thrown by a handler: HttpError keeps its own; a store
- * dataError (exit 2) → 409 with code "not-indexed" (run codeloom index) or "bad-data" (a bad file),
+ * dataError (exit 2) → 409 with its code: "not-indexed" (run codeloom index), "no-workspace" (run
+ * codeloom init), else "bad-data" (a bad file),
  * except "Unknown …" (an id/repo that does not exist) → 404 and "Bad …" (a malformed argument) → 400;
  * anything else → 500. */
 export function errorResponse(err: unknown): { status: number; body: { error: string; code?: string } } {
@@ -86,7 +87,7 @@ export function errorResponse(err: unknown): { status: number; body: { error: st
     return { status: err.status, body: { error: err.message, ...(err.code ? { code: err.code } : {}) } };
   }
   if (err instanceof CodeloomError) {
-    if (err.code === "not-indexed") return { status: 409, body: { error: err.message, code: "not-indexed" } };
+    if (err.code) return { status: 409, body: { error: err.message, code: err.code } };
     if (err.message.startsWith("Unknown ")) return { status: 404, body: { error: err.message } };
     if (err.message.startsWith("Bad ")) return { status: 400, body: { error: err.message } };
     if (err.exitCode === 2) return { status: 409, body: { error: err.message, code: "bad-data" } };

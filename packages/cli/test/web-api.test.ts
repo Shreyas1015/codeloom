@@ -33,6 +33,10 @@ describe("errorResponse", () => {
       status: 409,
       body: { error: 'Repo "api" has no .codeloom data yet.', code: "not-indexed" },
     });
+    expect(errorResponse(dataError("No codeloom workspace or git repo found at /x.", { code: "no-workspace" }))).toEqual({
+      status: 409,
+      body: { error: "No codeloom workspace or git repo found at /x.", code: "no-workspace" },
+    });
     expect(errorResponse(dataError("x.json is not valid JSON.")).body.code).toBe("bad-data");
     expect(errorResponse(dataError('Unknown journey "j_x".')).status).toBe(404);
     expect(errorResponse(dataError('Bad node reference "x".')).status).toBe(400);
