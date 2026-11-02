@@ -194,6 +194,22 @@ describe("fetchTempoSpans", () => {
     expect(message).not.toContain("secret-token");
   });
 
+  it("stops starting new trace fetches once one fails", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    const { fetchImpl, calls } = recordingFetch(async (url) => {
+      if (url.includes("/api/search")) return jsonResponse({ traces: ids.map((traceID) => ({ traceID })) });
+      if (url.endsWith("/t0")) return jsonResponse({ message: "boom" }, 500);
+      await new Promise((r) => setTimeout(r, 40));
+      return jsonResponse({ resourceSpans: [] });
+    });
+    const cfg: TempoCfg = { kind: "tempo", url: "http://tempo.local:3200" };
+    const err = await fetchTempoSpans(cfg, { fetchImpl, now, env: {} }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TraceSourceError);
+    await new Promise((r) => setTimeout(r, 300));
+    // 1 search + at most the 4 fetches already in flight when t0 failed; never all 12.
+    expect(calls.length).toBeLessThanOrEqual(5);
+  });
+
   it("throws a TraceSourceError on a network error", async () => {
     const fetchImpl = (async () => {
       throw new TypeError("fetch failed");

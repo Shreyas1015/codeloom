@@ -235,6 +235,8 @@ describe("trace_route", () => {
     expect(ids((await sc("trace_route", { from: "route:api:POST /api/customers" })).matches)).toEqual([createId]);
     expect((await sc("trace_route", { from: "route:web:POST /api/customers" })).matches).toEqual([]);
     expect(ids((await sc("trace_route", { from: "page:web:/customers/:id" })).matches)).toEqual([showId]);
+    // A page ref is limited to its repo, like a route ref.
+    expect(ids((await sc("trace_route", { from: "page:api:/customers/:id" })).matches)).toEqual([]);
     expect((await call("trace_route", { from: "route:nope:GET /x" })).isError).toBe(true);
   });
 

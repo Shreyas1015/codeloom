@@ -79,7 +79,7 @@ describe("runTraces (tempo)", () => {
     const tempo: WorkspaceData = { ...ws, traces: { kind: "tempo", url: "http://localhost:3200" } };
     const fetchImpl = (async () => new Response("unauthorized", { status: 401, statusText: "Unauthorized" })) as typeof fetch;
     const out = await runTraces(tempo, chains, { traces: true, fetchImpl, now: () => new Date() });
-    expect(out).toMatchObject({ skipped: expect.stringContaining("tempo unreachable") });
+    expect(out).toMatchObject({ skipped: expect.stringContaining("tempo: ") });
     expect((out as { skipped: string }).skipped).toContain("401");
   });
 
@@ -89,7 +89,7 @@ describe("runTraces (tempo)", () => {
       throw new DOMException("The operation timed out.", "TimeoutError");
     }) as typeof fetch;
     const out = await runTraces(tempo, chains, { traces: true, fetchImpl, now: () => new Date() });
-    expect(out).toMatchObject({ skipped: expect.stringContaining("tempo unreachable") });
+    expect(out).toMatchObject({ skipped: expect.stringContaining("tempo: ") });
     expect((out as { skipped: string }).skipped.toLowerCase()).toContain("timed out");
   });
 });

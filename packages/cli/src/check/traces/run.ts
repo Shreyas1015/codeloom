@@ -8,8 +8,9 @@ import { fetchTempoSpans, TraceSourceError } from "./tempo.js";
 
 /** Load spans from the workspace's trace source and compare them with the map. No source configured →
  * a `skipped` reason. A missing or unreadable otlp file, or a bad config value (lookback), is a
- * dataError (exit 2). A Tempo source that is unreachable (network error, timeout, non-2xx) is reported
- * as `skipped`, same as no source — traces never change `codeloom check`'s exit code. */
+ * dataError (exit 2). Any Tempo problem (network error, timeout, non-2xx, an undecodable header env var,
+ * an unexpected trace document) is reported as `skipped`, same as no source — traces never change
+ * `codeloom check`'s exit code. */
 export async function runTraces(ws: WorkspaceData, chains: Chain[], opts: BuildReportOptions): Promise<TracesReport | TracesSkipped> {
   const cfg = ws.traces;
   if (!cfg) return { skipped: "no trace source in codeloom.workspace.json" };
@@ -22,7 +23,7 @@ export async function runTraces(ws: WorkspaceData, chains: Chain[], opts: BuildR
     const spans = await fetchTempoSpans(cfg, { fetchImpl: opts.fetchImpl, now: opts.now });
     return compareTraces(chains, ws, spans, "tempo");
   } catch (err) {
-    if (err instanceof TraceSourceError) return { skipped: `tempo unreachable: ${err.message}` };
+    if (err instanceof TraceSourceError) return { skipped: `tempo: ${err.message}` };
     throw err;
   }
 }

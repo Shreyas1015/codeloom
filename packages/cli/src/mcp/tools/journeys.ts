@@ -174,8 +174,8 @@ function parseNamed(kind: "table" | "queue", rest: string, from: string, repoIds
   return { kind, name: trimmed };
 }
 
-/** The refs `search` returns for routes and pages: "route:<repo>:<METHOD /path>" (matched in that repo
- * only) and "page:<repo>:<route>" (read as the bare "<route>"). Anything else → undefined. */
+/** The refs `search` returns for routes and pages: "route:<repo>:<METHOD /path>" and
+ * "page:<repo>:<route>", both matched in that repo only. Anything else → undefined. */
 function parseSearchRef(s: string, from: string, repoIds: Set<string>): From | undefined {
   const m = s.match(/^(route|page):([^:]+):(.*)$/);
   if (!m) return undefined;
@@ -185,7 +185,7 @@ function parseSearchRef(s: string, from: string, repoIds: Set<string>): From | u
   }
   const f = parseFrom(rest, repoIds);
   if (f.kind !== "path") throw dataError(`"${from}": expected a route or page path after "${kind}:${repo}:".`);
-  return kind === "route" ? { ...f, repo } : f;
+  return { ...f, repo };
 }
 
 function parseFrom(from: string, repoIds: Set<string>): From {
@@ -335,7 +335,7 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         'route; :id, {id} and [id] are treated alike, and concrete values like /users/42 match), "table:<name>" or ' +
         '"table:<repo>:<name>", "queue:<name>" or "queue:<repo>:<name>" (the repo-qualified forms, as `search` returns ' +
         'them, restrict matching to that repo), the route/page refs `search` returns ("route:<repo>:<METHOD /path>", ' +
-        'that repo only; "page:<repo>:<route>"), or a node reference "<repo>::<nodeId>". At most 50 chains.',
+        'that repo only; "page:<repo>:<route>", also that repo only), or a node reference "<repo>::<nodeId>". At most 50 chains.',
       inputSchema: { from: z.string().min(1).max(500) },
     },
     withErrors((args: { from: string }) => traceRoute(opts.start, args.from)),

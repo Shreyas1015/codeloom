@@ -187,6 +187,9 @@ export async function fetchTempoSpans(cfg: Extract<TracesConfig, { kind: "tempo"
     return await Promise.race([fetchAll(), deadline]);
   } finally {
     clearTimeout(timer);
+    // Whatever ended the race (success, a failed trace, the deadline), stop the remaining workers and
+    // cancel their in-flight requests, so the command can exit right away.
+    if (!overall.signal.aborted) overall.abort(new TraceSourceError("Tempo fetch finished"));
     deadline.catch(() => {}); // never settles once cleared; this only silences a reject that raced the result
   }
 }
