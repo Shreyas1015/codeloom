@@ -295,3 +295,49 @@ describe("hopsFromChains: ui-api only to the call's own route", () => {
     expect(hopsFromChains([chain]).filter((f) => f.hop.type === "ui-api")).toHaveLength(1);
   });
 });
+
+describe("hopsFromChains: follows from when stops record it", () => {
+  const s = (kind: ChainStop["kind"], extra: Partial<ChainStop> = {}): ChainStop => ({
+    lane: kind === "route" ? "api" : kind === "db" ? "db" : kind === "publish" || kind === "consume" ? "queue" : "code",
+    kind, repo: "api", file: "f.ts", line: 1, symbol: "S", hop: { confidence: "exact" }, ...extra,
+  });
+  const keys = (c: Chain) => hopsFromChains([c]).map((f) => hopKey(f.hop)).sort();
+
+  it("a handler reached from the chain's route pairs with it, not with an appended route listed in between", () => {
+    const chain = fakeChain({
+      entry: "route:api:GET /a", routeKey: "api:GET /a",
+      stops: [
+        s("route", { op: "GET", label: "GET /a" }),
+        s("route", { op: "GET", label: "GET /b", from: 0, hop: { confidence: "exact", reason: "manual link" } }),
+        s("handler", { symbol: "A.show", from: 0 }),
+        s("db", { op: "read", label: "a_rows", from: 2 }),
+      ],
+    });
+    expect(keys(chain)).toEqual([
+      "handler-store|api:GET /a|a_rows||read",
+      "route-handler|api:GET /a|f.ts|A.show",
+    ]);
+  });
+
+  it("a store keeps the segment of the stop it was reached from, even listed after a paired consumer", () => {
+    const chain = fakeChain({
+      entry: "route:api:POST /pay", routeKey: "api:POST /pay",
+      stops: [
+        s("route", { op: "POST", label: "POST /pay" }),
+        s("handler", { symbol: "pay", from: 0 }),
+        s("publish", { op: "publish", label: "paid", from: 1 }),
+        s("consume", { op: "consume", label: "emails", from: 2 }),
+        s("handler", { symbol: "handleEmail", file: "n.ts", from: 3 }),
+        s("db", { op: "insert", label: "email_logs", from: 4 }),
+        s("db", { op: "update", label: "invoices", from: 1 }),
+      ],
+    });
+    expect(keys(chain)).toEqual([
+      "handler-store|api:POST /pay|invoices||update",
+      "handler-store|api:POST /pay||paid|publish",
+      "handler-store|consumer:api:emails#n.ts#handleEmail|email_logs||insert",
+      "handler-store|consumer:api:emails#n.ts#handleEmail||emails|consume",
+      "route-handler|api:POST /pay|f.ts|pay",
+    ]);
+  });
+});
