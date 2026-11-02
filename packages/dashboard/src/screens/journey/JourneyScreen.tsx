@@ -2,15 +2,15 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
 import { useJourney, useOverview } from "@/api/queries";
+import { stopLabel } from "@/components/gallery/StopRoundel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { rememberLastJourney } from "@/screens/home/lastJourney";
 import { ChainsView } from "./ChainsView";
 import { LanesView } from "./LanesView";
-import { buildJourneyModel } from "./model";
+import { buildJourneyModel, stopTitle } from "./model";
 import { Nameplate } from "./Nameplate";
 import { StopInspector } from "./StopInspector";
 
-/** localStorage key Home's "continue" band reads. */
-export const lastJourneyKey = (workspace: string) => `codeloom:last-journey:${workspace}`;
 
 /** Keys that belong to whatever has focus: typing, tabs, scrolling code. */
 function ownsArrows(t: EventTarget | null): boolean {
@@ -31,7 +31,14 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
     [navigate, id],
   );
 
+  // a ?stop= outside the journey is put right in the URL once the journey is known
+  useEffect(() => {
+    if (!model || stop === undefined || stop === selected) return;
+    void navigate({ to: "/journeys/$id", params: { id }, search: selected === undefined ? {} : { stop: selected }, replace: true });
+  }, [model, stop, selected, navigate, id]);
+
   // held or fast keys fire before the URL change re-renders: step from the last stop asked for
+  const body = useRef<HTMLDivElement>(null);
   const at = useRef(selected);
   at.current = selected;
   useEffect(() => {
@@ -46,21 +53,18 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
       if (next === from) return;
       at.current = next;
       select(next);
+      // focus follows the selection: the stop's button in the open tab
+      body.current?.querySelector<HTMLElement>(`button[aria-label^="Stop ${next}:"]`)?.focus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [count, select]);
 
   const workspace = overview.data?.name;
-  const journeyId = data?.journey?.id;
+  const loadedId = data ? (data.journey?.id ?? data.chains[0]?.id) : undefined;
   useEffect(() => {
-    if (!workspace || !journeyId) return;
-    try {
-      window.localStorage.setItem(lastJourneyKey(workspace), journeyId);
-    } catch {
-      /* storage blocked: Home just shows no continue band */
-    }
-  }, [workspace, journeyId]);
+    if (workspace && loadedId) rememberLastJourney(workspace, loadedId);
+  }, [workspace, loadedId]);
 
   if (isPending) return <p className="text-[13px] text-muted-foreground">Loading journey…</p>;
 
@@ -115,7 +119,7 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
             </TabsTrigger>
           </TabsList>
           <div className="grid min-h-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="min-w-0">
+            <div ref={body} className="min-w-0">
               <TabsContent value="lanes">
                 <LanesView result={data} model={m} selected={selected} onSelect={select} />
               </TabsContent>
@@ -125,6 +129,9 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
             </div>
             <StopInspector stop={current} journeyId={data.journey?.id ?? id} />
           </div>
+          <p role="status" aria-live="polite" aria-label="Selected stop" className="sr-only">
+            {current ? stopLabel(current.n, stopTitle(current.view)) : ""}
+          </p>
         </Tabs>
       ) : orphaned ? null : (
         <p className="text-[13px] text-muted-foreground">This journey has no stops yet.</p>

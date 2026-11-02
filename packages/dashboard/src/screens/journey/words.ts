@@ -20,4 +20,11 @@ export const KIND_WORD: Record<string, string> = {
   consume: "Queue consumer",
 };
 
-export const fileLine = (file: string, line: number) => `${file}:${line}`;
+/** One hop's confidence, mid-sentence. */
+export const HOP_WORD: Record<Confidence, string> = {
+  exact: "exact link",
+  param: "matched with a path parameter",
+  guess: "guessed link",
+};
+
+export const fileLine =(file: string, line: number) => `${file}:${line}`;

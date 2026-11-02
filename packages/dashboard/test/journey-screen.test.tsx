@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { CodeResponse, NeighborsResult, NodeResult, Overview } from "@/api/types";
 import { createAppRouter } from "@/router";
+import { lastJourneyKey } from "@/screens/home/lastJourney";
 import { chainResult, journeyResult, orphanedResult } from "./fixtures/journey";
 
 const overview: Overview = {
@@ -80,15 +81,18 @@ function renderAt(path: string) {
 const lane = (name: string) => screen.getByRole("region", { name });
 const urls = (fetch: ReturnType<typeof stubApi>) => fetch.mock.calls.map((c) => decodeURIComponent(String(c[0])));
 
+const pressKey = (key: string, target: Element = document.body) => act(() => void fireEvent.keyDown(target, { key }));
+const opened = () => screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+
 describe("Journey screen", () => {
   it("shows the nameplate with name, area, note, confidence, completeness and counts", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");
-    const title = await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+    const title = await opened();
     const plate = title.closest("header")!;
     expect(within(plate).getByText("Invoices")).toBeInTheDocument();
     expect(within(plate).getByText("From the new-invoice form down to the invoices table.")).toBeInTheDocument();
-    expect(within(plate).getByText("7 stops · 2 repos · 1 table")).toBeInTheDocument();
+    expect(within(plate).getByText("9 stops · 2 repos · 2 tables")).toBeInTheDocument();
     expect(within(plate).getByText("2 chains")).toBeInTheDocument();
     expect(within(plate).getByText("Has guesses")).toBeInTheDocument();
     expect(within(plate).getByText("Incomplete")).toBeInTheDocument();
@@ -97,48 +101,69 @@ describe("Journey screen", () => {
   it("lays the stops out in UI / API / Code / DB lanes, numbered in chain order; no Queue lane without queue stops", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");
-    await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+    await opened();
     const names = (r: HTMLElement) => within(r).queryAllByRole("button").map((b) => b.getAttribute("aria-label"));
-    expect(names(lane("UI"))).toEqual(["Stop 1: /invoices/new", "Stop 2: POST /api/invoices", "Stop 6: GET /api/customers"]);
-    expect(names(lane("API"))).toEqual([
-      "Stop 3: POST /api/invoices",
-      "Stop 4: InvoicesController.store",
-      "Stop 7: GET /api/customers (unresolved)",
-    ]);
-    expect(names(lane("DB"))).toEqual(["Stop 5: invoices"]);
-    expect(within(lane("Code")).getByText("No stops in this lane")).toBeInTheDocument();
+    expect(names(lane("UI"))).toEqual(["Stop 1: /invoices/new", "Stop 2: POST /api/invoices", "Stop 7: GET /api/customers"]);
+    expect(names(lane("API"))).toEqual(["Stop 3: POST /api/invoices", "Stop 8: GET /api/customers"]);
+    expect(names(lane("Code"))).toEqual(["Stop 4: InvoicesController.store", "Stop 9: CustomersController.index"]);
+    expect(names(lane("DB"))).toEqual(["Stop 5: invoices", "Stop 6: invoice_lines"]);
     expect(screen.queryByRole("region", { name: "Queue" })).toBeNull();
   });
 
-  it("draws a connector for every hop, styled by its confidence", async () => {
+  it("draws a wire for every recorded hop across lanes, styled by its confidence, and nothing else", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");
-    await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+    await opened();
     const wires = document.querySelectorAll<SVGPathElement>('[data-slot="journey-wire"]');
     const byHop = new Map([...wires].map((w) => [`${w.dataset.from}>${w.dataset.to}`, w]));
-    // cross-lane hops (and the same-lane hop that skips a stop) are SVG wires
-    expect([...byHop.keys()].sort()).toEqual(["1>6", "2>3", "4>5", "6>7"]);
+    // cross-lane hops, and the same-lane hop 1 → 7 that skips stop 2; the handler fans out to both tables
+    expect([...byHop.keys()].sort()).toEqual(["1>7", "2>3", "3>4", "4>5", "4>6", "7>8"]);
     expect(byHop.get("2>3")!.dataset.confidence).toBe("param");
     expect(byHop.get("2>3")!.getAttribute("stroke-width")).toBe("1.25");
     expect(byHop.get("2>3")!.getAttribute("stroke-dasharray")).toBeNull();
     expect(byHop.get("4>5")!.dataset.confidence).toBe("exact");
     expect(byHop.get("4>5")!.getAttribute("stroke-width")).toBe("2");
-    expect(byHop.get("6>7")!.dataset.confidence).toBe("guess");
-    expect(byHop.get("6>7")!.getAttribute("stroke-dasharray")).toBe("4 3");
-
-    // neighbouring stops in one lane use the lane's own line: 1→2 is an exact hop, 3→4 too
-    const uiLines = lane("UI").querySelectorAll('[data-slot="confidence-line"]');
-    expect(uiLines[0]).toHaveAttribute("data-confidence", "exact");
-    // 2 and 6 sit next to each other but no chain goes 2 → 6: never drawn as a solid fact
-    expect(uiLines[1]).toHaveAttribute("data-stroke", "dashed");
+    expect(byHop.get("7>8")!.dataset.confidence).toBe("guess");
+    expect(byHop.get("7>8")!.getAttribute("stroke-dasharray")).toBe("4 3");
   });
 
-  it("lists unresolved hops under the lanes with file:line and reason", async () => {
+  it("lane neighbours get their real hop's line, or a plain gap when no hop joins them", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice");
+    await opened();
+    const items = (name: string) => within(lane(name)).getAllByRole("listitem");
+    const line = (li: HTMLElement) => li.querySelector('[data-slot="confidence-line"]');
+    const gap = (li: HTMLElement) => li.querySelector('[data-slot="lane-gap"]');
+    const ui = items("UI");
+    expect(line(ui[1]!)).toHaveAttribute("data-confidence", "exact"); // 1 → 2
+    expect(line(ui[2]!)).toBeNull(); // 2 and 7 only share the lane
+    expect(gap(ui[2]!)).not.toBeNull();
+    const db = items("DB");
+    expect(line(db[1]!)).toBeNull(); // two stores of one handler: no line between them
+    expect(gap(db[1]!)).not.toBeNull();
+    expect(line(items("Code")[1]!)).toBeNull(); // stop 9 has no `from`
+    expect(line(items("API")[1]!)).toBeNull();
+  });
+
+  it("lists the hops for assistive tech, with confidence and reason", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice");
+    await opened();
+    const hops = screen.getByRole("list", { name: "Hops" });
+    const texts = within(hops).getAllByRole("listitem").map((li) => li.textContent);
+    expect(texts).toHaveLength(7);
+    expect(texts).toContain("Stop 2 to stop 3: matched with a path parameter.");
+    expect(texts).toContain("Stop 7 to stop 8: guessed link. URL built at runtime; matched by prefix");
+  });
+
+  it("lists unresolved items only under the lanes, never marking a stop unresolved", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");
     const list = await screen.findByRole("list", { name: "Unresolved hops" });
     expect(within(list).getByText("api · start/routes.ts:12")).toBeInTheDocument();
     expect(within(list).getByText("No handler found for GET /api/customers")).toBeInTheDocument();
+    expect(within(lane("API")).getByRole("button", { name: "Stop 8: GET /api/customers" })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="stop-roundel"][data-state="unresolved"]')).toBeNull();
   });
 
   it("selects the stop from the URL and loads its code ±12 lines with the stop line highlighted", async () => {
@@ -151,7 +176,7 @@ describe("Journey screen", () => {
     const hl = block.querySelectorAll("[data-highlighted='']");
     expect([...hl].map((e) => e.getAttribute("data-line"))).toEqual(["41"]);
     expect(urls(fetch)).toContain("/api/code?repo=api&file=app/controllers/invoices_controller.ts&start=29&end=53");
-    expect(within(lane("API")).getByRole("button", { name: "Stop 4: InvoicesController.store" })).toHaveAttribute("aria-current", "step");
+    expect(within(lane("Code")).getByRole("button", { name: "Stop 4: InvoicesController.store" })).toHaveAttribute("aria-current", "step");
   });
 
   it("shows the summary, callers, callees and other journeys for a stop with a ref", async () => {
@@ -170,46 +195,115 @@ describe("Journey screen", () => {
     expect(within(also).queryByText("Customer creates an invoice")).toBeNull();
   });
 
+  it("asks for no node or neighbours for a stop without a ref", async () => {
+    const fetch = stubApi();
+    renderAt("/journeys/j_invoice?stop=2");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    await within(inspector).findByRole("region", { name: /lib\/api\.ts, lines/ });
+    expect(urls(fetch).filter((u) => u.startsWith("/api/node/") || u.startsWith("/api/neighbors/"))).toEqual([]);
+  });
+
   it("clicking a stop selects it and puts it in the URL", async () => {
     stubApi();
     const router = renderAt("/journeys/j_invoice");
-    await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+    await opened();
     await userEvent.click(within(lane("DB")).getByRole("button", { name: "Stop 5: invoices" }));
     await waitFor(() => expect(router.state.location.search).toEqual({ stop: 5 }));
     const inspector = screen.getByRole("complementary", { name: "Stop inspector" });
     expect(within(inspector).getByRole("heading", { name: "invoices" })).toBeInTheDocument();
   });
 
-  it("←/→ move between stops", async () => {
+  it("←/→ move between stops, stopping at the ends", async () => {
     stubApi();
     const router = renderAt("/journeys/j_invoice?stop=2");
-    await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
-    act(() => void fireEvent.keyDown(document.body, { key: "ArrowRight" }));
+    await opened();
+    pressKey("ArrowRight");
     await waitFor(() => expect(router.state.location.search).toEqual({ stop: 3 }));
-    act(() => void fireEvent.keyDown(document.body, { key: "ArrowLeft" }));
-    act(() => void fireEvent.keyDown(document.body, { key: "ArrowLeft" }));
+    pressKey("ArrowLeft");
+    pressKey("ArrowLeft");
     await waitFor(() => expect(router.state.location.search).toEqual({ stop: 1 }));
-    act(() => void fireEvent.keyDown(document.body, { key: "ArrowLeft" }));
+    pressKey("ArrowLeft");
     await waitFor(() => expect(router.state.location.search).toEqual({ stop: 1 }));
   });
 
-  it("the Chains tab lists each chain's stops with per-hop confidence and its unresolved hops", async () => {
+  it("←/→ move focus to the new stop and announce it politely", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice?stop=2");
+    await opened();
+    pressKey("ArrowRight");
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-label", "Stop 3: POST /api/invoices"));
+    const live = screen.getByRole("status", { name: "Selected stop" });
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveTextContent("Stop 3: POST /api/invoices");
+    pressKey("ArrowRight", document.activeElement!);
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-label", "Stop 4: InvoicesController.store"));
+    expect(live).toHaveTextContent("Stop 4: InvoicesController.store");
+  });
+
+  it("←/→ are left alone while typing in a text field", async () => {
+    stubApi();
+    const router = renderAt("/journeys/j_invoice?stop=2");
+    await opened();
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    pressKey("ArrowRight", input);
+    pressKey("ArrowLeft", input);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(router.state.location.search).toEqual({ stop: 2 });
+    input.remove();
+  });
+
+  it("holding ←/→ waits 150 ms before loading the inspector, so skipped stops cost no requests", async () => {
+    const fetch = stubApi();
+    const router = renderAt("/journeys/j_invoice?stop=2");
+    await opened();
+    for (const n of [3, 4, 5]) {
+      pressKey("ArrowRight");
+      // each stop renders in the inspector before the next key comes, well inside 150 ms
+      await waitFor(() => expect(screen.getByRole("status", { name: "Selected stop" })).toHaveTextContent(`Stop ${n}:`), { interval: 5 });
+    }
+    expect(router.state.location.search).toEqual({ stop: 5 });
+    await waitFor(() => expect(urls(fetch)).toContain("/api/code?repo=api&file=app/controllers/invoices_controller.ts&start=32&end=56"));
+    const code = urls(fetch).filter((u) => u.startsWith("/api/code"));
+    expect(code.some((u) => u.includes("start/routes.ts"))).toBe(false); // stop 3
+    expect(code.some((u) => u.includes("start=29"))).toBe(false); // stop 4
+    expect(urls(fetch).some((u) => u.startsWith("/api/node/api::"))).toBe(false); // stop 4's ref
+  });
+
+  it("replaces an out-of-range ?stop= in the URL once the journey loads", async () => {
+    stubApi();
+    const router = renderAt("/journeys/j_invoice?stop=99");
+    await opened();
+    await waitFor(() => expect(router.state.location.search).toEqual({ stop: 1 }));
+    expect(router.history.length).toBe(1);
+  });
+
+  it("the Chains tab lists each chain's stops with each recorded hop's confidence and its unresolved items", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");
-    await screen.findByRole("heading", { level: 1, name: "Customer creates an invoice" });
+    await opened();
     await userEvent.click(screen.getByRole("tab", { name: "Chains" }));
     const b = screen.getByRole("region", { name: "GET /api/customers" });
     const steps = within(b).getByRole("list", { name: "Stops" });
     expect(within(steps).getAllByRole("button").map((x) => x.getAttribute("aria-label"))).toEqual([
       "Stop 1: /invoices/new",
-      "Stop 6: GET /api/customers",
-      "Stop 7: GET /api/customers (unresolved)",
+      "Stop 7: GET /api/customers",
+      "Stop 8: GET /api/customers",
+      "Stop 9: CustomersController.index",
     ]);
     const guess = within(steps).getByRole("img", { name: /Guessed link: URL built at runtime/ });
     expect(guess).toHaveAttribute("data-stroke", "dashed");
+    const bItems = within(steps).getAllByRole("listitem");
+    expect(bItems[3]!.querySelector('[data-slot="confidence-line"]')).toBeNull(); // no `from`
     expect(within(b).getByText("No handler found for GET /api/customers")).toBeInTheDocument();
+
     const a = screen.getByRole("region", { name: "POST /api/invoices" });
     expect(within(a).getByRole("img", { name: "Matched with a path parameter" })).toHaveAttribute("data-stroke", "thin");
+    const aItems = within(within(a).getByRole("list", { name: "Stops" })).getAllByRole("listitem");
+    // invoice_lines comes from the handler (stop 4), not from the invoices insert above it
+    expect(aItems[5]!.querySelector('[data-slot="confidence-line"]')).toBeNull();
+    expect(aItems[5]).toHaveTextContent("From stop 4 · exact link");
   });
 
   it("a chain id shows the chain, marked as not in a journey yet", async () => {
@@ -234,11 +328,19 @@ describe("Journey screen", () => {
     expect(screen.getByText(/re-name or delete it through your agent/i)).toBeInTheDocument();
   });
 
-  it("remembers the journey as last opened for Home's continue band", async () => {
+  it("remembers the journey (or chain) as last opened, under Home's key", async () => {
     stubApi();
     const set = vi.spyOn(Storage.prototype, "setItem");
     renderAt("/journeys/j_invoice");
-    await waitFor(() => expect(set).toHaveBeenCalledWith("codeloom:last-journey:demo-shop", "j_invoice"));
+    await waitFor(() => expect(set).toHaveBeenCalledWith(lastJourneyKey("demo-shop"), "j_invoice"));
+    expect(lastJourneyKey("demo-shop")).toBe("codeloom:last-journey:demo-shop");
+  });
+
+  it("remembers a chain id too", async () => {
+    stubApi();
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    renderAt("/journeys/ch_aaaa");
+    await waitFor(() => expect(set).toHaveBeenCalledWith(lastJourneyKey("demo-shop"), "ch_aaaa"));
   });
 
   it("does not remember an unknown id", async () => {

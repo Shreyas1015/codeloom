@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { useCode, useNeighbors, useNode } from "@/api/queries";
 import type { Neighbor } from "@/api/types";
 import { CodeBlock } from "@/components/code/CodeBlock";
@@ -9,6 +9,7 @@ import { fileLine, KIND_WORD } from "./words";
 
 const CONTEXT = 12;
 const MAX_LINKS = 8;
+const SETTLE_MS = 150;
 
 const h4 = "text-xs font-semibold text-muted-foreground";
 const section = "flex flex-col gap-2 border-b border-border px-4.5 py-3.5 last:border-b-0";
@@ -23,20 +24,32 @@ export function StopInspector({ stop, journeyId }: { stop: JourneyStop | undefin
       aria-label="Stop inspector"
       className="flex min-w-0 flex-col self-start overflow-hidden rounded-xl border border-border bg-card lg:sticky lg:top-0"
     >
-      {stop ? <StopDetails key={stop.n} stop={stop} journeyId={journeyId} /> : <p className={`${quiet} p-4.5`}>Pick a stop to see its code.</p>}
+      {stop ? <StopDetails stop={stop} journeyId={journeyId} /> : <p className={`${quiet} p-4.5`}>Pick a stop to see its code.</p>}
     </aside>
   );
 }
 
+/** `value` once it has stayed the same for `ms`; the first value at once. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (Object.is(settled, value)) return;
+    const t = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(t);
+  }, [value, settled, ms]);
+  return settled;
+}
+
+/** The header follows the selection at once; the requests (code, node, neighbours) wait until the selection
+ * has rested for SETTLE_MS, so holding ←/→ across stops does not fetch every stop on the way. */
 function StopDetails({ stop, journeyId }: { stop: JourneyStop; journeyId: string }) {
+  const settled = useSettled(stop.n, SETTLE_MS);
   const v = stop.view;
   const title = stopTitle(v);
-  const start = Math.max(1, v.line - CONTEXT);
-  const code = useCode(v.repo, v.file, start, v.line + CONTEXT);
   return (
     <>
       <header className="flex items-start gap-3 border-b border-border px-4.5 py-4">
-        <StopRoundel n={stop.n} label={title} state={stop.unresolved ? "unresolved" : "selected"} decorative className="mt-0.5" />
+        <StopRoundel n={stop.n} label={title} state="selected" decorative className="mt-0.5" />
         <div className="flex min-w-0 flex-col gap-0.5">
           <h2 className="text-[15px] leading-snug font-bold break-words">{title}</h2>
           <span className="font-mono text-xs break-all text-muted-foreground">{fileLine(v.file, v.line)}</span>
@@ -46,6 +59,22 @@ function StopDetails({ stop, journeyId }: { stop: JourneyStop; journeyId: string
           </span>
         </div>
       </header>
+      {settled === stop.n ? (
+        <StopRequests key={stop.n} stop={stop} journeyId={journeyId} />
+      ) : (
+        <section className={section}>
+          <p className={quiet}>Loading code…</p>
+        </section>
+      )}
+    </>
+  );
+}
+
+function StopRequests({ stop, journeyId }: { stop: JourneyStop; journeyId: string }) {
+  const v = stop.view;
+  const code = useCode(v.repo, v.file, Math.max(1, v.line - CONTEXT), v.line + CONTEXT);
+  return (
+    <>
       <section className={section}>
         {code.data ? (
           <CodeBlock code={code.data.text} startLine={code.data.startLine} highlight={{ from: v.line, to: v.line }} file={v.file} />

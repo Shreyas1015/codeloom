@@ -3,7 +3,7 @@ import type { JourneyResult, Lane } from "@/api/types";
 import { confidenceStroke } from "@/components/gallery/ConfidenceLine";
 import { LaneColumn, type LaneStop } from "@/components/gallery/LaneColumn";
 import { LANE_ORDER, type JourneyHop, type JourneyModel, type JourneyStop, stopTitle } from "./model";
-import { fileLine } from "./words";
+import { fileLine, HOP_WORD } from "./words";
 
 export interface LanesViewProps {
   result: JourneyResult;
@@ -12,11 +12,8 @@ export interface LanesViewProps {
   onSelect: (n: number) => void;
 }
 
-const notAHop = (a: number, b: number) =>
-  `No chain goes straight from stop ${a} to stop ${b}; they only share this lane.`;
-
-/** One lane's stops for LaneColumn. The line above each stop is the hop from the stop above it, when a chain
- * makes that hop; when two neighbours are not a hop, the line is dashed and says so (never drawn as fact). */
+/** One lane's stops for LaneColumn. The line above a stop is drawn only when a chain records the hop from the
+ * stop above it (with that hop's confidence); otherwise the two only share the lane and get a plain gap. */
 function laneStops(stops: JourneyStop[], hops: JourneyHop[]): LaneStop[] {
   return stops.map((s, i) => {
     const prev = stops[i - 1];
@@ -27,14 +24,18 @@ function laneStops(stops: JourneyStop[], hops: JourneyHop[]): LaneStop[] {
       label: stopTitle(view),
       detail: fileLine(view.file, view.line),
       ...(view.op ? { note: view.op } : {}),
-      unresolved: s.unresolved,
       ...(prev
         ? hop
           ? { confidence: hop.confidence, ...(hop.reason ? { reason: hop.reason } : {}) }
-          : { confidence: "guess" as const, reason: notAHop(prev.n, s.n) }
+          : { connected: false }
         : {}),
     };
   });
+}
+
+/** "Stop 7 to stop 8: guessed link. URL built at runtime" */
+export function hopSentence(h: JourneyHop): string {
+  return `Stop ${h.from} to stop ${h.to}: ${HOP_WORD[h.confidence]}.${h.reason ? ` ${h.reason}` : ""}`;
 }
 
 interface Wire {
@@ -136,6 +137,12 @@ export function LanesView({ result, model, selected, onSelect }: LanesViewProps)
           ))}
         </div>
       </div>
+      {/* the wires are drawn for the eye only; this is the same set of hops in words */}
+      <ul aria-label="Hops" className="sr-only">
+        {model.hops.map((h) => (
+          <li key={`${h.from}>${h.to}`}>{hopSentence(h)}</li>
+        ))}
+      </ul>
       <UnresolvedList items={result.unresolved} />
     </div>
   );
