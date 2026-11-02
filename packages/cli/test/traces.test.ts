@@ -268,6 +268,8 @@ describe("compareTraces route ranking", () => {
     const r = run(chainsIn, [server("a", "GET", "/d")]);
     expect(r.confirmed).toEqual([]);
     expect(r.missingInMap[0]!.detail).toBe("ambiguous: matches a:GET /d@r1.ts#1, a:GET /d@r2.ts#2");
+    // Traffic reached one of them, so neither is "never hit"; with no traffic, both are.
+    expect(r.neverHit).toEqual([]);
     expect(run(chainsIn, []).neverHit).toEqual(["a:GET /d@r1.ts#1", "a:GET /d@r2.ts#2"]);
   });
 });
@@ -374,6 +376,14 @@ describe("compareTraces span walk boundaries", () => {
     const s = server("api", "POST", "/pay");
     const other = child(s, "billing", "client");
     expectNothingBelow(run(chainsIn, [s, other, child(other, "billing", "client", { db: { table: "invoices", op: "insert" } })]));
+  });
+
+  it("ends the walk on a span that lists itself as its parent (duplicated ids)", () => {
+    const s = server("api", "POST", "/pay");
+    const loop: TraceSpan = { ...child(s, "api", "internal"), db: { table: "invoices", op: "insert" } };
+    const self: TraceSpan = { ...loop, parentSpanId: loop.spanId };
+    const r = run(chainsIn, [s, loop, self]);
+    expect(r.confirmed).toEqual([{ routeKey: "api:POST /pay", hits: 1, stores: ["table:invoices insert"] }]);
   });
 
   it("walks through same-service internal spans", () => {

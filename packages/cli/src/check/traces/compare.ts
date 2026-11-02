@@ -130,8 +130,8 @@ function storeOf(span: TraceSpan): { kind: "table"; table: string; op?: string }
  * span, a consumer span, or a span of another service: their work belongs to another route. Every list
  * is sorted with `compare`. */
 export function compareTraces(chains: Chain[], ws: WorkspaceData, spans: TraceSpan[], source: "tempo" | "otlp-file"): TracesReport {
-  // Both trace sources may carry a services map (Task 10 adds it to otlp-file); read it defensively.
-  const services = (ws.traces as { services?: Record<string, string> } | undefined)?.services ?? {};
+  // Both trace sources may carry a services map.
+  const services = ws.traces?.services ?? {};
   const repoIds = new Set(ws.repos.map((r) => r.ref.id));
   const repoOf = (service: string) => services[service] ?? service;
 
@@ -168,6 +168,7 @@ export function compareTraces(chains: Chain[], ws: WorkspaceData, spans: TraceSp
   };
 
   const hits = new Map<string, number>();
+  const tied = new Set<string>();
   const confirmedStores = new Map<string, Set<string>>();
   const missing = new Map<string, TracesReport["missingInMap"][number]>();
   const unmatched = new Set<string>();
@@ -191,6 +192,8 @@ export function compareTraces(chains: Chain[], ws: WorkspaceData, spans: TraceSp
     const matched = matchRoute(byRepo.get(repo) ?? [], method, path);
     if (!matched || "ambiguous" in matched) {
       const detail = matched ? `ambiguous: matches ${matched.ambiguous.join(", ")}` : "served in traffic, but the map has no matching route";
+      // Traffic reached one of the tied routes; we just can't tell which. None of them is "never hit".
+      if (matched) for (const k of matched.ambiguous) tied.add(k);
       bump(`route\0${repo}\0${method}\0${path}`, { repo, kind: "route", method, route: path, hits: 1, detail });
       continue;
     }
@@ -232,7 +235,7 @@ export function compareTraces(chains: Chain[], ws: WorkspaceData, spans: TraceSp
       .map(([routeKey, n]) => ({ routeKey, hits: n, stores: [...(confirmedStores.get(routeKey) ?? [])].sort(compare) }))
       .sort((a, b) => compare(a.routeKey, b.routeKey)),
     missingInMap: [...missing.values()].sort((a, b) => compare(sortKey(a), sortKey(b))),
-    neverHit: [...routes.keys()].filter((k) => !hits.has(k)).sort(compare),
+    neverHit: [...routes.keys()].filter((k) => !hits.has(k) && !tied.has(k)).sort(compare),
     unmatchedServices: [...unmatched].sort(compare),
   };
 }
