@@ -47,6 +47,12 @@
   --lane-db-soft: #F3E9DE;
   --lane-queue: #B07E4A;
   --lane-queue-soft: #F8F0E6;
+  /* code lane: a neutral warm grey, set apart from the gallery-white ground */
+  --lane-code: #5E5950;
+  --lane-code-soft: #E9E6E0;
+
+  /* connector wire between stops: the mock's tan, darkened to read ≥ 3:1 on the ground and every lane tint */
+  --connector: #94804E;
 
   /* the painted gallery wall (shell rail) */
   --rail: #1F4D45;
@@ -105,6 +111,9 @@
   --color-lane-db-soft: var(--lane-db-soft);
   --color-lane-queue: var(--lane-queue);
   --color-lane-queue-soft: var(--lane-queue-soft);
+  --color-lane-code: var(--lane-code);
+  --color-lane-code-soft: var(--lane-code-soft);
+  --color-connector: var(--connector);
 
   --color-rail: var(--rail);
   --color-rail-foreground: var(--rail-foreground);

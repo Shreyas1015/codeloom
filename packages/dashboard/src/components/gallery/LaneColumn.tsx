@@ -25,7 +25,7 @@ export const LANE_NAME: Record<Lane, string> = { ui: "UI", api: "API", code: "Co
 const LANE_STYLE: Record<Lane, { ground: string; ink: string }> = {
   ui: { ground: "bg-lane-ui-soft", ink: "text-lane-ui" },
   api: { ground: "bg-lane-api-soft", ink: "text-lane-api" },
-  code: { ground: "bg-secondary", ink: "text-foreground" },
+  code: { ground: "bg-lane-code-soft", ink: "text-lane-code" },
   db: { ground: "bg-lane-db-soft", ink: "text-lane-db" },
   queue: { ground: "bg-lane-queue-soft", ink: "text-lane-db" },
 };
@@ -66,7 +66,13 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
             const detailId = `${id}-d${s.index}`;
             const body = (
               <>
-                <StopRoundel n={s.index} label={s.label} state={s.unresolved ? "unresolved" : selected ? "selected" : "default"} decorative={!!onSelect} />
+                <StopRoundel
+                  n={s.index}
+                  label={s.label}
+                  state={s.unresolved ? "unresolved" : selected ? "selected" : "default"}
+                  decorative={!!onSelect}
+                  className={s.unresolved && selected ? "shadow-[0_0_0_4px_rgb(227_167_47_/_0.35)]" : undefined}
+                />
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-[13.5px] font-semibold text-foreground">{s.label}</span>
                   {s.detail ? (
@@ -78,10 +84,12 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
                 </span>
               </>
             );
+            // like the roundel, "unresolved" wins the border: a selected unresolved stop keeps its dashed
+            // oxblood edge, and the selection sits outside it as the ochre ring
             const card = cn(
               "relative flex w-full items-start gap-2.5 rounded-[9px] border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(20_40_35_/_0.06)]",
-              selected ? "border-accent-foreground shadow-[0_0_0_3px_rgb(227_167_47_/_0.4)]" : "border-border",
-              s.unresolved && !selected && "border-dashed border-destructive",
+              s.unresolved ? "border-dashed border-destructive" : selected ? "border-accent-foreground" : "border-border",
+              selected && "shadow-[0_0_0_3px_rgb(227_167_47_/_0.4)]",
             );
             return (
               <li key={s.index} className="flex flex-col">

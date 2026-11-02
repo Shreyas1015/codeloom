@@ -111,7 +111,7 @@ describe("ConfidenceLine", () => {
   });
 
   it("confidenceStroke gives SVG paths the same look", () => {
-    expect(confidenceStroke("exact")).toMatchObject({ strokeWidth: 2, strokeDasharray: undefined });
+    expect(confidenceStroke("exact")).toMatchObject({ stroke: "var(--connector)", strokeWidth: 2, strokeDasharray: undefined });
     expect(confidenceStroke("param").strokeWidth).toBeLessThan(2);
     expect(confidenceStroke("guess").strokeDasharray).toBeTruthy();
     expect(confidenceStroke("unresolved")).toMatchObject({ stroke: "var(--destructive)" });
@@ -120,9 +120,9 @@ describe("ConfidenceLine", () => {
 
 describe("LaneColumn", () => {
   const stops: LaneStop[] = [
-    { index: 3, label: "POST /api/customers", detail: "start/routes.ts:88", note: "auth + role: sales" },
-    { index: 4, label: "CustomersController.store", detail: "app/controllers/customers.ts:41", confidence: "param" },
-    { index: 5, label: "fetch(url)", detail: "app/services/customer.ts:17", confidence: "unresolved", reason: "URL built at runtime", unresolved: true },
+    { index: 3, label: "POST /api/customers", detail: "api/start/routes.ts:88", note: "auth + role: sales" },
+    { index: 4, label: "CustomersController.store", detail: "api/app/controllers/customers_controller.ts:41", confidence: "param" },
+    { index: 5, label: "fetch(url)", detail: "api/app/services/invoice_service.ts:17", confidence: "unresolved", reason: "URL built at runtime", unresolved: true },
   ];
 
   it("is a region named after its lane with a hued header and the repo", () => {
@@ -138,7 +138,7 @@ describe("LaneColumn", () => {
     const items = within(screen.getByRole("list", { name: "API stops" })).getAllByRole("listitem");
     expect(items).toHaveLength(3);
     expect(within(items[0]!).getByText("POST /api/customers")).toBeInTheDocument();
-    expect(within(items[0]!).getByText("start/routes.ts:88")).toBeInTheDocument();
+    expect(within(items[0]!).getByText("api/start/routes.ts:88")).toBeInTheDocument();
     // connector before stop 2 and stop 3, none before the first
     expect(within(items[0]!).queryByRole("img", { name: /link|hop/i })).toBeNull();
     expect(within(items[1]!).getByRole("img", { name: "Matched with a path parameter" })).toBeInTheDocument();
@@ -157,10 +157,32 @@ describe("LaneColumn", () => {
     render(<LaneColumn lane="api" stops={stops} selectedIndex={4} onSelect={onSelect} />);
     const sel = screen.getByRole("button", { name: "Stop 4: CustomersController.store" });
     expect(sel).toHaveAttribute("aria-current", "step");
-    expect(sel).toHaveAccessibleDescription("app/controllers/customers.ts:41");
+    expect(sel).toHaveAccessibleDescription("api/app/controllers/customers_controller.ts:41");
     expect(screen.getByRole("button", { name: "Stop 3: POST /api/customers" })).not.toHaveAttribute("aria-current");
     await user.click(screen.getByRole("button", { name: "Stop 3: POST /api/customers" }));
     expect(onSelect).toHaveBeenCalledWith(3);
+  });
+
+  it("keeps the dashed oxblood edge on a selected unresolved stop, with the ochre selection ring outside", () => {
+    render(<LaneColumn lane="api" stops={stops} selectedIndex={5} onSelect={() => {}} />);
+    const card = screen.getByRole("button", { name: "Stop 5: fetch(url) (unresolved)" });
+    expect(card).toHaveAttribute("aria-current", "step");
+    expect(card.className).toMatch(/border-dashed/);
+    expect(card.className).toMatch(/border-destructive/);
+    expect(card.className).not.toMatch(/border-accent-foreground/);
+    expect(card.className).toMatch(/shadow-\[0_0_0_3px_rgb\(227_167_47/);
+    const roundel = card.querySelector("[data-slot=stop-roundel]")!;
+    expect(roundel).toHaveAttribute("data-state", "unresolved");
+    expect(roundel.className).toMatch(/border-dashed/);
+    expect(roundel.className).toMatch(/shadow-\[0_0_0_4px_rgb\(227_167_47/);
+  });
+
+  it("draws connectors in the connector token, not the focus ring", () => {
+    render(<ConfidenceLine confidence="exact" />);
+    const wire = screen.getByRole("img", { name: "Exact link" }).firstElementChild!;
+    expect(wire.className).toMatch(/border-connector/);
+    expect(wire.className).not.toMatch(/border-ring/);
+    expect(confidenceStroke("param").stroke).toBe("var(--connector)");
   });
 
   it("uses each lane's hue and says when a lane is empty", () => {
@@ -170,6 +192,9 @@ describe("LaneColumn", () => {
     rerender(<LaneColumn lane="queue" stops={[]} />);
     expect(screen.getByRole("region", { name: "Queue" }).className).toMatch(/bg-lane-queue-soft/);
     rerender(<LaneColumn lane="code" stops={[]} />);
-    expect(screen.getByRole("region", { name: "Code" })).toHaveAttribute("data-lane", "code");
+    const code = screen.getByRole("region", { name: "Code" });
+    expect(code).toHaveAttribute("data-lane", "code");
+    expect(code.className).toMatch(/bg-lane-code-soft/);
+    expect(code.querySelector("h3")!.className).toMatch(/text-lane-code/);
   });
 });

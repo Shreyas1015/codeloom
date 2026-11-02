@@ -17,13 +17,13 @@ const DEFAULT_REASON: Record<"guess" | "unresolved", string> = {
 };
 
 /** Stroke for SVG connectors (Journey lanes, Map overlay), so every connector reads the same.
- * Exact and param use deep ochre (the journey path); guesses are dashed ink-grey; unresolved is dashed oxblood. */
+ * Exact and param use the tan connector wire; guesses are dashed ink-grey; unresolved is dashed oxblood. */
 export function confidenceStroke(c: Confidence): { stroke: string; strokeWidth: number; strokeDasharray: string | undefined } {
   switch (c) {
     case "exact":
-      return { stroke: "var(--ring)", strokeWidth: 2, strokeDasharray: undefined };
+      return { stroke: "var(--connector)", strokeWidth: 2, strokeDasharray: undefined };
     case "param":
-      return { stroke: "var(--ring)", strokeWidth: 1.25, strokeDasharray: undefined };
+      return { stroke: "var(--connector)", strokeWidth: 1.25, strokeDasharray: undefined };
     case "guess":
       return { stroke: "var(--muted-foreground)", strokeWidth: 1.5, strokeDasharray: "4 3" };
     case "unresolved":
@@ -32,8 +32,8 @@ export function confidenceStroke(c: Confidence): { stroke: string; strokeWidth: 
 }
 
 const LINE: Record<Confidence, string> = {
-  exact: "border-solid border-ring",
-  param: "border-solid border-ring",
+  exact: "border-solid border-connector",
+  param: "border-solid border-connector",
   guess: "border-dashed border-muted-foreground",
   unresolved: "border-dashed border-destructive",
 };

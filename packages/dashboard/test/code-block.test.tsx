@@ -12,8 +12,8 @@ const code = ["async store({ request, response }) {", "  const data = await requ
 
 describe("CodeBlock", () => {
   it("renders one row per line, numbered from startLine, with the range highlighted", () => {
-    render(<CodeBlock code={code} startLine={41} highlight={{ from: 42, to: 43 }} file="app/controllers/customers.ts" />);
-    const pre = screen.getByRole("region", { name: "app/controllers/customers.ts, lines 41–45" });
+    render(<CodeBlock code={code} startLine={41} highlight={{ from: 42, to: 43 }} file="api/app/controllers/customers_controller.ts" />);
+    const pre = screen.getByRole("region", { name: "api/app/controllers/customers_controller.ts, lines 41–45" });
     const rows = pre.querySelectorAll("[data-line]");
     expect([...rows].map((r) => r.getAttribute("data-line"))).toEqual(["41", "42", "43", "44", "45"]);
     expect([...rows].filter((r) => r.hasAttribute("data-highlighted")).map((r) => r.getAttribute("data-line"))).toEqual(["42", "43"]);
