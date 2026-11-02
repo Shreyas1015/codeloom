@@ -1,6 +1,7 @@
 /** Pure helpers for the Map screen: which cards a folder level shows, where they sit, which edges join
  * them, and how a journey's stops land on this repo's files. No React here, so it is easy to test. */
 import type { GraphFile, GraphFolder, GraphFunction, GraphLevel, JourneyResult, Lane } from "@/api/types";
+import { numberStops, stopKey } from "@/lib/journey-stops";
 
 /** Never more cards than this at one level; the rest collapse into one "+ N more files" card. */
 export const MAX_LEVEL_NODES = 150;
@@ -167,17 +168,15 @@ export interface MapStop {
 
 /** A journey's stops in `repo`, by file. */
 export function journeyStops(journey: JourneyResult, repo: string): Map<string, MapStop[]> {
+  const numbers = numberStops(journey);
   const seen = new Set<string>();
   const out = new Map<string, MapStop[]>();
-  let n = 0;
   for (const chain of journey.chains) {
     for (const s of chain.stops) {
-      // a stop's identity, the same as on the Journey screen: lane, repo, file, line, symbol
-      const key = JSON.stringify([s.lane, s.repo, s.file, s.line, s.symbol]);
-      if (seen.has(key)) continue;
+      const key = stopKey(s);
+      if (seen.has(key) || s.repo !== repo) continue;
       seen.add(key);
-      n++;
-      if (s.repo !== repo) continue;
+      const n = numbers.get(key)!;
       const list = out.get(s.file) ?? [];
       list.push({ n, symbol: s.symbol, line: s.line, ...(s.ref ? { ref: s.ref } : {}) });
       out.set(s.file, list);

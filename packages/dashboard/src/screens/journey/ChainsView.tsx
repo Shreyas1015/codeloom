@@ -4,7 +4,8 @@ import { ConfidenceLine } from "@/components/gallery/ConfidenceLine";
 import { StopRoundel, stopLabel } from "@/components/gallery/StopRoundel";
 import { cn } from "@/lib/utils";
 import { UnresolvedList } from "./LanesView";
-import { type JourneyModel, stopFrom, stopTitle } from "./model";
+import { stopFrom } from "@/lib/journey-stops";
+import { type JourneyModel, stopTitle } from "./model";
 import { CONFIDENCE_WORD, fileLine, HOP_WORD } from "./words";
 
 export interface ChainsViewProps {
