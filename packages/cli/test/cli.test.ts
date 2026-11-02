@@ -17,6 +17,15 @@ describe("codeloom cli", () => {
     expect(check).toBeDefined();
     expect(check.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--json", "--fail-under"]));
   });
+
+  it("check --traces help names the traces setting in codeloom.workspace.json (otlp-file path or Tempo url)", () => {
+    const check = buildProgram().commands.find((c) => c.name() === "check")!;
+    const d = check.options.find((o) => o.long === "--traces")!.description;
+    expect(d).toContain("codeloom.workspace.json");
+    expect(d).toContain("traces");
+    expect(d).toContain("otlp-file");
+    expect(d).toContain("Tempo");
+  });
 });
 
 describe("codeloom cli exit codes (final review item 2)", () => {

@@ -40,7 +40,10 @@ export function buildProgram(): Command {
     .description("Report how complete the journey map is")
     .option("--json", "print the report as JSON")
     .option("--fail-under <percent>", "exit 1 when the complete percentage is below this")
-    .option("--traces", "compare the map with runtime traces from the workspace's trace source")
+    .option(
+      "--traces",
+      'compare the map with runtime traces from "traces" in codeloom.workspace.json (an otlp-file path or a Tempo url)',
+    )
     .action(async (opts: { json?: boolean; failUnder?: string; traces?: boolean }) => {
       const { output, exitCode } = await runCheck(process.cwd(), opts);
       console.log(output);
