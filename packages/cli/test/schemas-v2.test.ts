@@ -130,6 +130,13 @@ describe("workspace optional fields", () => {
     expect(TracesConfigSchema.safeParse({ kind: "jaeger", url: "x" }).success).toBe(false);
   });
 
+  it("accepts an otlp-file traces config with a services map, like tempo's", () => {
+    const file = { kind: "otlp-file", path: ".codeloom/traces.json", services: { "billing-svc": "billing" } };
+    const parsed = TracesConfigSchema.parse(file);
+    expect(parsed.kind).toBe("otlp-file");
+    expect(parsed).toMatchObject({ services: { "billing-svc": "billing" } });
+  });
+
   it("keeps workspace version 1 and traces optional", () => {
     const ws = { version: 1, name: "demo-shop", repos: [{ id: "api", path: "api" }], links: [] };
     expect(WorkspaceFileSchema.parse(ws).traces).toBeUndefined();

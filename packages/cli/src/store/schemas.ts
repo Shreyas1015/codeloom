@@ -210,7 +210,7 @@ export const TracesConfigSchema = z.discriminatedUnion("kind", [
     services: z.record(z.string(), z.string()).optional(),
     lookback: z.string().optional(),
   }),
-  z.object({ kind: z.literal("otlp-file"), path: z.string() }),
+  z.object({ kind: z.literal("otlp-file"), path: z.string(), services: z.record(z.string(), z.string()).optional() }),
 ]);
 export type TracesConfig = z.infer<typeof TracesConfigSchema>;
 
