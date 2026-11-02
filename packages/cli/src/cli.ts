@@ -1,6 +1,7 @@
 import { Command, CommanderError } from "commander";
 import { runCheck } from "./commands/check.js";
-import { CodeloomError } from "./errors.js";
+import { runDashboard } from "./commands/dashboard.js";
+import { CodeloomError, dataError } from "./errors.js";
 import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
@@ -68,7 +69,24 @@ export function buildProgram(): Command {
       await runServeCommand(process.cwd());
     });
 
+  program
+    .command("dashboard")
+    .description("Open the codeloom dashboard (Home, Journey, Map) in your browser, served from 127.0.0.1")
+    .option("--port <port>", "port to listen on (default: the first free one from 4747)")
+    .option("--no-open", "print the URL but do not open a browser")
+    .action(async (opts: { port?: string; open: boolean }) => {
+      await runDashboard(process.cwd(), { port: parsePort(opts.port), open: opts.open });
+    });
+
   return program;
+}
+
+/** --port: a whole number 0–65535 (0 = any free port), else a usage error (exit 2). */
+function parsePort(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isInteger(n) || n > 65535) throw dataError(`--port must be a whole number between 0 and 65535, got "${raw}".`);
+  return n;
 }
 
 /** The process exit code for an error thrown out of the program. Commander's own exits (help, version)

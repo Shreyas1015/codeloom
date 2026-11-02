@@ -1,18 +1,24 @@
+/** What kind of problem a CodeloomError is, for callers that branch on it (the dashboard API maps
+ * "not-indexed" and "no-workspace" to a 409 telling the user to run "codeloom index" or "codeloom init"). */
+export type CodeloomErrorCode = "not-indexed" | "no-workspace";
+
 /** An error whose message is meant for the user; the CLI prints it without a stack trace.
  * exitCode is what the CLI process exits with (default 1); a data/usage problem exits 2. */
 export class CodeloomError extends Error {
   readonly exitCode: number;
+  readonly code?: CodeloomErrorCode;
 
-  constructor(message: string, opts?: { exitCode?: number }) {
+  constructor(message: string, opts?: { exitCode?: number; code?: CodeloomErrorCode }) {
     super(message);
     this.name = "CodeloomError";
     this.exitCode = opts?.exitCode ?? 1;
+    if (opts?.code) this.code = opts.code;
   }
 }
 
 /** A data or usage problem (missing/old/invalid .codeloom files, a bad flag value): exit code 2. */
-export function dataError(message: string): CodeloomError {
-  return new CodeloomError(message, { exitCode: 2 });
+export function dataError(message: string, opts?: { code?: CodeloomErrorCode }): CodeloomError {
+  return new CodeloomError(message, { exitCode: 2, ...opts });
 }
 
 /** What the CLI prints for an error: a CodeloomError's message as is; anything else as a short

@@ -5,7 +5,7 @@ import { compare } from "../util.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
 import { type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
-import { git } from "./git.js";
+import { git, gitAsync } from "./git.js";
 
 /** A repo id from its package.json name (else its folder name), safe for link refs (`[^:#]+`):
  * drop `@`, and `/`, `:`, `#` become `-` — so `@acme/web` is `acme-web`. */
@@ -92,6 +92,7 @@ export function loadWorkspace(start: string): {
     // A usage/data problem, not a crash: exit 2 (codeloom check's contract).
     throw dataError(
       `No codeloom workspace or git repo found at ${resolve(start)}. Run "codeloom init" in a repo or a folder of repos first.`,
+      { code: "no-workspace" },
     );
   }
   // No init: derive the id the way init would (package.json name, else folder), so a renamed clone
@@ -103,6 +104,15 @@ export function loadWorkspace(start: string): {
 export function gitHead(repoAbs: string): string {
   try {
     return git(repoAbs, ["rev-parse", "HEAD"]).trim();
+  } catch {
+    return "uncommitted";
+  }
+}
+
+/** gitHead without blocking the event loop (the dashboard server). */
+export async function gitHeadAsync(repoAbs: string): Promise<string> {
+  try {
+    return (await gitAsync(repoAbs, ["rev-parse", "HEAD"])).trim();
   } catch {
     return "uncommitted";
   }
