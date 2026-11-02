@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -249,6 +250,23 @@ describe("mcp server: index_status / reindex", () => {
     expect(s5.indexedCommit).toBe(head2);
     expect(s5.stale).toBe(false);
     expect(s5.changedFiles).toEqual([]);
+  });
+
+  it("sees untracked files in a new folder, non-ASCII names, and renames, without git's quoting", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n", "src/old.ts": "export const o = 1;\n" });
+    await runIndex(repo);
+    const client = await connect({ start: repo });
+
+    writeFileSync(join(repo, "src/héllo.ts"), "export const h = 1;\n");
+    mkdirSync(join(repo, "src/feature"));
+    writeFileSync(join(repo, "src/feature/new.ts"), "export const n = 1;\n");
+    execFileSync("git", ["mv", "src/old.ts", "src/renamed.ts"], { cwd: repo });
+
+    const r = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    const s = (r.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
+    expect(s.stale).toBe(true);
+    expect(s.changedFiles).toEqual(expect.arrayContaining(["src/héllo.ts", "src/feature/new.ts", "src/renamed.ts"]));
+    expect(s.changedFiles.some((f) => f.includes("\\") || f.includes('"') || f.endsWith("/"))).toBe(false);
   });
 
   it("an un-indexed repo reports indexedCommit: null and stale: true", async () => {

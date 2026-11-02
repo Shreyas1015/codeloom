@@ -5,7 +5,7 @@ import { runIndex } from "../../commands/index-cmd.js";
 import { dataError } from "../../errors.js";
 import { readJson } from "../../store/json.js";
 import { CODELOOM_DIR, FILES } from "../../store/paths.js";
-import { FingerprintsSchema } from "../../store/schemas.js";
+import { type Fingerprints, FingerprintsSchema } from "../../store/schemas.js";
 import { compare } from "../../util.js";
 import { listFiles } from "../../workspace/files.js";
 import { git } from "../../workspace/git.js";
@@ -47,7 +47,7 @@ export function workspaceOverview(start: string): Record<string, unknown> {
 
 /** fingerprints.json is a disposable cache (git-ignored): a corrupt or unreadable one is treated the
  * same as a missing one, never a tool error. */
-function readFingerprints(repoAbs: string): { gitCommitHash: string } | null {
+function readFingerprints(repoAbs: string): Fingerprints | null {
   try {
     return readJson(join(repoAbs, CODELOOM_DIR, FILES.fingerprints), FingerprintsSchema);
   } catch {
@@ -56,25 +56,27 @@ function readFingerprints(repoAbs: string): { gitCommitHash: string } | null {
 }
 
 /** Repo-relative paths with uncommitted changes (staged, unstaged or untracked), parsed from
- * `git status --porcelain` ("XY path" or "XY old -> new" for a rename/copy). */
+ * `git status --porcelain -z -uall`: NUL-separated "XY path" entries, so non-ASCII names are not
+ * C-quoted, and every untracked file is listed (not just its new folder). A rename/copy entry is
+ * followed by an extra entry holding the old path, which is skipped. */
 function statusChangedFiles(repoAbs: string): string[] {
-  const out = git(repoAbs, ["status", "--porcelain"]);
-  return out
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const rest = line.slice(3);
-      const arrow = rest.indexOf(" -> ");
-      return arrow >= 0 ? rest.slice(arrow + 4) : rest;
-    });
+  const entries = git(repoAbs, ["status", "--porcelain", "-z", "-uall"]).split("\0");
+  const files: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (entry.length < 4) continue;
+    files.push(entry.slice(3));
+    if (entry[0] === "R" || entry[0] === "C") i++;
+  }
+  return files;
 }
 
-/** Files that differ between two commits. A `from` no longer reachable locally (e.g. a pruned
- * commit) is reported as no diff rather than a tool crash. */
+/** Files that differ between two commits (`-z`: names are never C-quoted). A `from` no longer
+ * reachable locally (e.g. a pruned commit) is reported as no diff rather than a tool crash. */
 function diffChangedFiles(repoAbs: string, from: string, to: string): string[] {
   try {
-    return git(repoAbs, ["diff", "--name-only", `${from}..${to}`])
-      .split("\n")
+    return git(repoAbs, ["diff", "--name-only", "-z", `${from}..${to}`])
+      .split("\0")
       .filter(Boolean);
   } catch {
     return [];
