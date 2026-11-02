@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeJsonAtomic } from "../src/store/json.js";
-import { type DashboardServer, startDashboardServer } from "../src/web/server.js";
+import { type DashboardServer, MAX_EVENT_STREAMS, startDashboardServer } from "../src/web/server.js";
 
 const TOKEN = "b".repeat(64);
 /** A minimal dashboard dist (the server only needs index.html). */
@@ -111,6 +111,7 @@ describe("/api/events", () => {
     expect(stream.res.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
     expect(stream.res.headers["cache-control"]).toBe("no-cache, no-transform");
     expect(stream.res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(stream.res.headers["x-accel-buffering"]).toBe("no");
     writeJsonAtomic(join(ws, ".codeloom", "journeys.json"), { version: 1, journeys: [] });
     await stream.waitFor(changeFrame(["journeys"]));
   });
@@ -156,6 +157,15 @@ describe("/api/events", () => {
     writeJsonAtomic(join(ws, ".codeloom", "journeys.json"), { n: 1 });
     await sleep(600);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it(`refuses more than ${MAX_EVENT_STREAMS} open streams with 429`, async () => {
+    const s = await serve(makeWorkspace(), { watch: false });
+    const open = [];
+    for (let i = 0; i < MAX_EVENT_STREAMS; i++) open.push(await openStream(s.port));
+    expect(open.every((o) => o.res.statusCode === 200)).toBe(true);
+    const extra = await openStream(s.port);
+    expect(extra.res.statusCode).toBe(429);
   });
 
   it("HEAD answers the headers and ends", async () => {

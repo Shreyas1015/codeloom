@@ -130,6 +130,7 @@ function sendFile(res: ServerResponse, file: string, rel: string, head: boolean)
 }
 
 const PING_MS = 25_000;
+export const MAX_EVENT_STREAMS = 32;
 
 /** The /api/events side: every open event stream, a ping timer and the map watcher. A change is written
  * to every stream; a stream whose client went away is dropped and never written to again. Opening a
@@ -151,11 +152,17 @@ function eventHub(start: string, opts: { watch: boolean; pingMs: number }) {
 
   return {
     open(req: IncomingMessage, res: ServerResponse, head: boolean): void {
+      // One dashboard needs one stream; a cap keeps a runaway tab from piling up open responses.
+      if (clients.size >= MAX_EVENT_STREAMS) {
+        sendJson(res, 429, { error: `Too many live-update streams (max ${MAX_EVENT_STREAMS}). Close other dashboard tabs.` }, head);
+        return;
+      }
       res.writeHead(200, {
         ...BASE_HEADERS,
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       });
       if (head || closed) {
         res.end();

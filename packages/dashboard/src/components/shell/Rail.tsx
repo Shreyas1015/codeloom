@@ -106,7 +106,7 @@ export function Rail({ overview, livePaused = false }: { overview: Overview | un
 
       <div className="mt-auto flex flex-col gap-2">
         {/* A polite live region that is always there, so screen readers hear the chip appear. */}
-        <div role="status" className="empty:hidden">
+        <div role="status">
           {livePaused && (
             <div className="flex items-center gap-2 px-3 text-xs text-rail-muted" title="Lost the connection to codeloom dashboard. Reconnecting…">
               <i aria-hidden="true" className="size-1.5 shrink-0 rounded-full border border-rail-muted" />

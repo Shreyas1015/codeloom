@@ -10,12 +10,13 @@ const ofRepo = (name: string, repo: string) => (key: QueryKey) => key[0] === nam
 
 /** Which cached queries a set of change keys makes stale (the Plan 3 registry):
  * - workspace → all
- * - chains, journeys → overview, journeys, journey/*, graph/* (files list their journeys), search/*
+ * - chains, journeys → overview, journeys, journey/*, graph/* (files list their journeys), node/* (a node lists
+ *   its chains and journeys), search/*
  * - repo:<id> → overview, graph/<id>/*, node/*, neighbors/*, layers/<id> (and the all-repos layers), code/<id>/*, search/* */
 export function invalidationFilters(keys: readonly ChangeKey[]): Invalidation {
   if (keys.includes("workspace")) return "all";
   const preds: Array<(key: QueryKey) => boolean> = [];
-  if (keys.includes("chains") || keys.includes("journeys")) preds.push(named("overview"), named("journeys"), named("journey"), named("graph"), named("search"));
+  if (keys.includes("chains") || keys.includes("journeys")) preds.push(named("overview"), named("journeys"), named("journey"), named("graph"), named("node"), named("search"));
   for (const k of keys) {
     if (!k.startsWith("repo:")) continue;
     const repo = k.slice("repo:".length);
