@@ -94,20 +94,20 @@ describe("useMapEvents", () => {
     expect(es().closed).toBe(true);
   });
 
-  it("journeys → overview, journeys and every journey/*", () => {
+  it("journeys → overview, journeys, every journey/*, every graph/* and every search/*", () => {
     const { es, invalidated } = setup();
     act(() => es().open());
     act(() => es().change(["journeys"]));
-    expect(invalidated()).toEqual(str([["overview"], ["journeys"], ["journey", "j_a"], ["journey", "ch_b"]]));
+    expect(invalidated()).toEqual(str([["overview"], ["journeys"], ["journey", "j_a"], ["journey", "ch_b"], ["graph", "api", ""], ["graph", "api", "app"], ["graph", "web", ""], ["search", "cart", [], null]]));
   });
 
-  it("chains → overview, journeys and every journey/*", () => {
+  it("chains → overview, journeys, every journey/*, every graph/* and every search/*", () => {
     const { es, invalidated } = setup();
     act(() => es().change(["chains"]));
-    expect(invalidated()).toEqual(str([["overview"], ["journeys"], ["journey", "j_a"], ["journey", "ch_b"]]));
+    expect(invalidated()).toEqual(str([["overview"], ["journeys"], ["journey", "j_a"], ["journey", "ch_b"], ["graph", "api", ""], ["graph", "api", "app"], ["graph", "web", ""], ["search", "cart", [], null]]));
   });
 
-  it("repo:<id> → overview, that repo's graph/layers/code, every node/neighbors, and the all-repos layers", () => {
+  it("repo:<id> → overview, that repo's graph/layers/code, every node/neighbors, the all-repos layers and every search/*", () => {
     const { es, invalidated } = setup();
     act(() => es().change(["repo:api"]));
     expect(invalidated()).toEqual(
@@ -121,6 +121,7 @@ describe("useMapEvents", () => {
         ["layers", "api"],
         ["layers", null],
         ["code", "api", "a.ts", 1, 10],
+        ["search", "cart", [], null],
       ]),
     );
   });
@@ -140,6 +141,8 @@ describe("useMapEvents", () => {
         ["journeys"],
         ["journey", "j_a"],
         ["journey", "ch_b"],
+        ["graph", "api", ""],
+        ["graph", "api", "app"],
         ["graph", "web", ""],
         ["node", "api::file:a.ts"],
         ["node", "web::file:b.ts"],
@@ -147,6 +150,7 @@ describe("useMapEvents", () => {
         ["layers", "web"],
         ["layers", null],
         ["code", "web", "b.ts", null, null],
+        ["search", "cart", [], null],
       ]),
     );
   });
