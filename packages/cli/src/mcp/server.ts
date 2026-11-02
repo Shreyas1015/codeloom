@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { IndexRunResult } from "../commands/index-cmd.js";
 import { VERSION } from "../version.js";
 import { registerGraphTools } from "./tools/graph.js";
+import { registerJourneyTools } from "./tools/journeys.js";
 import { registerWorkspaceTools } from "./tools/workspace.js";
 
 export interface ServerOptions {
@@ -22,6 +23,7 @@ export function createServer(opts: ServerOptions): McpServer {
   const server = new McpServer({ name: "codeloom", version: VERSION });
   registerWorkspaceTools(server, opts);
   registerGraphTools(server, opts);
+  registerJourneyTools(server, opts);
   return server;
 }
 
