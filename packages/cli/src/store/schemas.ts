@@ -264,6 +264,10 @@ export const ChainStopSchema = z.object({
   op: z.string().optional(),
   label: z.string().optional(),
   hop: HopSchema,
+  /** Index (in the same chain's `stops`) of the stop this one was reached from; set on every stop but the
+   * first, always below the stop's own index. `hop` describes the edge from `stops[from]` to this stop.
+   * Optional so chains.json files written before it existed still parse. */
+  from: z.number().int().nonnegative().optional(),
 });
 export type ChainStop = z.infer<typeof ChainStopSchema>;
 
