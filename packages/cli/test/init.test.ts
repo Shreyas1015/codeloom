@@ -13,7 +13,7 @@ import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatInit, HOOK_MARK, installHook, runInit, shellQuote } from "../src/commands/init.js";
+import { ensureMcpEntry, formatInit, HOOK_MARK, installHook, MCP_ENTRY, runInit, shellQuote } from "../src/commands/init.js";
 import { CodeloomError } from "../src/errors.js";
 import { makeRepo } from "./helpers.js";
 
@@ -266,6 +266,171 @@ describe("hook placement", () => {
     expect(existsSync(join(outside, "post-commit"))).toBe(false);
     const text = formatInit(res);
     expect(text).toContain("codeloom index --quiet");
+  });
+});
+
+describe("ensureMcpEntry", () => {
+  it("creates .mcp.json with just the codeloom entry when none exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    const res = ensureMcpEntry(root);
+    expect(res).toBe("added");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({ mcpServers: { codeloom: MCP_ENTRY } });
+  });
+
+  it("writes 2-space JSON with a trailing newline", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    ensureMcpEntry(root);
+    const text = readFileSync(join(root, ".mcp.json"), "utf8");
+    expect(text.endsWith("\n")).toBe(true);
+    expect(text).toContain('  "mcpServers"');
+  });
+
+  it("keeps another server and extra top-level keys when adding codeloom", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    const existing = { mcpServers: { other: { command: "other-server" } }, extra: "keepme" };
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify(existing));
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("added");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({
+      mcpServers: { other: { command: "other-server" }, codeloom: MCP_ENTRY },
+      extra: "keepme",
+    });
+  });
+
+  it("reports present and leaves the file byte-identical when the entry already matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    ensureMcpEntry(root);
+    const before = readFileSync(join(root, ".mcp.json"), "utf8");
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("present");
+    expect(readFileSync(join(root, ".mcp.json"), "utf8")).toBe(before);
+  });
+
+  it("keeps a custom codeloom entry untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    const custom = { mcpServers: { codeloom: { command: "node", args: ["./my-server.js"], env: { FOO: "bar" } } } };
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify(custom, null, 2) + "\n");
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("kept-custom");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual(custom);
+  });
+
+  it("leaves unparseable JSON untouched and reports invalid", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    writeFileSync(join(root, ".mcp.json"), "{ not json");
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("invalid");
+    expect(readFileSync(join(root, ".mcp.json"), "utf8")).toBe("{ not json");
+  });
+
+  it("treats a non-object top-level value as invalid and leaves it untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    writeFileSync(join(root, ".mcp.json"), "[1, 2, 3]");
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("invalid");
+    expect(readFileSync(join(root, ".mcp.json"), "utf8")).toBe("[1, 2, 3]");
+  });
+
+  it("treats a non-object mcpServers as invalid and leaves it untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: "nope" }));
+
+    const res = ensureMcpEntry(root);
+
+    expect(res).toBe("invalid");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({ mcpServers: "nope" });
+  });
+
+  it("is idempotent across repeated calls", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-"));
+    expect(ensureMcpEntry(root)).toBe("added");
+    expect(ensureMcpEntry(root)).toBe("present");
+    expect(ensureMcpEntry(root)).toBe("present");
+  });
+});
+
+describe("runInit writes .mcp.json", () => {
+  it("adds the codeloom entry at the workspace root for a folder of repos", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "b.ts": "" }, join(root, "api"));
+
+    const res = runInit(root);
+
+    expect(res.mcp).toBe("added");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({ mcpServers: { codeloom: MCP_ENTRY } });
+  });
+
+  it("adds the codeloom entry at the repo root for a standalone single repo", () => {
+    const repo = makeRepo({ "a.ts": "" });
+
+    const res = runInit(repo);
+
+    expect(res.mcp).toBe("added");
+    expect(existsSync(join(repo, ".mcp.json"))).toBe(true);
+  });
+
+  it("writes .mcp.json at the enclosing workspace root, not the repo, for a repo inside a workspace", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "b.ts": "" }, join(root, "api"));
+    runInit(root);
+
+    const res = runInit(join(root, "web"));
+
+    expect(res.mcp).toBe("present");
+    expect(existsSync(join(root, "web", ".mcp.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({ mcpServers: { codeloom: MCP_ENTRY } });
+  });
+
+  it("is idempotent when init runs twice", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    expect(runInit(repo).mcp).toBe("added");
+    expect(runInit(repo).mcp).toBe("present");
+  });
+
+  it("formatInit reports each mcp outcome", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    const added = runInit(root);
+    expect(formatInit(added)).toContain("Added codeloom to .mcp.json");
+
+    const present = runInit(root);
+    expect(formatInit(present)).toContain("codeloom already in .mcp.json");
+  });
+
+  it("formatInit reports a kept-custom codeloom entry", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { codeloom: { command: "custom" } } }));
+
+    const res = runInit(root);
+
+    expect(res.mcp).toBe("kept-custom");
+    expect(formatInit(res)).toContain("kept your own codeloom entry in .mcp.json");
+  });
+
+  it("formatInit reports invalid JSON with the entry to add by hand", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-init-mcp-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    writeFileSync(join(root, ".mcp.json"), "{ not json");
+
+    const res = runInit(root);
+
+    expect(res.mcp).toBe("invalid");
+    const text = formatInit(res);
+    expect(text).toContain(".mcp.json is not valid JSON");
+    expect(text).toContain("add this entry by hand");
   });
 });
 

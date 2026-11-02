@@ -2,13 +2,64 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync,
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { writeJsonAtomic } from "../store/json.js";
-import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
+import { CODELOOM_DIR, FILES, MCP_FILE, WORKSPACE_FILE } from "../store/paths.js";
 import { defaultRepoConfig, type RepoRef, type WorkspaceFile } from "../store/schemas.js";
 import { git } from "../workspace/git.js";
 import { discoverRepos, findWorkspaceRoot } from "../workspace/repos.js";
 
 export const HOOK_MARK = "# codeloom: re-index after commit";
 const CACHE_IGNORE = `${CODELOOM_DIR}/${FILES.fingerprints}`;
+
+/** The .mcp.json entry codeloom installs for itself. */
+export const MCP_ENTRY = { command: "npx", args: ["-y", "codeloom", "serve"] } as const;
+
+export type McpFileResult = "added" | "present" | "kept-custom" | "invalid";
+
+/** Structural equality for parsed JSON values (key order doesn't matter). */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    return a.length === b.length && a.every((v, i) => jsonEqual(v, b[i]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ak = Object.keys(a as Record<string, unknown>);
+    const bk = Object.keys(b as Record<string, unknown>);
+    if (ak.length !== bk.length) return false;
+    return ak.every(
+      (k) => Object.hasOwn(b as object, k) && jsonEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+    );
+  }
+  return false;
+}
+
+/** Merge mcpServers.codeloom into <root>/.mcp.json, keeping every other key/entry.
+ * No file → created with just the codeloom entry. Existing identical entry → left untouched,
+ * "present". An existing different codeloom entry → left alone, "kept-custom". A top-level value
+ * that isn't an object, or an `mcpServers` that exists but isn't an object → untouched, "invalid". */
+export function ensureMcpEntry(root: string): McpFileResult {
+  const path = join(root, MCP_FILE);
+  if (!existsSync(path)) {
+    writeJsonAtomic(path, { mcpServers: { codeloom: MCP_ENTRY } });
+    return "added";
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return "invalid";
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "invalid";
+  const obj = parsed as Record<string, unknown>;
+  const servers = obj.mcpServers;
+  if (servers !== undefined && (servers === null || typeof servers !== "object" || Array.isArray(servers))) return "invalid";
+  const serversObj = (servers as Record<string, unknown> | undefined) ?? {};
+  if ("codeloom" in serversObj) {
+    return jsonEqual(serversObj.codeloom, MCP_ENTRY) ? "present" : "kept-custom";
+  }
+  writeJsonAtomic(path, { ...obj, mcpServers: { ...serversObj, codeloom: MCP_ENTRY } });
+  return "added";
+}
 
 /** Quote a string as a single POSIX shell word, safe against shell expansion. */
 export function shellQuote(s: string): string {
@@ -24,6 +75,8 @@ export interface InitResult {
   present: string[];
   /** Repos whose git hook codeloom could not (or would not) install, and why. */
   skipped: Array<{ repo: string; reason: string }>;
+  /** Result of merging codeloom's entry into the workspace root's .mcp.json. */
+  mcp: McpFileResult;
 }
 
 export type HookResult =
@@ -136,7 +189,8 @@ export function runInit(dir: string): InitResult {
   const single = repos.length === 1 && repos[0]!.path === ".";
   // A single repo gets a workspace file too, so its id (package.json name, else folder) is saved and
   // stays stable if the folder is renamed — unless it already sits inside a workspace.
-  const insideWorkspace = single && findWorkspaceRoot(root) !== null;
+  const enclosingWorkspaceRoot = single ? findWorkspaceRoot(root) : null;
+  const insideWorkspace = single && enclosingWorkspaceRoot !== null;
   if (!insideWorkspace && !existsSync(join(root, WORKSPACE_FILE))) {
     const ws: WorkspaceFile = { version: 1, name: single ? repos[0]!.id : basename(root), repos, links: [] };
     writeJsonAtomic(join(root, WORKSPACE_FILE), ws);
@@ -158,7 +212,24 @@ export function runInit(dir: string): InitResult {
     if (hook.status === "skipped") skipped.push({ repo: repo.id, reason: hook.reason });
     if (ensureGitignore(repoAbs)) created.push(posix.join(repo.path, ".gitignore"));
   }
-  return { root, repos, created, present, skipped };
+  // .mcp.json belongs at the workspace root: when a single repo sits inside an existing workspace,
+  // that's the enclosing root, not the repo itself.
+  const mcpRoot = insideWorkspace ? enclosingWorkspaceRoot! : root;
+  const mcp = ensureMcpEntry(mcpRoot);
+  return { root, repos, created, present, skipped, mcp };
+}
+
+function mcpLine(mcp: McpFileResult): string {
+  switch (mcp) {
+    case "added":
+      return "Added codeloom to .mcp.json";
+    case "present":
+      return "codeloom already in .mcp.json";
+    case "kept-custom":
+      return "kept your own codeloom entry in .mcp.json";
+    case "invalid":
+      return `.mcp.json is not valid JSON — add this entry by hand: ${JSON.stringify({ mcpServers: { codeloom: MCP_ENTRY } })}`;
+  }
 }
 
 export function formatInit(r: InitResult): string {
@@ -176,6 +247,8 @@ export function formatInit(r: InitResult): string {
           `    ${hookLine(r.root)}`,
         ]
       : []),
+    "",
+    mcpLine(r.mcp),
     "",
     'Next: run "codeloom index" to build the map.',
   ];

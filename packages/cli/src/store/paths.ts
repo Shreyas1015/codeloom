@@ -1,5 +1,6 @@
 export const CODELOOM_DIR = ".codeloom";
 export const WORKSPACE_FILE = "codeloom.workspace.json";
+export const MCP_FILE = ".mcp.json";
 export const FILES = {
   config: "config.json",
   graph: "graph.json",
