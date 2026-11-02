@@ -357,6 +357,34 @@ export const CheckItemSchema = z.object({
 });
 export type CheckItem = z.infer<typeof CheckItemSchema>;
 
+/** `codeloom check --traces`: the map compared with runtime traces (check/traces/compare.ts). Every list
+ * is sorted with `compare`. */
+export const TracesReportSchema = z.object({
+  source: z.enum(["tempo", "otlp-file"]),
+  spans: z.number().int(),
+  serverSpans: z.number().int(),
+  /** stores: "table:<name> <op>" / "queue:<name> publish" seen under that route and present in the map. */
+  confirmed: z.array(z.object({ routeKey: z.string(), hits: z.number().int(), stores: z.array(z.string()) })),
+  missingInMap: z.array(z.object({
+    repo: z.string(),
+    kind: z.enum(["route", "store"]),
+    method: z.string().optional(),
+    route: z.string().optional(),
+    store: z.string().optional(),
+    hits: z.number().int(),
+    detail: z.string(),
+  })),
+  /** routeKeys of api routes in chains with no server span. */
+  neverHit: z.array(z.string()),
+  /** Service names mapped to no repo. */
+  unmatchedServices: z.array(z.string()),
+});
+export type TracesReport = z.infer<typeof TracesReportSchema>;
+
+/** The trace comparison did not run; one-line reason. */
+export const TracesSkippedSchema = z.object({ skipped: z.string() });
+export type TracesSkipped = z.infer<typeof TracesSkippedSchema>;
+
 export const CheckReportSchema = z.object({
   version: z.literal(1),
   summary: z.object({
@@ -371,7 +399,7 @@ export const CheckReportSchema = z.object({
     byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),
   }),
   items: z.array(CheckItemSchema),
-  traces: z.unknown().optional(),
+  traces: z.union([TracesReportSchema, TracesSkippedSchema]).optional(),
 });
 export type CheckReport = z.infer<typeof CheckReportSchema>;
 
