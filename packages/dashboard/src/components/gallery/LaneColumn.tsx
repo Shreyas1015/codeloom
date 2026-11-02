@@ -1,0 +1,113 @@
+import { useId } from "react";
+import { cn } from "@/lib/utils";
+import { type Confidence, ConfidenceLine } from "./ConfidenceLine";
+import { StopRoundel, stopLabel } from "./StopRoundel";
+
+export type Lane = "ui" | "api" | "code" | "db" | "queue";
+
+export interface LaneStop {
+  /** Stop number in chain order (1-based), shared across lanes. */
+  index: number;
+  label: string;
+  /** `file:line`, a table op, … — shown in mono. */
+  detail?: string;
+  note?: string;
+  /** Confidence of the hop that arrives at this stop from the stop above it in this lane. Default exact. */
+  confidence?: Confidence;
+  /** Why that hop is a guess or unresolved. */
+  reason?: string;
+  unresolved?: boolean;
+}
+
+export const LANE_NAME: Record<Lane, string> = { ui: "UI", api: "API", code: "Code", db: "DB", queue: "Queue" };
+
+// header ink in the lane hue (each ≥ 4.5:1 on its soft ground); the queue lane reads in the DB umber family
+const LANE_STYLE: Record<Lane, { ground: string; ink: string }> = {
+  ui: { ground: "bg-lane-ui-soft", ink: "text-lane-ui" },
+  api: { ground: "bg-lane-api-soft", ink: "text-lane-api" },
+  code: { ground: "bg-secondary", ink: "text-foreground" },
+  db: { ground: "bg-lane-db-soft", ink: "text-lane-db" },
+  queue: { ground: "bg-lane-queue-soft", ink: "text-lane-db" },
+};
+
+export interface LaneColumnProps {
+  lane: Lane;
+  /** Repo or store shown beside the lane name, e.g. "core-service" or "Postgres". */
+  subtitle?: string;
+  stops: LaneStop[];
+  selectedIndex?: number;
+  /** When given, each stop is a button. */
+  onSelect?: (index: number) => void;
+  className?: string;
+}
+
+/** One lane of a journey: a hued header, then the lane's stops stacked in order with connectors between them. */
+export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, className }: LaneColumnProps) {
+  const id = useId();
+  const name = LANE_NAME[lane];
+  const style = LANE_STYLE[lane];
+  return (
+    <section
+      aria-labelledby={`${id}-h`}
+      data-slot="lane-column"
+      data-lane={lane}
+      className={cn("flex min-w-0 flex-col gap-3.5 rounded-[10px] p-3", style.ground, className)}
+    >
+      <h3 className={cn("flex items-baseline justify-between gap-2 text-[12.5px] font-bold", style.ink)}>
+        <span id={`${id}-h`}>{name}</span>
+        {subtitle ? <span className="truncate font-mono text-xs font-normal">{subtitle}</span> : null}
+      </h3>
+      {stops.length === 0 ? (
+        <p className="text-[12.5px] text-muted-foreground">No stops in this lane</p>
+      ) : (
+        <ol aria-label={`${name} stops`} className="flex flex-col">
+          {stops.map((s, i) => {
+            const selected = s.index === selectedIndex;
+            const detailId = `${id}-d${s.index}`;
+            const body = (
+              <>
+                <StopRoundel n={s.index} label={s.label} state={s.unresolved ? "unresolved" : selected ? "selected" : "default"} decorative={!!onSelect} />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-[13.5px] font-semibold text-foreground">{s.label}</span>
+                  {s.detail ? (
+                    <span id={detailId} className="truncate font-mono text-xs text-muted-foreground">
+                      {s.detail}
+                    </span>
+                  ) : null}
+                  {s.note ? <span className="mt-0.5 text-xs text-muted-foreground">{s.note}</span> : null}
+                </span>
+              </>
+            );
+            const card = cn(
+              "relative flex w-full items-start gap-2.5 rounded-[9px] border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(20_40_35_/_0.06)]",
+              selected ? "border-accent-foreground shadow-[0_0_0_3px_rgb(227_167_47_/_0.4)]" : "border-border",
+              s.unresolved && !selected && "border-dashed border-destructive",
+            );
+            return (
+              <li key={s.index} className="flex flex-col">
+                {i > 0 ? <ConfidenceLine confidence={s.confidence ?? "exact"} reason={s.reason} className="ml-[17px]" /> : null}
+                {onSelect ? (
+                  <button
+                    type="button"
+                    aria-label={stopLabel(s.index, s.label, s.unresolved)}
+                    aria-describedby={s.detail ? detailId : undefined}
+                    aria-current={selected ? "step" : undefined}
+                    onClick={() => onSelect(s.index)}
+                    className={cn(
+                      card,
+                      "cursor-pointer transition-colors outline-offset-2 hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none",
+                    )}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className={card}>{body}</div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}

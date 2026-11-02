@@ -1,0 +1,92 @@
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+
+/** How sure codeloom is about one hop. `unresolved` = it could not follow the hop at all. */
+export type Confidence = "exact" | "param" | "guess" | "unresolved";
+
+const NAME: Record<Confidence, string> = {
+  exact: "Exact link",
+  param: "Matched with a path parameter",
+  guess: "Guessed link",
+  unresolved: "Unresolved hop",
+};
+
+const DEFAULT_REASON: Record<"guess" | "unresolved", string> = {
+  guess: "Matched loosely, not proven. Check the code before you trust it.",
+  unresolved: "codeloom could not find where this hop goes.",
+};
+
+/** Stroke for SVG connectors (Journey lanes, Map overlay), so every connector reads the same.
+ * Exact and param use deep ochre (the journey path); guesses are dashed ink-grey; unresolved is dashed oxblood. */
+export function confidenceStroke(c: Confidence): { stroke: string; strokeWidth: number; strokeDasharray: string | undefined } {
+  switch (c) {
+    case "exact":
+      return { stroke: "var(--ring)", strokeWidth: 2, strokeDasharray: undefined };
+    case "param":
+      return { stroke: "var(--ring)", strokeWidth: 1.25, strokeDasharray: undefined };
+    case "guess":
+      return { stroke: "var(--muted-foreground)", strokeWidth: 1.5, strokeDasharray: "4 3" };
+    case "unresolved":
+      return { stroke: "var(--destructive)", strokeWidth: 1.5, strokeDasharray: "4 3" };
+  }
+}
+
+const LINE: Record<Confidence, string> = {
+  exact: "border-solid border-ring",
+  param: "border-solid border-ring",
+  guess: "border-dashed border-muted-foreground",
+  unresolved: "border-dashed border-destructive",
+};
+
+export interface ConfidenceLineProps {
+  confidence: Confidence;
+  /** Why a hop is a guess or unresolved; shown in the tooltip. Ignored for exact/param. */
+  reason?: string;
+  orientation?: "vertical" | "horizontal";
+  className?: string;
+}
+
+/** A connector between two stops: solid when exact, thinner when matched by a parameter,
+ * dashed (with the reason on hover/focus) when it is a guess or could not be followed. Never shown as fact. */
+export function ConfidenceLine({ confidence, reason, orientation = "vertical", className }: ConfidenceLineProps) {
+  const doubtful = confidence === "guess" || confidence === "unresolved";
+  const why = doubtful ? reason?.trim() || DEFAULT_REASON[confidence] : undefined;
+  const vertical = orientation === "vertical";
+  const width = confidence === "exact" ? 2 : confidence === "param" ? 1 : 1.5;
+
+  const line = (
+    <span
+      role="img"
+      aria-label={why ? `${NAME[confidence]}: ${why}` : NAME[confidence]}
+      data-slot="confidence-line"
+      data-confidence={confidence}
+      data-stroke={doubtful ? "dashed" : confidence === "param" ? "thin" : "solid"}
+      data-orientation={orientation}
+      tabIndex={doubtful ? 0 : undefined}
+      className={cn(
+        "relative flex flex-none items-stretch justify-center",
+        vertical ? "min-h-3.5 w-4 flex-col" : "h-4 min-w-3.5 flex-row items-center",
+        doubtful && "cursor-help rounded-sm outline-offset-1 focus-visible:outline-2 focus-visible:outline-ring",
+        className,
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(vertical ? "h-full self-center" : "w-full", LINE[confidence])}
+        style={vertical ? { borderLeftWidth: width, minHeight: "inherit" } : { borderTopWidth: width }}
+      />
+    </span>
+  );
+
+  if (!why) return line;
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>{line}</TooltipTrigger>
+        <TooltipContent side={vertical ? "right" : "top"} className="max-w-64">
+          <span className="font-semibold">{NAME[confidence]}.</span> {why}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
