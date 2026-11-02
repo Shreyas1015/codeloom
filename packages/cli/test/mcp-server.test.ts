@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -11,7 +11,8 @@ import { CodeloomError } from "../src/errors.js";
 import { fail, ok, withErrors } from "../src/mcp/result.js";
 import { createServer, type ServerOptions } from "../src/mcp/server.js";
 import { chainsTouchingNode, findNode, formatNodeRef, journeysForChains, loadMapState, parseNodeRef } from "../src/mcp/state.js";
-import { materializeFixture, makeRepo } from "./helpers.js";
+import { gitHead } from "../src/workspace/repos.js";
+import { commitAll, materializeFixture, makeRepo } from "./helpers.js";
 
 async function connect(opts: ServerOptions): Promise<Client> {
   const server = createServer(opts);
@@ -183,5 +184,110 @@ describe("mcp server", () => {
     await c2.callTool({ name: "workspace_overview", arguments: {} });
     expect(spy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("lists index_status, reindex and get_layers", async () => {
+    const client = await connect({ start: demo });
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["index_status", "reindex", "get_layers"]),
+    );
+  });
+});
+
+interface IndexStatusRepo {
+  id: string;
+  head: string;
+  indexedCommit: string | null;
+  stale: boolean;
+  changedFiles: string[];
+  truncated: boolean;
+}
+
+describe("mcp server: index_status / reindex", () => {
+  it("is not stale right after indexing, goes stale on a commit (naming the file) and on an " +
+    "untracked file, and clears again after reindex", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
+    await runIndex(repo);
+    const client = await connect({ start: repo });
+
+    const head0 = gitHead(repo);
+    const r1 = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    expect(r1.isError).toBeFalsy();
+    const s1 = r1.structuredContent as { repos: IndexStatusRepo[] };
+    expect(s1.repos).toHaveLength(1);
+    const repoId = s1.repos[0]!.id;
+    expect(s1.repos[0]).toEqual({ id: repoId, head: head0, indexedCommit: head0, stale: false, changedFiles: [], truncated: false });
+
+    writeFileSync(join(repo, "src/a.ts"), "export const a = 2;\n");
+    commitAll(repo);
+    const head1 = gitHead(repo);
+    const r2 = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    const s2 = (r2.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
+    expect(s2.head).toBe(head1);
+    expect(s2.indexedCommit).toBe(head0);
+    expect(s2.stale).toBe(true);
+    expect(s2.changedFiles).toContain("src/a.ts");
+
+    writeFileSync(join(repo, "src/b.ts"), "export const b = 1;\n");
+    const r3 = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    const s3 = (r3.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
+    expect(s3.stale).toBe(true);
+    expect(s3.changedFiles).toContain("src/b.ts");
+
+    commitAll(repo);
+    const head2 = gitHead(repo);
+    const r4 = (await client.callTool({ name: "reindex", arguments: {} })) as CallToolResult;
+    expect(r4.isError).toBeFalsy();
+    const reindexResult = r4.structuredContent as { root: string; repos: Array<{ id: string }>; linker: Record<string, unknown> };
+    expect(reindexResult.repos.map((x) => x.id)).toEqual([repoId]);
+    expect(realpathSync(reindexResult.root)).toBe(realpathSync(repo));
+
+    const r5 = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    const s5 = (r5.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
+    expect(s5.head).toBe(head2);
+    expect(s5.indexedCommit).toBe(head2);
+    expect(s5.stale).toBe(false);
+    expect(s5.changedFiles).toEqual([]);
+  });
+
+  it("an un-indexed repo reports indexedCommit: null and stale: true", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
+    const client = await connect({ start: repo });
+    const r = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
+    expect(r.isError).toBeFalsy();
+    const s = (r.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
+    expect(s.indexedCommit).toBeNull();
+    expect(s.stale).toBe(true);
+  });
+});
+
+describe("mcp server: get_layers", () => {
+  it("lists layers per repo, filters by repo, and errors on an unknown repo", async () => {
+    const client = await connect({ start: demo });
+    const all = (await client.callTool({ name: "get_layers", arguments: {} })) as CallToolResult;
+    expect(all.isError).toBeFalsy();
+    const o = all.structuredContent as {
+      repos: Array<{ id: string; layers: Array<{ id: string; name: string; description: string; nodeCount: number }> }>;
+    };
+    expect(o.repos.map((r) => r.id)).toEqual(["api", "billing", "web"]);
+    for (const r of o.repos) {
+      expect(r.layers.length).toBeGreaterThan(0);
+      for (const l of r.layers) {
+        expect(l.nodeCount).toBeGreaterThan(0);
+        expect(typeof l.name).toBe("string");
+        expect(typeof l.description).toBe("string");
+      }
+    }
+
+    const apiOnly = (await client.callTool({ name: "get_layers", arguments: { repo: "api" } })) as CallToolResult;
+    const apiOut = apiOnly.structuredContent as typeof o;
+    expect(apiOut.repos).toHaveLength(1);
+    expect(apiOut.repos[0]!.id).toBe("api");
+    expect(apiOut.repos[0]!.layers).toEqual(o.repos.find((r) => r.id === "api")!.layers);
+
+    const bad = (await client.callTool({ name: "get_layers", arguments: { repo: "nope" } })) as CallToolResult;
+    expect(bad.isError).toBe(true);
+    expect(text(bad)).toContain("nope");
   });
 });
