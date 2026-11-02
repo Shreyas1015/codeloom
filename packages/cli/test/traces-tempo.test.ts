@@ -1,8 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runTraces } from "../src/check/traces/run.js";
-import type { BuildReportOptions } from "../src/commands/check.js";
+import { type BuildReportOptions, runCheck } from "../src/commands/check.js";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { readJson } from "../src/store/json.js";
 import { loadWorkspaceData, type WorkspaceData } from "../src/store/read.js";
@@ -91,5 +91,53 @@ describe("runTraces (tempo)", () => {
     const out = await runTraces(tempo, chains, { traces: true, fetchImpl, now: () => new Date() });
     expect(out).toMatchObject({ skipped: expect.stringContaining("tempo unreachable") });
     expect((out as { skipped: string }).skipped.toLowerCase()).toContain("timed out");
+  });
+});
+
+/** `codeloom check --traces` end to end with a Tempo source: whatever Tempo sends (or a header env var
+ * that cannot be decoded), check prints a skipped line and exits 0. Global fetch is stubbed. */
+describe("check --traces (tempo): never changes the exit code", () => {
+  const writeTempoWorkspace = (headersEnv?: string) =>
+    writeFileSync(
+      join(root, "codeloom.workspace.json"),
+      JSON.stringify({
+        version: 1, name: "demo-shop", repos: REPOS, links: [],
+        traces: { kind: "tempo", url: "http://tempo.invalid:3200", ...(headersEnv ? { headersEnv } : {}) },
+      }),
+    );
+  const resetWorkspace = () =>
+    writeFileSync(join(root, "codeloom.workspace.json"), JSON.stringify({ version: 1, name: "demo-shop", repos: REPOS, links: [] }));
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    resetWorkspace();
+  });
+
+  it("an unexpected trace response ({ trace: {} }) → skipped line, exit 0", async () => {
+    writeTempoWorkspace();
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/search")) return new Response(JSON.stringify({ traces: [{ traceID: "t1" }] }), { status: 200 });
+      return new Response(JSON.stringify({ trace: {} }), { status: 200 });
+    }) as typeof fetch);
+    const { output, exitCode, report } = await runCheck(root, { traces: true });
+    expect(exitCode).toBe(0);
+    expect(report.traces).toMatchObject({ skipped: expect.stringContaining("unexpected trace response from /api/traces/t1") });
+    expect(output).toContain("Traces: skipped");
+  });
+
+  it("a header value that cannot be URL-decoded → skipped line naming the env var, never the value", async () => {
+    writeTempoWorkspace("CODELOOM_TEST_TEMPO_HEADERS");
+    vi.stubEnv("CODELOOM_TEST_TEMPO_HEADERS", "authorization=Bearer%ZZsecret");
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ traces: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+    const { output, exitCode } = await runCheck(root, { traces: true });
+    expect(exitCode).toBe(0);
+    expect(output).toContain("Traces: skipped");
+    expect(output).toContain("could not decode the header in CODELOOM_TEST_TEMPO_HEADERS");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("%ZZ");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -214,4 +214,32 @@ describe("fetchTempoSpans", () => {
     expect(err).toBeInstanceOf(TraceSourceError);
     expect((err as Error).message.toLowerCase()).toContain("timed out");
   });
+
+  it("gives up on the whole fetch after the overall deadline (totalTimeoutMs), even when each request is quick enough", async () => {
+    let calls = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      calls++;
+      const url = String(input);
+      if (url.includes("/api/search")) {
+        return jsonResponse(searchBody(Array.from({ length: 40 }, (_, i) => `t${i}`)));
+      }
+      // Each trace takes 20ms: under the 1s per-request timeout, but 40 of them (4 at a time) exceed 50ms.
+      await new Promise((r) => setTimeout(r, 20));
+      return jsonResponse({ resourceSpans: [] });
+    }) as typeof fetch;
+    const cfg: TempoCfg = { kind: "tempo", url: "http://tempo.local:3200" };
+    const t0 = Date.now();
+    const err = await fetchTempoSpans(cfg, { fetchImpl, now, env: {}, timeoutMs: 1000, totalTimeoutMs: 50 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TraceSourceError);
+    expect((err as Error).message).toContain("50ms");
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(calls).toBeLessThan(41);
+  });
+
+  it("the overall deadline also cuts off a request that never settles", async () => {
+    const fetchImpl = (async () => new Promise<Response>(() => {})) as typeof fetch;
+    const cfg: TempoCfg = { kind: "tempo", url: "http://tempo.local:3200" };
+    const err = await fetchTempoSpans(cfg, { fetchImpl, now, env: {}, timeoutMs: 10_000, totalTimeoutMs: 30 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TraceSourceError);
+  });
 });
