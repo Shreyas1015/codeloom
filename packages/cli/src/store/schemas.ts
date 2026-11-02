@@ -324,6 +324,11 @@ export type Journey = z.infer<typeof JourneySchema>;
 export const JourneysFileSchema = z.object({ version: z.literal(1), journeys: z.array(JourneySchema) });
 export type JourneysFile = z.infer<typeof JourneysFileSchema>;
 
+/** <repo>/.codeloom/summaries.json: agent-written node summaries, keyed by graph node id (sorted with
+ * compare). Committed; written only by the save_summary MCP tool. */
+export const SummariesFileSchema = z.object({ version: z.literal(1), summaries: z.record(z.string(), z.string()) });
+export type SummariesFile = z.infer<typeof SummariesFileSchema>;
+
 // ---------------------------------------------------------------------------------------------------
 // `codeloom check` report (printed with --json; never written to disk).
 // ---------------------------------------------------------------------------------------------------

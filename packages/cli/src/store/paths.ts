@@ -7,4 +7,5 @@ export const FILES = {
   fingerprints: "fingerprints.json",
   chains: "chains.json",
   journeys: "journeys.json",
+  summaries: "summaries.json",
 } as const;
