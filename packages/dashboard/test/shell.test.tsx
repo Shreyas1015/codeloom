@@ -19,8 +19,15 @@ const overview: Overview = {
   mcpConnected: true,
 };
 
+/** Answers per URL: the overview from `body`, an empty journeys list, and 404 for anything else. */
 function stubFetch(body: unknown, status = 200) {
-  const fetch = vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
+  const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "content-type": "application/json" } });
+  const fetch = vi.fn(async (url: string) => {
+    const path = url.split("?")[0];
+    if (path === "/api/overview") return json(body, status);
+    if (path === "/api/journeys") return json({ journeys: [], unnamedChains: [] });
+    return json({ error: "Unknown API path" }, 404);
+  });
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }

@@ -32,7 +32,7 @@ export function ContinueBand({ workspace, data }: { workspace: string; data: Jou
       </div>
       <Button asChild variant="accent" className="ml-auto focus-visible:ring-rail-ring">
         <Link to="/journeys/$id" params={{ id }}>
-          Open journey
+          {journey ? "Open journey" : "Open chain"}
           <ArrowRight aria-hidden />
         </Link>
       </Button>

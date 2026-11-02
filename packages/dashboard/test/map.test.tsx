@@ -344,6 +344,6 @@ describe("Map screen", () => {
       ),
     );
     renderAt("/map?repo=api");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Not indexed yet. Run codeloom index.");
+    expect(await screen.findByRole("region", { name: /isn't mapped yet/ })).toHaveTextContent("Not indexed yet. Run codeloom index.");
   });
 });

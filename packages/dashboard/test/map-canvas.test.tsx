@@ -98,7 +98,7 @@ describe("MapCanvas", () => {
   });
 
   it("dims cards off the journey without fading their text", () => {
-    const stops = new Map<string, MapStop[]>([["app/invoice.ts", [{ n: 1, symbol: "total", line: 4 }]]]);
+    const stops = new Map<string, MapStop[]>([["app/invoice.ts", [{ n: 1, lane: "code", symbol: "total", line: 4 }]]]);
     renderCanvas({ stops });
     const dim = screen.getByRole("button", { name: /^customer\.ts/ }).closest("[data-card]")!;
     expect(dim).toHaveAttribute("data-overlay", "dim");
@@ -114,9 +114,9 @@ describe("MapCanvas", () => {
       [
         "app/invoice.ts",
         [
-          { n: 2, symbol: "total", line: 99, ref: "api::function:app/invoice.ts:Invoice.total" },
-          { n: 3, symbol: "total", line: 4 },
-          { n: 5, symbol: "total", line: 70 },
+          { n: 2, lane: "code", symbol: "total", line: 99, ref: "api::function:app/invoice.ts:Invoice.total" },
+          { n: 3, lane: "code", symbol: "total", line: 4 },
+          { n: 5, lane: "code", symbol: "total", line: 70 },
         ],
       ],
     ]);

@@ -1,5 +1,8 @@
 import { useParams, useSearch } from "@tanstack/react-router";
-import { JourneyScreen } from "@/screens/journey/JourneyScreen";
+import { lazy, Suspense } from "react";
+
+// The Journey screen brings Shiki (code highlighting); load it only when a journey is opened.
+const JourneyScreen = lazy(() => import("@/screens/journey/JourneyScreen").then((m) => ({ default: m.JourneyScreen })));
 
 /** One journey or chain (`/journeys/$id`, search `stop` = the selected stop's number, 1-based). */
 export function JourneyRoute() {
@@ -7,7 +10,15 @@ export function JourneyRoute() {
   const { stop } = useSearch({ from: "/journeys/$id" });
   return (
     <section data-testid="screen-journey" className="flex min-w-0 flex-col gap-4">
-      <JourneyScreen key={id} id={id} stop={stop} />
+      <Suspense
+        fallback={
+          <p role="status" aria-busy="true" className="text-[13px] text-muted-foreground">
+            Loading journey…
+          </p>
+        }
+      >
+        <JourneyScreen key={id} id={id} stop={stop} />
+      </Suspense>
     </section>
   );
 }

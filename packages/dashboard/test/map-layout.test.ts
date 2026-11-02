@@ -182,7 +182,7 @@ describe("functionStops", () => {
     { ref: "api::function:app/invoice.ts:Invoice.total", name: "total", type: "function" as const, line: 30 },
     { ref: "api::function:app/invoice.ts:send", name: "send", type: "function" as const, line: 50 },
   ];
-  const st = (n: number, symbol: string, line: number, ref?: string) => ({ n, symbol, line, ...(ref ? { ref } : {}) });
+  const st = (n: number, symbol: string, line: number, ref?: string) => ({ n, lane: "code" as const, symbol, line, ...(ref ? { ref } : {}) });
 
   it("matches by ref first, then by line, and by name only when the name is unique in the file", () => {
     const m = functionStops(fns, [

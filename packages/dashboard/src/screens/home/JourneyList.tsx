@@ -106,6 +106,11 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
   useRowKeys(list);
 
   const { areas, repos } = useMemo(() => facets(rows), [rows]);
+  // A live update can remove the area or repo a menu is set to: fall back to "All" rather than keep
+  // filtering by a value the menu no longer lists.
+  const stale = (f.area !== "" && !areas.includes(f.area)) || (f.repo !== "" && !repos.includes(f.repo));
+  // Setting state during render is React's "adjust state when a prop changes" (derived state) pattern.
+  if (stale) setF({ ...f, area: areas.includes(f.area) ? f.area : "", repo: repos.includes(f.repo) ? f.repo : "" });
   const shown = useMemo(() => sortJourneys(filterJourneys(rows, f), sort), [rows, f, sort]);
   const [limit, more] = useLimit(JSON.stringify([f, sort]));
   const set = <K extends keyof JourneyFilter>(k: K) => (v: string) => setF((p) => ({ ...p, [k]: v as JourneyFilter[K] }));
@@ -188,7 +193,7 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
         <div aria-hidden className={cn("hidden border-b border-border bg-muted/40 px-5 py-2 text-xs font-semibold text-muted-foreground", COLS)}>
           <span>Journey</span>
           <span>Area</span>
-          <span>Stops · UI → API → DB</span>
+          <span>Stops · UI · API · Code · DB · Queue</span>
           <span>Repos</span>
           <span>Confidence</span>
         </div>

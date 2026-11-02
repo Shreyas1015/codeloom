@@ -1,4 +1,5 @@
 import type { Confidence, JourneyResult, Lane, StopView } from "@/api/types";
+import { numberStops, stopFrom, stopKey } from "@/lib/journey-stops";
 
 /** One distinct stop of the journey, numbered in chain order (1-based; a stop shared by chains keeps its first number). */
 export interface JourneyStop {
@@ -34,20 +35,8 @@ export interface JourneyModel {
 export const LANE_ORDER: Lane[] = ["ui", "api", "code", "db", "queue"];
 const RANK: Record<Confidence, number> = { exact: 0, param: 1, guess: 2 };
 
-/** Same identity get_journey uses to dedupe lane stops. */
-export function stopKey(s: Pick<StopView, "lane" | "repo" | "file" | "line" | "symbol">): string {
-  return JSON.stringify([s.lane, s.repo, s.file, s.line, s.symbol]);
-}
-
 export function stopTitle(s: StopView): string {
   return s.label ?? s.symbol;
-}
-
-// TODO(from): drop this cast once StopView carries `from` in codeloom's api-types.
-/** Index, within the same chain's stops, of the stop this one was reached from. */
-export function stopFrom(s: StopView): number | undefined {
-  const from = (s as { from?: number }).from;
-  return typeof from === "number" && Number.isInteger(from) ? from : undefined;
 }
 
 export function buildJourneyModel(r: JourneyResult): JourneyModel {
@@ -56,6 +45,7 @@ export function buildJourneyModel(r: JourneyResult): JourneyModel {
   const hops: JourneyHop[] = [];
   const hopAt = new Map<string, JourneyHop>();
   const chainStops = new Map<string, number[]>();
+  const numbers = numberStops(r);
 
   for (const c of r.chains) {
     const nums: number[] = [];
@@ -63,7 +53,7 @@ export function buildJourneyModel(r: JourneyResult): JourneyModel {
       const key = stopKey(s);
       let stop = byKey.get(key);
       if (!stop) {
-        stop = { n: stops.length + 1, view: s, chainIds: [] };
+        stop = { n: numbers.get(key)!, view: s, chainIds: [] };
         byKey.set(key, stop);
         stops.push(stop);
       }
