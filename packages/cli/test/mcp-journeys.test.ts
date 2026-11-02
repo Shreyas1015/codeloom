@@ -228,6 +228,16 @@ describe("trace_route", () => {
     expect(ids((await sc("trace_route", { from: "queue:billing:invoice.paid" })).matches)).toEqual([payId]);
   });
 
+  it('accepts the refs `search` returns: "route:<repo>:<METHOD /path>" (that repo only) and "page:<repo>:<route>"', async () => {
+    const found = await sc("search", { query: "customers", kinds: ["route", "page"], limit: 100 });
+    const refs = (found.results ?? found.matches ?? found.items) as Array<{ ref: string }>;
+    expect(refs.map((x) => x.ref)).toEqual(expect.arrayContaining(["route:api:POST /api/customers", "page:web:/customers/:id"]));
+    expect(ids((await sc("trace_route", { from: "route:api:POST /api/customers" })).matches)).toEqual([createId]);
+    expect((await sc("trace_route", { from: "route:web:POST /api/customers" })).matches).toEqual([]);
+    expect(ids((await sc("trace_route", { from: "page:web:/customers/:id" })).matches)).toEqual([showId]);
+    expect((await call("trace_route", { from: "route:nope:GET /x" })).isError).toBe(true);
+  });
+
   it('"table:" or "queue:" with a blank name is a tool error', async () => {
     for (const from of ["table:", "queue:", "table: ", "table:api:", "queue:billing:"]) {
       const r = await call("trace_route", { from });

@@ -137,7 +137,7 @@ const TRACE_LIMIT = 50;
 const METHODS = new Set<string>(HttpMethodSchema.options);
 
 type From =
-  | { kind: "path"; method?: HttpMethod; path: string }
+  | { kind: "path"; method?: HttpMethod; path: string; repo?: string }
   | { kind: "table"; name: string; repo?: string }
   | { kind: "queue"; name: string; repo?: string }
   | { kind: "node"; ref: string };
@@ -174,8 +174,24 @@ function parseNamed(kind: "table" | "queue", rest: string, from: string, repoIds
   return { kind, name: trimmed };
 }
 
+/** The refs `search` returns for routes and pages: "route:<repo>:<METHOD /path>" (matched in that repo
+ * only) and "page:<repo>:<route>" (read as the bare "<route>"). Anything else → undefined. */
+function parseSearchRef(s: string, from: string, repoIds: Set<string>): From | undefined {
+  const m = s.match(/^(route|page):([^:]+):(.*)$/);
+  if (!m) return undefined;
+  const [, kind, repo, rest] = m as unknown as [string, "route" | "page", string, string];
+  if (!repoIds.has(repo)) {
+    throw dataError(`"${from}": unknown repo "${repo}". Repos in this workspace: ${[...repoIds].sort(compare).join(", ")}.`);
+  }
+  const f = parseFrom(rest, repoIds);
+  if (f.kind !== "path") throw dataError(`"${from}": expected a route or page path after "${kind}:${repo}:".`);
+  return kind === "route" ? { ...f, repo } : f;
+}
+
 function parseFrom(from: string, repoIds: Set<string>): From {
   const s = from.trim();
+  const ref = parseSearchRef(s, from, repoIds);
+  if (ref) return ref;
   const named = s.match(/^(table|queue):(.*)$/);
   if (named) return parseNamed(named[1] as "table" | "queue", named[2]!, from, repoIds);
   if (s.includes("::")) return { kind: "node", ref: s };
@@ -185,7 +201,7 @@ function parseFrom(from: string, repoIds: Set<string>): From {
   }
   if (s.startsWith("/") && !/\s/.test(s)) return { kind: "path", path: normalisePath(s) };
   throw dataError(
-    `Cannot read "${from}". Use "METHOD /path", "/path", "table:<name>", "queue:<name>" or a node reference "<repo>::<nodeId>".`,
+    `Cannot read "${from}". Use "METHOD /path", "/path", "table:<name>", "queue:<name>", "route:<repo>:<METHOD /path>", "page:<repo>:<route>" or a node reference "<repo>::<nodeId>".`,
   );
 }
 
@@ -232,6 +248,7 @@ export function traceRoute(start: string, from: string): Record<string, unknown>
           case "queue":
             return (f.repo === undefined || s.repo === f.repo) && s.lane === "queue" && queueMatches(s.label, f.name);
           case "path": {
+            if (f.repo !== undefined && s.repo !== f.repo) return false;
             if (s.kind === "route") {
               const r = routeOf(c, s);
               return r !== undefined && (f.method === undefined || methodMatches(f.method, r.method as HttpMethod)) && pathMatches(f.path, r.path);
@@ -317,7 +334,8 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         'Find the chains that pass through a point: "METHOD /path" or "/path" (an API route in any repo, or a UI page ' +
         'route; :id, {id} and [id] are treated alike, and concrete values like /users/42 match), "table:<name>" or ' +
         '"table:<repo>:<name>", "queue:<name>" or "queue:<repo>:<name>" (the repo-qualified forms, as `search` returns ' +
-        "them, restrict matching to that repo), or a node reference \"<repo>::<nodeId>\". At most 50 chains.",
+        'them, restrict matching to that repo), the route/page refs `search` returns ("route:<repo>:<METHOD /path>", ' +
+        'that repo only; "page:<repo>:<route>"), or a node reference "<repo>::<nodeId>". At most 50 chains.',
       inputSchema: { from: z.string().min(1).max(500) },
     },
     withErrors((args: { from: string }) => traceRoute(opts.start, args.from)),
