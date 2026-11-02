@@ -1,14 +1,21 @@
-import { useSearch } from "@tanstack/react-router";
+import { lazy, Suspense } from "react";
 
-/** Map (`/map`, search `repo`, `dir`, `node`, `overlay`). Task 9 builds the graph here. */
+// React Flow is the biggest dependency in the app; load it only when the Map is opened.
+const MapScreen = lazy(() => import("@/screens/map/MapScreen").then((m) => ({ default: m.MapScreen })));
+
+/** Map (`/map`, search `repo`, `dir`, `node`, `overlay`). */
 export function MapRoute() {
-  const { repo } = useSearch({ strict: false });
   return (
-    <section data-testid="screen-map" aria-labelledby="map-title">
-      <h1 id="map-title" className="text-[32px] leading-[1.1] font-bold tracking-[-0.03em]">
-        Map
-      </h1>
-      {repo && <p className="mt-1 font-mono text-[12.5px] text-muted-foreground">{repo}</p>}
-    </section>
+    <Suspense
+      fallback={
+        <section data-testid="screen-map" aria-busy="true" aria-label="Map" className="flex flex-1 items-center justify-center">
+          <p role="status" className="text-[14px] text-muted-foreground">
+            Loading the map…
+          </p>
+        </section>
+      }
+    >
+      <MapScreen />
+    </Suspense>
   );
 }
