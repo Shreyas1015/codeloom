@@ -112,6 +112,10 @@ export interface StopView {
   reason?: string;
   /** "repo::nodeId" when the stop sits on a graph node. */
   ref?: string;
+  /** Index (in the same chain's `stops`) of the stop this one was reached from; on every stop but a chain's
+   * first, always below the stop's own index; `confidence`/`reason` describe that edge. Absent in
+   * get_journey's `lanes` (merged across chains) and in chains.json files written before it existed. */
+  from?: number;
 }
 
 export interface UnresolvedItem {

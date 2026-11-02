@@ -28,15 +28,18 @@ function isUnmatchedPageChain(chain: Chain): boolean {
   return chain.entry.startsWith("page:") && chain.routeKey === "";
 }
 
-/** Calls that some chain shows reaching a route (a call stop directly followed by a route stop). An
- * unreadable-URL call gets there only through a manual link, so it is no longer unresolved. */
+/** Calls that some chain shows reaching a route: a route stop whose `from` is the call stop (in a legacy
+ * chain, where no stop has `from`, a call stop directly followed by a route stop). An unreadable-URL call
+ * gets there only through a manual link, so it is no longer unresolved. */
 function routedCalls(chains: Chain[]): Set<string> {
   const out = new Set<string>();
   for (const c of chains) {
+    if (c.routeKey === "") continue;
+    const legacy = !c.stops.some((s) => s.from !== undefined);
     c.stops.forEach((s, i) => {
-      if (s.kind === "call" && c.stops[i + 1]?.kind === "route" && c.routeKey !== "") {
-        out.add([s.repo, s.file, String(s.line), s.symbol].join("\0"));
-      }
+      if (s.kind !== "route" || i === 0) return;
+      const call = c.stops[legacy ? i - 1 : s.from ?? -1];
+      if (call?.kind === "call") out.add([call.repo, call.file, String(call.line), call.symbol].join("\0"));
     });
   }
   return out;

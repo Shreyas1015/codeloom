@@ -68,6 +68,28 @@ function queueKey(repo: string, q: QueueOp): string {
 interface Ctx {
   ws: WorkspaceData; symbolLine: SymbolLineLookup;
   pairs: Map<string, QueuePair[]>; consumers: Map<string, ConsumerLink>;
+  /** Each built stop's parent: the stop it was reached from. Turned into `ChainStop.from` indices once a
+   * chain's final stop order is known (see withFrom). */
+  parents: WeakMap<ChainStop, ChainStop>;
+}
+
+/** Record that `child` was reached from `parent` (no-op when there is no parent: a chain's entry). */
+function reachedFrom<T extends ChainStop>(ctx: Ctx, child: T, parent: ChainStop | undefined): T {
+  if (parent) ctx.parents.set(child, parent);
+  return child;
+}
+
+/** Set every stop's `from` (index of its recorded parent in `stops`). Every builder records the parent,
+ * and the parent always comes first. A stop with no recorded parent, or one listed at or after it, gets no
+ * `from`: never guessed from list order. The first stop has no `from`. */
+export function withFrom(parents: WeakMap<ChainStop, ChainStop>, stops: ChainStop[]): ChainStop[] {
+  const index = new Map(stops.map((s, i) => [s, i]));
+  return stops.map((s, i) => {
+    const { from: _drop, ...rest } = s;
+    const p = parents.get(s);
+    const at = p ? index.get(p) : undefined;
+    return at !== undefined && at < i ? { ...rest, from: at } : rest;
+  });
 }
 
 /** Whether a publish stop continues into its paired consumers. `null`: it does not (a stop inside an
@@ -99,13 +121,14 @@ function hop(confidence: Confidence, reason?: string): Hop {
 function uiStops(ctx: Ctx, link: UiLink, page: PageReach | undefined): ChainStop[] {
   const graph = graphOf(ctx.ws, link.repo);
   // A call-entry chain (no page) starts at the call stop itself.
-  const stops: ChainStop[] = (page?.path ?? []).map((ref, i) => {
+  const stops: ChainStop[] = [];
+  (page?.path ?? []).forEach((ref, i) => {
     const sym: SymbolRef = { repo: ref.repo, file: ref.file, symbol: ref.symbol };
-    return i === 0
+    stops.push(reachedFrom(ctx, i === 0
       ? refStop(ctx, "ui", "page", sym, hop("exact"), page!.page.line)
-      : refStop(ctx, "ui", "function", sym, hop(page!.path[i - 1]!.confidence));
+      : refStop(ctx, "ui", "function", sym, hop(page!.path[i - 1]!.confidence)), stops[i - 1]));
   });
-  stops.push(withoutUndefined({
+  stops.push(reachedFrom(ctx, withoutUndefined({
     lane: "ui" as const, kind: "call" as const, repo: link.repo,
     nodeId: nearestNodeId(graph, link.call.at.file, link.call.at.symbol),
     file: link.call.at.file, line: link.call.at.line, symbol: link.call.at.symbol,
@@ -114,7 +137,7 @@ function uiStops(ctx: Ctx, link: UiLink, page: PageReach | undefined): ChainStop
     hop: link.call.via === "wrapper"
       ? hop(link.call.confidence ?? "param", `via wrapper ${link.call.wrapper ?? ""}`.trimEnd())
       : hop("exact"),
-  }));
+  }), stops.at(-1)));
   return stops;
 }
 
@@ -161,30 +184,36 @@ function hopFromStep(step: WalkStep): Hop {
  * paired consumers (consume, handler, its stores), in hit order then pairQueues order. `emitted` starts containing the entry symbol
  * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
 function hitStops(
-  ctx: Ctx, repo: string, hits: StoreHit[], emitted: Set<string>, base: Confidence, follow: QueueFollow, pairedOut?: ChainStop[],
+  ctx: Ctx, repo: string, hits: StoreHit[], emitted: Map<string, ChainStop>, base: Confidence, follow: QueueFollow, pairedOut?: ChainStop[],
 ): ChainStop[] {
   const stops: ChainStop[] = [];
   const paired: ChainStop[] = [];
   for (const hit of hits) {
-    for (const step of hit.viaPath.slice(1)) {
+    // Each function stop is reached from the previous step of the walk path that first emitted it; the
+    // store from the last step (the symbol that holds the access), never from a sibling store.
+    hit.viaPath.forEach((step, k) => {
       const key = stepKey(step.ref);
-      if (emitted.has(key)) continue;
-      emitted.add(key);
-      stops.push(refStop(ctx, "code", "function", step.ref, hopFromStep(step)));
-    }
+      if (k === 0 || emitted.has(key)) return;
+      const stop = refStop(ctx, "code", "function", step.ref, hopFromStep(step));
+      emitted.set(key, reachedFrom(ctx, stop, emitted.get(stepKey(hit.viaPath[k - 1]!.ref))));
+      stops.push(stop);
+    });
+    const last = hit.viaPath.at(-1);
+    const holder = last ? emitted.get(stepKey(last.ref)) : undefined;
     const h = storeHop(base, hit);
     if (hit.kind === "db") {
-      stops.push(dbStop(repo, hit, h));
+      stops.push(reachedFrom(ctx, dbStop(repo, hit, h), holder));
       continue;
     }
-    stops.push(publishStop(repo, hit, h));
+    const publish = reachedFrom(ctx, publishStop(repo, hit, h), holder);
+    stops.push(publish);
     if (!follow) continue;
     // Publish hits continue into every paired consumer, in pairQueues' sorted order.
     for (const pair of ctx.pairs.get(queueKey(repo, hit.op)) ?? []) {
       const consumeKey = queueKey(pair.repoTo, pair.consume);
       const consumer = ctx.consumers.get(consumeKey);
       if (!consumer || consumeKey === follow.skip) continue;
-      paired.push(...consumerStops(ctx, consumer, pairedHop(h.confidence, pair), null));
+      paired.push(...consumerStops(ctx, consumer, pairedHop(h.confidence, pair), null, publish));
     }
   }
   // Paired consumers go after all of this link's own stops, so each consume stop past the first starts a
@@ -208,7 +237,7 @@ function pairedHop(publish: Confidence, pair: QueuePair): Hop {
 
 /** A handler the code index could not place (BackendLink.handlerConfidence "guess") is still shown, as a
  * guessed hop; a route with no handler file at all stops at the route (check's "handler-not-found"). */
-function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop): ChainStop[] {
+function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop, route: ChainStop): ChainStop[] {
   if (!link.handler) return [];
   const handlerHop = link.handlerConfidence === "exact"
     ? hop("exact")
@@ -216,28 +245,31 @@ function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop): ChainStop[] {
   // An inline callback has no graph node of its own: point at its first line instead of the file's.
   const inlineLine = link.route.route.inline && link.handler.file === link.route.route.handlerFile
     ? link.route.route.handlerLines?.[0] : undefined;
-  const stops: ChainStop[] = [refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine)];
+  const handler = reachedFrom(ctx, refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine), route);
+  const stops: ChainStop[] = [handler];
   const base = worse(routeHop.confidence, handlerHop.confidence);
-  stops.push(...hitStops(ctx, link.repo, link.hits, new Set([stepKey(link.handler)]), base, {}));
+  stops.push(...hitStops(ctx, link.repo, link.hits, new Map([[stepKey(link.handler), handler]]), base, {}));
   return stops;
 }
 
 /** Consume stop, handler stop (unless the callback is inline), then its store stops. `entryHop` is exact
  * for a consumer chain's own entry, or the pair's hop when appended after a publish (see pairedHop); every
  * stop of an appended consumer carries at most that confidence. */
-function consumerStops(ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: QueueFollow): ChainStop[] {
+function consumerStops(ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: QueueFollow, parent?: ChainStop): ChainStop[] {
   const graph = graphOf(ctx.ws, link.repo);
   const consumeRef: SymbolRef = { repo: link.repo, file: link.consume.at.file, symbol: link.consume.at.symbol };
-  const stops: ChainStop[] = [withoutUndefined({
+  const consume: ChainStop = reachedFrom(ctx, withoutUndefined({
     lane: "queue" as const, kind: "consume" as const, repo: link.repo,
     nodeId: nearestNodeId(graph, consumeRef.file, consumeRef.symbol),
     file: consumeRef.file, line: link.consume.at.line, symbol: consumeRef.symbol,
     op: "consume", label: link.consume.queue, hop: entryHop,
-  })];
-  const emitted = new Set([stepKey(consumeRef)]);
+  }), parent);
+  const stops: ChainStop[] = [consume];
+  const emitted = new Map([[stepKey(consumeRef), consume]]);
   if (stepKey(link.handler) !== stepKey(consumeRef)) {
-    stops.push(refStop(ctx, "code", "handler", link.handler, entryHop));
-    emitted.add(stepKey(link.handler));
+    const handler = reachedFrom(ctx, refStop(ctx, "code", "handler", link.handler, entryHop), consume);
+    stops.push(handler);
+    emitted.set(stepKey(link.handler), handler);
   }
   stops.push(...hitStops(ctx, link.repo, link.hits, emitted, entryHop.confidence, follow));
   return stops;
@@ -410,11 +442,11 @@ function applyManualLinks(
     if (to.kind === "symbol") {
       const target = m.link.target;
       if (!target) continue;
-      const block: ChainStop[] = [refStop(ctx, "code", "handler", target.handler, manualHop)];
+      const block: ChainStop[] = [reachedFrom(ctx, refStop(ctx, "code", "handler", target.handler, manualHop), out[at])];
       used.add(m.i);
       if ([...out, ...tail].some((s) => sameStop(s, block[0]!))) continue;
       const paired: ChainStop[] = [];
-      block.push(...hitStops(ctx, target.handler.repo, target.hits, new Set([stepKey(target.handler)]), "exact", {}, paired));
+      block.push(...hitStops(ctx, target.handler.repo, target.hits, new Map([[stepKey(target.handler), block[0]!]]), "exact", {}, paired));
       const end = segmentEnd(out, at);
       out = [...out.slice(0, end), ...block, ...out.slice(end)];
       tail.push(...paired);
@@ -425,7 +457,8 @@ function applyManualLinks(
         broken.set(m.i, NO_HANDLER_LINK);
         continue;
       }
-      const block = [routeStop(ctx.ws, b.route, manualHop), ...backendStops(ctx, b, manualHop)];
+      const route = reachedFrom(ctx, routeStop(ctx.ws, b.route, manualHop), out[at]);
+      const block = [route, ...backendStops(ctx, b, manualHop, route)];
       used.add(m.i);
       if ([...out, ...tail].some((s) => sameStop(s, block[0]!))) continue;
       tail.push(...block);
@@ -434,7 +467,7 @@ function applyManualLinks(
       if (consumers.length === 0) continue;
       used.add(m.i);
       for (const c of consumers) {
-        const block = consumerStops(ctx, c, manualHop, null);
+        const block = consumerStops(ctx, c, manualHop, null, out[at]);
         if (![...out, ...tail].some((s) => sameStop(s, block[0]!))) tail.push(...block);
       }
     }
@@ -515,7 +548,7 @@ export function buildChainsAndLinks(
     pairs.set(key, [...(pairs.get(key) ?? []), p]);
   }
   const consumers = new Map(links.consumers.map((c) => [queueKey(c.repo, c.consume), c]));
-  const ctx: Ctx = { ws, symbolLine, pairs, consumers };
+  const ctx: Ctx = { ws, symbolLine, pairs, consumers, parents: new WeakMap() };
   const uiTargets = links.ui.flatMap((l) => (l.target.kind === "route" ? [l.target.route] : []));
   const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
   const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
@@ -525,9 +558,10 @@ export function buildChainsAndLinks(
   const add = (c: Chain) => {
     if (byId.has(c.id)) return;
     const withLinks = applyManualLinks(ctx, manual, links.backend, used, broken, c.stops, c.unresolved);
-    byId.set(c.id, withLinks.stops === c.stops ? c : {
-      ...c, stops: withLinks.stops, unresolved: sortUnresolved(withLinks.unresolved),
-      confidence: worstConfidence(withLinks.stops), complete: isComplete(withLinks.stops),
+    const stops = withFrom(ctx.parents, withLinks.stops);
+    byId.set(c.id, withLinks.stops === c.stops ? { ...c, stops } : {
+      ...c, stops, unresolved: sortUnresolved(withLinks.unresolved),
+      confidence: worstConfidence(stops), complete: isComplete(stops),
     });
   };
   const pageRoutes = new Set<string>();
@@ -539,11 +573,9 @@ export function buildChainsAndLinks(
     const backend = backendByIdentity.get(routeIdentity(target.route));
     for (const page of uiLink.pages) {
       const entry = `page:${uiLink.repo}:${page.page.route}`;
-      const stops = [
-        ...uiStops(ctx, uiLink, page),
-        routeStop(ws, target.route, hop(target.confidence, target.reason)),
-        ...(backend ? backendStops(ctx, backend, hop(target.confidence)) : []),
-      ];
+      const ui = uiStops(ctx, uiLink, page);
+      const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
+      const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
       pageRoutes.add(routeIdentity(target.route));
       add(makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
     }
@@ -557,11 +589,9 @@ export function buildChainsAndLinks(
     if (!unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
     const target: RouteTarget = uiLink.target;
     const backend = backendByIdentity.get(routeIdentity(target.route));
-    const stops = [
-      ...uiStops(ctx, uiLink, undefined),
-      routeStop(ws, target.route, hop(target.confidence, target.reason)),
-      ...(backend ? backendStops(ctx, backend, hop(target.confidence)) : []),
-    ];
+    const ui = uiStops(ctx, uiLink, undefined);
+    const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
+    const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
     pageRoutes.add(routeIdentity(target.route));
     add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
       (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
@@ -591,7 +621,8 @@ export function buildChainsAndLinks(
     const rKey = keyOf(b.route);
     const entry = `route:${rKey}`;
     const routeHop = b.route.mountsKnown ? hop("exact") : hop("guess", "mount prefix unknown");
-    const stops = [routeStop(ws, b.route, routeHop), ...backendStops(ctx, b, routeHop)];
+    const route = routeStop(ws, b.route, routeHop);
+    const stops = [route, ...backendStops(ctx, b, routeHop, route)];
     add(makeChain(entry, rKey, stops, b.unresolved.map((u) => toUnresolved(b.repo, u))));
   }
 

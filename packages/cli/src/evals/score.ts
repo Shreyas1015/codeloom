@@ -37,11 +37,14 @@ function pathFromLabel(stop: ChainStop): string {
  * confidence across chains (exact beats param beats guess), regardless of which chain id found it.
  * `handler-store` hops use `chain.routeKey || chain.entry` as `route`, so consumer chains
  * (empty routeKey) are keyed by their entry, `consumer:<repo>:<queue>#<file>#<symbol>`.
+ * Hops pair a stop with the stop it was reached from (`ChainStop.from`; the previous stop in files written
+ * before `from` existed), and a stop's hops are keyed to the segment it was reached through.
  * A consume stop past a chain's first stop starts a paired consumer appended after a publish: it and every
- * stop after it are keyed to that consumer's entry (built the same way: its handler stop, or the consume
- * stop itself for an inline callback), never to the chain's route — so they dedupe with the consumer's own
- * chain instead of adding route hops the code does not have. Likewise a route stop that is neither the
- * entry nor reached by a call (a manual link's appended route) keys its hops to `<repo>:<METHOD path>`.
+ * stop reached through it are keyed to that consumer's entry (built the same way: its handler stop, or the
+ * consume stop itself for an inline callback), never to the chain's route — so they dedupe with the
+ * consumer's own chain instead of adding route hops the code does not have. Likewise a route stop that is
+ * neither the entry nor reached by a call (a manual link's appended route) keys its hops to
+ * `<repo>:<METHOD path>`.
  */
 export function hopsFromChains(chains: Chain[]): FoundHop[] {
   const sorted = [...chains].sort((a, b) => compare(a.id, b.id));
@@ -59,40 +62,67 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
   };
 
   for (const chain of sorted) {
-    let route = chain.routeKey || chain.entry;
-    const firstRoute = chain.stops.findIndex((s) => s.kind === "route");
-    for (let i = 0; i < chain.stops.length; i++) {
-      const stop = chain.stops[i]!;
-      const next = chain.stops[i + 1];
-      // A route stop reached by a UI call (or the entry itself) is the chain's own route; any other route
-      // stop was appended by a manual link and starts its own segment, keyed by that route.
-      if (stop.kind === "route") {
-        const own = (i === 0 || chain.stops[i - 1]?.kind === "call") && chain.routeKey !== "";
-        route = own ? chain.routeKey : `${stop.repo}:${stop.label ?? ""}`;
+    const { stops } = chain;
+    const firstRoute = stops.findIndex((s) => s.kind === "route");
+    // The stop each stop was reached from: its `from`. A legacy chain (written before `from` existed: no
+    // stop has it) falls back to the previous stop. In a chain that records `from`, a stop past the first
+    // without it has no parent (null): it, and every stop reached through it, gives no hop. -1: the first stop.
+    const legacy = !stops.some((s) => s.from !== undefined);
+    const parentOf = (i: number): number | null => (i === 0 ? -1 : legacy ? i - 1 : stops[i]!.from ?? null);
+    const segments = new Map<number, string | undefined>();
+    // The route (or consumer) a stop's hops are keyed to: inherited from the stop it was reached from. A
+    // route stop reached by a UI call (or the entry itself) is the chain's own route; any other route stop
+    // was appended by a manual link and starts its own segment, keyed by that route. A consume stop past
+    // the first starts a paired consumer's segment, keyed to that consumer's entry. undefined: no parent.
+    const segmentOf = (i: number): string | undefined => {
+      if (segments.has(i)) return segments.get(i);
+      const stop = stops[i]!;
+      const p = parentOf(i);
+      let key: string | undefined;
+      if (p === null) {
+        key = undefined;
+      } else if (stop.kind === "route") {
+        const own = (i === 0 || stops[p]?.kind === "call") && chain.routeKey !== "";
+        key = own ? chain.routeKey : `${stop.repo}:${stop.label ?? ""}`;
+      } else if (stop.kind === "consume" && i > 0) {
+        const h = stops.findIndex((s, j) => j > i && s.kind === "handler" && parentOf(j) === i);
+        const handler = h === -1 ? stop : stops[h]!;
+        key = `consumer:${stop.repo}:${stop.label ?? ""}#${handler.file}#${handler.symbol}`;
+      } else {
+        key = p < 0 ? chain.routeKey || chain.entry : segmentOf(p);
       }
-      if (stop.kind === "consume" && i > 0) {
-        const handler = next?.kind === "handler" ? next : stop;
-        route = `consumer:${stop.repo}:${stop.label ?? ""}#${handler.file}#${handler.symbol}`;
-      }
+      segments.set(i, key);
+      return key;
+    };
 
+    for (let i = 0; i < stops.length; i++) {
+      const stop = stops[i]!;
+      const p = parentOf(i);
+      const route = segmentOf(i);
+      if (p === null || route === undefined) continue;
+      const parent = stops[p];
       // A call reaches a route only when that route is the call's own target: the chain's routeKey is set
       // (the call matched, or a manual link was applied to this very call) and it is the chain's first route
       // stop. A partial chain (routeKey "") never has a ui-api hop, whatever stop follows its call.
-      const ownRoute = next?.kind === "route" && chain.routeKey !== "" && firstRoute === i + 1;
-      if (stop.kind === "call" && ownRoute) {
+      if (stop.kind === "route" && parent?.kind === "call" && chain.routeKey !== "" && firstRoute === i) {
         add(
           {
             type: "ui-api",
-            from: { repo: stop.repo, file: stop.file, symbol: stop.symbol },
-            to: { repo: next!.repo, method: next!.op as HttpMethod, path: pathFromLabel(next!) },
+            from: { repo: parent.repo, file: parent.file, symbol: parent.symbol },
+            to: { repo: stop.repo, method: stop.op as HttpMethod, path: pathFromLabel(stop) },
           },
-          lowerConfidence(stop.hop.confidence, next!.hop.confidence),
+          lowerConfidence(parent.hop.confidence, stop.hop.confidence),
         );
       }
-      if (stop.kind === "route" && next?.kind === "handler") {
+      // A manual-link handler is the route's handler only when no other handler hangs off that route
+      // (a link that adds a second handler to a route that has one is not that route's handler hop).
+      const ownHandler = stop.hop.reason !== "manual link"
+        || !stops.some((s, j) => j !== i && s.kind === "handler" && parentOf(j) === p);
+      const routeKeyOfParent = p >= 0 ? segmentOf(p) : undefined;
+      if (stop.kind === "handler" && parent?.kind === "route" && ownHandler && routeKeyOfParent !== undefined) {
         add(
-          { type: "route-handler", route, handler: { file: next.file, symbol: next.symbol } },
-          lowerConfidence(stop.hop.confidence, next.hop.confidence),
+          { type: "route-handler", route: routeKeyOfParent, handler: { file: stop.file, symbol: stop.symbol } },
+          lowerConfidence(parent.hop.confidence, stop.hop.confidence),
         );
       }
       if (stop.kind === "db") {
