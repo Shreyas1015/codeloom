@@ -4,8 +4,12 @@
   "description": "Map a codebase into user journeys, for you and your AI agent.",
   "type": "module",
   "license": "MIT",
-  "bin": { "codeloom": "dist/bin.js" },
-  "engines": { "node": ">=20" },
+  "bin": {
+    "codeloom": "dist/bin.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
@@ -13,6 +17,7 @@
   },
   "dependencies": {
     "@codeloom/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "commander": "^12.1.0",
     "ignore": "^7.0.5",
     "typescript": "^5.7.0",
