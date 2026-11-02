@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { IndexRunResult } from "../commands/index-cmd.js";
 import { VERSION } from "../version.js";
+import { registerPrompts } from "./prompts.js";
 import { registerCheckTools } from "./tools/check.js";
 import { registerGraphTools } from "./tools/graph.js";
 import { registerJourneyTools } from "./tools/journeys.js";
@@ -26,6 +27,7 @@ export function createServer(opts: ServerOptions): McpServer {
   registerGraphTools(server, opts);
   registerJourneyTools(server, opts);
   registerCheckTools(server, opts);
+  registerPrompts(server, opts);
   return server;
 }
 
