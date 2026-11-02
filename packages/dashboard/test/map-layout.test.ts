@@ -5,6 +5,8 @@ import {
   dirOf,
   edgeWidth,
   fileOfRef,
+  functionStops,
+  isOffscreen,
   journeyStops,
   laneOfLayer,
   layoutLevel,
@@ -160,5 +162,48 @@ describe("helpers", () => {
       [4, "update"],
     ]);
     expect(stops.get("app/controllers/customers_controller.ts")![0]!.n).toBe(2);
+  });
+
+  it("gives two stops that differ only by lane two numbers (identity is lane, repo, file, line, symbol)", () => {
+    const base = { kind: "function" as const, repo: "api", file: "app/customer_service.ts", line: 4, symbol: "create", confidence: "exact" as const };
+    const journey = {
+      chains: [
+        { id: "ch_1", stops: [{ ...base, lane: "api" }, { ...base, lane: "code" }] },
+        { id: "ch_2", stops: [{ ...base, lane: "code" }] },
+      ],
+    } as unknown as JourneyResult;
+    expect(journeyStops(journey, "api").get("app/customer_service.ts")!.map((s) => s.n)).toEqual([1, 2]);
+  });
+});
+
+describe("functionStops", () => {
+  const fns = [
+    { ref: "api::function:app/invoice.ts:total", name: "total", type: "function" as const, line: 4 },
+    { ref: "api::function:app/invoice.ts:Invoice.total", name: "total", type: "function" as const, line: 30 },
+    { ref: "api::function:app/invoice.ts:send", name: "send", type: "function" as const, line: 50 },
+  ];
+  const st = (n: number, symbol: string, line: number, ref?: string) => ({ n, symbol, line, ...(ref ? { ref } : {}) });
+
+  it("matches by ref first, then by line, and by name only when the name is unique in the file", () => {
+    const m = functionStops(fns, [
+      st(1, "total", 99, "api::function:app/invoice.ts:Invoice.total"), // ref wins over name and line
+      st(2, "total", 4), // line
+      st(3, "total", 70), // name is not unique: no match
+      st(4, "send", 77), // unique name
+    ]);
+    expect(m.get(fns[0]!.ref)!.map((s) => s.n)).toEqual([2]);
+    expect(m.get(fns[1]!.ref)!.map((s) => s.n)).toEqual([1]);
+    expect(m.get(fns[2]!.ref)!.map((s) => s.n)).toEqual([4]);
+    expect([...m.values()].flat().some((s) => s.n === 3)).toBe(false);
+  });
+});
+
+describe("isOffscreen", () => {
+  const vp = { x: 0, y: 0, zoom: 1 };
+  it("is false for a card fully inside the visible canvas and true when any part is outside", () => {
+    expect(isOffscreen({ x: 10, y: 10, width: 100, height: 50 }, vp, { width: 800, height: 600 })).toBe(false);
+    expect(isOffscreen({ x: 750, y: 10, width: 100, height: 50 }, vp, { width: 800, height: 600 })).toBe(true);
+    expect(isOffscreen({ x: 10, y: 10, width: 100, height: 50 }, { x: -200, y: 0, zoom: 1 }, { width: 800, height: 600 })).toBe(true);
+    expect(isOffscreen({ x: 500, y: 10, width: 100, height: 50 }, { x: 0, y: 0, zoom: 2 }, { width: 800, height: 600 })).toBe(true);
   });
 });

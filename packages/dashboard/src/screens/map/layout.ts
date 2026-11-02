@@ -1,6 +1,6 @@
 /** Pure helpers for the Map screen: which cards a folder level shows, where they sit, which edges join
  * them, and how a journey's stops land on this repo's files. No React here, so it is easy to test. */
-import type { GraphFile, GraphFolder, GraphLevel, JourneyResult, Lane } from "@/api/types";
+import type { GraphFile, GraphFolder, GraphFunction, GraphLevel, JourneyResult, Lane } from "@/api/types";
 
 /** Never more cards than this at one level; the rest collapse into one "+ N more files" card. */
 export const MAX_LEVEL_NODES = 150;
@@ -30,8 +30,13 @@ export function levelItems(level: GraphLevel, keep?: string): { items: LevelItem
   const room = MAX_LEVEL_NODES - 1;
   let shown = all.slice(0, room);
   const kept = keep !== undefined ? all.find((i) => i.id === keep) : undefined;
-  if (kept && !shown.includes(kept)) shown = [...shown.slice(0, room - 1), kept];
-  const hiddenItems = all.filter((i) => !shown.includes(i));
+  const shownIds = new Set(shown.map((i) => i.id));
+  if (kept && !shownIds.has(kept.id)) {
+    shownIds.delete(shown[room - 1]!.id);
+    shown = [...shown.slice(0, room - 1), kept];
+    shownIds.add(kept.id);
+  }
+  const hiddenItems = all.filter((i) => !shownIds.has(i.id));
   const onlyFiles = hiddenItems.every((i) => i.kind === "file");
   const n = hiddenItems.length;
   const label = `+ ${n.toLocaleString("en-US")} more ${onlyFiles ? (n === 1 ? "file" : "files") : n === 1 ? "item" : "items"}`;
@@ -69,7 +74,9 @@ export function layoutLevel(items: LevelItem[], expanded: ReadonlySet<string>): 
   for (const item of items) {
     if (item.kind === "more") continue;
     const key = item.layer ?? "";
-    groups.set(key, [...(groups.get(key) ?? []), item]);
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else groups.set(key, [item]);
   }
   const keys = [...groups.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : byName(a, b)));
   const columns: LevelItem[][] = [];
@@ -150,7 +157,8 @@ export function dirOf(path: string): string {
 }
 
 export interface MapStop {
-  /** 1-based, in chain order over the whole journey; a stop shared by two chains keeps its first number. */
+  /** 1-based, in chain order over the whole journey; a stop shared by two chains keeps its first number.
+   * Identity is [lane, repo, file, line, symbol], as on the Journey screen. */
   n: number;
   symbol: string;
   line: number;
@@ -164,7 +172,8 @@ export function journeyStops(journey: JourneyResult, repo: string): Map<string, 
   let n = 0;
   for (const chain of journey.chains) {
     for (const s of chain.stops) {
-      const key = JSON.stringify([s.repo, s.file, s.line, s.symbol]);
+      // a stop's identity, the same as on the Journey screen: lane, repo, file, line, symbol
+      const key = JSON.stringify([s.lane, s.repo, s.file, s.line, s.symbol]);
       if (seen.has(key)) continue;
       seen.add(key);
       n++;
@@ -183,4 +192,47 @@ export function stopsUnder(stops: Map<string, MapStop[]>, folder: string): MapSt
   const out: MapStop[] = [];
   for (const [file, list] of stops) if (file.startsWith(prefix)) out.push(...list);
   return out.sort((a, b) => a.n - b.n);
+}
+
+/** Which of a file's functions each stop belongs to: by ref first, then by the function's line, and by name
+ * only when that name is unique in the file. A stop that matches none of these is left out. */
+export function functionStops(functions: GraphFunction[], stops: MapStop[]): Map<string, MapStop[]> {
+  const byRef = new Map(functions.map((f) => [f.ref, f]));
+  const byLine = new Map<number, GraphFunction[]>();
+  const byName = new Map<string, GraphFunction[]>();
+  for (const f of functions) {
+    if (f.line !== undefined) byLine.set(f.line, [...(byLine.get(f.line) ?? []), f]);
+    byName.set(f.name, [...(byName.get(f.name) ?? []), f]);
+  }
+  const out = new Map<string, MapStop[]>();
+  for (const s of stops) {
+    const lineHits = byLine.get(s.line);
+    const nameHits = byName.get(s.symbol);
+    const fn =
+      (s.ref !== undefined ? byRef.get(s.ref) : undefined) ??
+      (lineHits?.length === 1 ? lineHits[0] : undefined) ??
+      (nameHits?.length === 1 ? nameHits[0] : undefined);
+    if (!fn) continue;
+    const list = out.get(fn.ref);
+    if (list) list.push(s);
+    else out.set(fn.ref, [s]);
+  }
+  return out;
+}
+
+export interface Viewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/** Whether any part of a card (flow coordinates) falls outside the visible canvas of `size` pixels. */
+export function isOffscreen(
+  card: { x: number; y: number; width: number; height: number },
+  vp: Viewport,
+  size: { width: number; height: number },
+): boolean {
+  const left = card.x * vp.zoom + vp.x;
+  const top = card.y * vp.zoom + vp.y;
+  return left < 0 || top < 0 || left + card.width * vp.zoom > size.width || top + card.height * vp.zoom > size.height;
 }
