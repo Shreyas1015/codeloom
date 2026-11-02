@@ -79,17 +79,16 @@ function reachedFrom<T extends ChainStop>(ctx: Ctx, child: T, parent: ChainStop 
   return child;
 }
 
-/** Set every stop's `from` (index of its parent in `stops`). Every builder records the parent, and the
- * parent always comes first; should a parent ever be missing or later (a bug), fall back to the previous
- * stop so `from < index` always holds. The first stop has no `from`. */
-function withFrom(ctx: Ctx, stops: ChainStop[]): ChainStop[] {
+/** Set every stop's `from` (index of its recorded parent in `stops`). Every builder records the parent,
+ * and the parent always comes first. A stop with no recorded parent, or one listed at or after it, gets no
+ * `from`: never guessed from list order. The first stop has no `from`. */
+export function withFrom(parents: WeakMap<ChainStop, ChainStop>, stops: ChainStop[]): ChainStop[] {
   const index = new Map(stops.map((s, i) => [s, i]));
   return stops.map((s, i) => {
     const { from: _drop, ...rest } = s;
-    if (i === 0) return rest;
-    const p = ctx.parents.get(s);
+    const p = parents.get(s);
     const at = p ? index.get(p) : undefined;
-    return { ...rest, from: at !== undefined && at < i ? at : i - 1 };
+    return at !== undefined && at < i ? { ...rest, from: at } : rest;
   });
 }
 
@@ -559,7 +558,7 @@ export function buildChainsAndLinks(
   const add = (c: Chain) => {
     if (byId.has(c.id)) return;
     const withLinks = applyManualLinks(ctx, manual, links.backend, used, broken, c.stops, c.unresolved);
-    const stops = withFrom(ctx, withLinks.stops);
+    const stops = withFrom(ctx.parents, withLinks.stops);
     byId.set(c.id, withLinks.stops === c.stops ? { ...c, stops } : {
       ...c, stops, unresolved: sortUnresolved(withLinks.unresolved),
       confidence: worstConfidence(stops), complete: isComplete(stops),

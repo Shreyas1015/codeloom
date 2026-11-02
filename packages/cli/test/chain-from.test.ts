@@ -2,8 +2,20 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
+import { withFrom } from "../src/linker/chains.js";
 import { ChainsFileSchema, type Chain, type ChainStop } from "../src/store/schemas.js";
 import { materializeFixture } from "./helpers.js";
+
+describe("withFrom", () => {
+  const stop = (symbol: string): ChainStop => ({ lane: "code", kind: "function", repo: "r", file: "f.ts", line: 1, symbol, hop: { confidence: "exact" } });
+  it("sets from from recorded parents only; never guesses from list order", () => {
+    const [a, b, c, d] = [stop("a"), stop("b"), stop("c"), stop("d")];
+    const parents = new WeakMap<ChainStop, ChainStop>([[b!, a!], [c!, d!]]); // c's parent comes after it
+    const out = withFrom(parents, [a!, b!, c!, d!]);
+    expect(out.map((s) => s.from)).toEqual([undefined, 0, undefined, undefined]);
+    expect(out[2]).not.toHaveProperty("from");
+  });
+});
 
 // Each chain stop records the stop it was reached from (`from`, an index into the same chain's stops).
 

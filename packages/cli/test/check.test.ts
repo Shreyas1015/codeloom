@@ -78,6 +78,28 @@ describe("buildCheckReport", () => {
     expect(report.summary).toMatchObject({ chains: 0, brokenUiApi: 0, unresolvedCalls: 1 });
   });
 
+  it("an unreadable-URL call is routed only when a route stop is reached from it (from), else the next stop (legacy)", () => {
+    const api = fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api"));
+    const web = fakeRepoData(
+      { id: "web", path: "web" },
+      fakeEndpoints("web", {
+        httpCalls: [{ method: "GET", path: "", raw: "fetch(url)", resolved: false, client: "fetch", kind: "unknown", at: { file: "lib/x.ts", line: 3, symbol: "getX" } }],
+      }),
+    );
+    const page = { lane: "ui" as const, kind: "page" as const, repo: "web", file: "app/x/page.tsx", line: 1, symbol: "XPage", hop: { confidence: "exact" as const } };
+    const call = { lane: "ui" as const, kind: "call" as const, repo: "web", file: "lib/x.ts", line: 3, symbol: "getX", hop: { confidence: "exact" as const } };
+    const fn = { lane: "ui" as const, kind: "function" as const, repo: "web", file: "lib/y.ts", line: 1, symbol: "other", hop: { confidence: "exact" as const } };
+    const route = { lane: "api" as const, kind: "route" as const, repo: "api", file: "r.ts", line: 1, symbol: "h", op: "GET", label: "GET /api/x", hop: { confidence: "exact" as const, reason: "manual link" } };
+    const urlItems = (chain: Chain) => buildCheckReport([chain], fakeWorkspace([api, web])).items.filter((i) => i.kind === "unresolved-url");
+    // route reached from the call, with another stop listed in between: routed
+    expect(urlItems(fakeChain({ stops: [page, { ...call, from: 0 }, { ...fn, from: 0 }, { ...route, from: 1 }] }))).toEqual([]);
+    // route listed right after the call but reached from the page: not routed
+    expect(urlItems(fakeChain({ stops: [page, { ...call, from: 0 }, { ...route, from: 0 }] }))).toHaveLength(1);
+    // legacy chain without from: the next stop decides
+    expect(urlItems(fakeChain({ stops: [page, call, route] }))).toEqual([]);
+    expect(urlItems(fakeChain({ stops: [page, call, fn, route] }))).toHaveLength(1);
+  });
+
   it("reports route-no-caller for a route no page chain targets", () => {
     const api = fakeRepoData(
       { id: "api", path: "api" },
