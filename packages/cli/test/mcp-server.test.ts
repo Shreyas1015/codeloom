@@ -10,7 +10,7 @@ import { z } from "zod";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import { fail, ok, withErrors } from "../src/mcp/result.js";
-import { createServer, type ServerOptions } from "../src/mcp/server.js";
+import { createServer, guardStdout, type ServerOptions } from "../src/mcp/server.js";
 import { chainsTouchingNode, findNode, formatNodeRef, journeysForChains, loadMapState, parseNodeRef } from "../src/mcp/state.js";
 import { gitHead } from "../src/workspace/repos.js";
 import { commitAll, materializeFixture, makeRepo } from "./helpers.js";
@@ -201,8 +201,25 @@ describe("mcp server", () => {
     const repo = makeRepo({ "a.ts": "x" });
     const c2 = await connect({ start: repo });
     await c2.callTool({ name: "workspace_overview", arguments: {} });
+    const r = (await c2.callTool({ name: "reindex", arguments: {} })) as CallToolResult;
+    expect(r.isError).toBeFalsy();
     expect(spy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("guardStdout sends console.log/info/debug to stderr, never stdout", () => {
+    const restore = guardStdout();
+    try {
+      const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      console.debug("x");
+      console.log("y", 1);
+      console.info("z");
+      expect(out).not.toHaveBeenCalled();
+      expect(err.mock.calls.map((c) => String(c[0]))).toEqual(["x\n", "y 1\n", "z\n"]);
+    } finally {
+      restore();
+    }
   });
 
   it("lists index_status, reindex and get_layers", async () => {

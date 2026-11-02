@@ -1,3 +1,4 @@
+import { format } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { IndexRunResult } from "../commands/index-cmd.js";
@@ -31,8 +32,23 @@ export function createServer(opts: ServerOptions): McpServer {
   return server;
 }
 
-/** createServer + StdioServerTransport. Resolves once connected; stdin keeps the process alive. */
+/** On stdio, stdout carries only MCP protocol frames: send console.log / info / debug (from codeloom or
+ * any dependency) to stderr instead, formatted as console.error would. Returns a function that puts
+ * the original methods back (for tests). */
+export function guardStdout(): () => void {
+  const original = { log: console.log, info: console.info, debug: console.debug };
+  const toStderr = (...args: unknown[]): void => {
+    process.stderr.write(format(...args) + "\n");
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.debug = toStderr;
+  return () => Object.assign(console, original);
+}
+
+/** guardStdout + createServer + StdioServerTransport. Resolves once connected; stdin keeps the process alive. */
 export async function runServe(start: string): Promise<void> {
+  guardStdout();
   const server = createServer({ start });
   await server.connect(new StdioServerTransport());
 }
