@@ -6,7 +6,8 @@ import { extname, join, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { handleApi } from "./api.js";
 import { locateDashboardAssets } from "./assets.js";
-import { type ChangeKey, watchMap } from "./events.js";
+import type { ChangeEvent } from "./api-types.js";
+import { watchMap } from "./events.js";
 import { BASE_HEADERS, sendJson, sendText } from "./http.js";
 
 export interface DashboardServerOptions {
@@ -142,7 +143,7 @@ function eventHub(start: string, opts: { watch: boolean; pingMs: number }) {
     }
   };
   const stopWatch = opts.watch
-    ? watchMap(start, (keys: ChangeKey[]) => send(`event: change\ndata: ${JSON.stringify({ keys })}\n\n`))
+    ? watchMap(start, (keys) => send(`event: change\ndata: ${JSON.stringify({ keys } satisfies ChangeEvent)}\n\n`))
     : () => {};
   const ping = setInterval(() => send(": ping\n\n"), opts.pingMs);
   ping.unref();

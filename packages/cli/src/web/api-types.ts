@@ -283,3 +283,15 @@ export interface CodeResponse {
   text: string;
   truncated: boolean;
 }
+
+// ---- /api/events (SSE) --------------------------------------------------------------------------
+
+/** What changed: the workspace file, the workspace's chains or journeys, or one repo's map files
+ * (graph, endpoints, summaries, config: `repo:<id>`). */
+export type ChangeKey = "workspace" | "chains" | "journeys" | `repo:${string}`;
+
+/** GET /api/events — a `text/event-stream`: `event: change` frames whose data is this (keys sorted), and
+ * a `: ping` comment every 25 s. */
+export interface ChangeEvent {
+  keys: ChangeKey[];
+}

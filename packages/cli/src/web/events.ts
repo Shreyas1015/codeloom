@@ -4,10 +4,9 @@ import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { defaultRepoId, findWorkspaceRoot } from "../workspace/repos.js";
+import type { ChangeKey } from "./api-types.js";
 
-/** What changed: the workspace file, the workspace's chains or journeys, or one repo's map files
- * (graph, endpoints, summaries, config: `repo:<id>`). */
-export type ChangeKey = "workspace" | "chains" | "journeys" | `repo:${string}`;
+export type { ChangeKey };
 
 export interface WatchMapOptions {
   /** Quiet time before a batch of changes is emitted. Default 250 ms. */
