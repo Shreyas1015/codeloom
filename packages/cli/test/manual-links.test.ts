@@ -136,7 +136,7 @@ describe("manual links into chains", () => {
       { from: "not a ref", to: "route:api:POST /api/customers", status: "broken", reason: "could not parse link reference" },
       { from: "billing:src/refunds.ts#refund", to: "route:api:POST /api/customers", status: "unused" },
     ]);
-    const json = runCheck(root, { json: true });
+    const json = await runCheck(root, { json: true });
     expect(json.exitCode).toBe(0);
     const items = json.report.items.filter((i) => i.kind.startsWith("manual-link"));
     expect(items.map((i) => `${i.kind} ${i.detail}`)).toEqual([
@@ -145,14 +145,14 @@ describe("manual links into chains", () => {
       "manual-link-unused billing:src/refunds.ts#refund -> route:api:POST /api/customers: its from matches no chain stop",
     ]);
     expect(JSON.parse(json.output).items).toEqual(json.report.items);
-    const text = runCheck(root, {}).output;
+    const text = (await runCheck(root, {})).output;
     expect(text).toContain("Manual links that could not be resolved (2):");
     expect(text).toContain("  codeloom.workspace.json not a ref — not a ref -> route:api:POST /api/customers: could not parse link reference");
     expect(text).toContain("Manual links that match no chain, info only (1):");
     // buckets are not changed by manual-link items
     const plain = workspace([]);
     await runIndex(plain);
-    expect(runCheck(plain, { json: true }).report.summary).toEqual(json.report.summary);
+    expect((await runCheck(plain, { json: true })).report.summary).toEqual(json.report.summary);
   });
 
   // Re-review: a symbol -> route link is exact only for the one unmatched call it can mean.
@@ -182,11 +182,11 @@ ${withOther ? '  await fetch("/api/v0/other", { method: "DELETE" });\n' : ""}  a
       "no matching route for POST /api/v0/customers",
     ]);
     expect(invoices(chains)).toEqual(invoices(chainsFile(plain).chains));
-    const json = runCheck(root, { json: true }).report.items.filter((i) => i.kind.startsWith("manual-link"));
+    const json = (await runCheck(root, { json: true })).report.items.filter((i) => i.kind.startsWith("manual-link"));
     expect(json.map((i) => `${i.kind} ${i.detail}`)).toEqual([
       `manual-link-broken ${LINK.from} -> ${LINK.to}: ambiguous: 2 unmatched calls in saveLegacy`,
     ]);
-    expect(runCheck(root, {}).output).toContain(`${LINK.from} -> ${LINK.to}: ambiguous: 2 unmatched calls in saveLegacy`);
+    expect((await runCheck(root, {})).output).toContain(`${LINK.from} -> ${LINK.to}: ambiguous: 2 unmatched calls in saveLegacy`);
   });
 
   it("one unmatched call (plus a third-party and a matched call): linked exact, route appears once", async () => {
@@ -232,12 +232,12 @@ ${withOther ? '  await fetch("/api/v0/other", { method: "DELETE" });\n' : ""}  a
 `;
     const plain = workspace([], body);
     await runIndex(plain);
-    const at = (r: string) => runCheck(r, { json: true }).report.items.filter((i) => i.kind === "unresolved-url" && i.file === "lib/legacy.ts");
-    expect(at(plain)).toHaveLength(1);
+    const at = async (r: string) => (await runCheck(r, { json: true })).report.items.filter((i) => i.kind === "unresolved-url" && i.file === "lib/legacy.ts");
+    expect(await at(plain)).toHaveLength(1);
     const root = workspace([LINK], body);
     await runIndex(root);
     expect(chainsFile(root).manualLinks).toEqual([{ ...LINK, status: "used" }]);
-    expect(at(root)).toEqual([]);
+    expect(await at(root)).toEqual([]);
   });
 });
 
