@@ -39,8 +39,8 @@ export function buildProgram(): Command {
     .description("Report how complete the journey map is")
     .option("--json", "print the report as JSON")
     .option("--fail-under <percent>", "exit 1 when the complete percentage is below this")
-    .action((opts: { json?: boolean; failUnder?: string }) => {
-      const { output, exitCode } = runCheck(process.cwd(), opts);
+    .action(async (opts: { json?: boolean; failUnder?: string }) => {
+      const { output, exitCode } = await runCheck(process.cwd(), opts);
       console.log(output);
       process.exitCode = exitCode;
     });

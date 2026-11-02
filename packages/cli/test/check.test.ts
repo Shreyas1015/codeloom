@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCheckJson, formatCheckText } from "../src/check/format.js";
 import { belowFailUnder, buildCheckReport, completePercent } from "../src/check/report.js";
-import { runCheck } from "../src/commands/check.js";
+import { buildReport, runCheck } from "../src/commands/check.js";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import type { RepoData, WorkspaceData } from "../src/store/read.js";
@@ -355,11 +355,28 @@ function demoShopWorkspace() {
   return root;
 }
 
+describe("buildReport", () => {
+  it("is the report runCheck prints with --json, and ignores traces until Task 9", async () => {
+    const root = demoShopWorkspace();
+    await runIndex(root);
+    const report = await buildReport(root);
+    expect(report.summary.chains).toBe(7);
+    const { output } = await runCheck(root, { json: true });
+    expect(JSON.parse(output)).toEqual(report);
+    expect(await buildReport(root, { traces: true })).toEqual(report);
+  });
+
+  it("throws exit 2 when chains.json is missing", async () => {
+    const root = demoShopWorkspace();
+    await expect(buildReport(root)).rejects.toThrow(/Run "codeloom index" first/);
+  });
+});
+
 describe("runCheck", () => {
   it("reports exit code 0 on demo-shop with no --fail-under", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
-    const { output, exitCode, report } = runCheck(root, {});
+    const { output, exitCode, report } = await runCheck(root, {});
     expect(exitCode).toBe(0);
     expect(output).toMatch(/journeys?:/);
     expect(report.summary.chains).toBe(7);
@@ -378,7 +395,7 @@ describe("runCheck", () => {
   it("splits every demo-shop chain into exactly one bucket (the buckets add up to the chains)", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
-    const { report } = runCheck(root, {});
+    const { report } = await runCheck(root, {});
     const { chains, complete, missingDb, brokenUiApi } = report.summary;
     expect(chains).toBeGreaterThan(0);
     expect(complete + missingDb + brokenUiApi).toBe(chains);
@@ -389,7 +406,7 @@ describe("runCheck", () => {
   it("prints JSON with --json", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
-    const { output } = runCheck(root, { json: true });
+    const { output } = await runCheck(root, { json: true });
     expect(JSON.parse(output).version).toBe(1);
     expect(CheckReportSchema.safeParse(JSON.parse(output)).success).toBe(true);
   });
@@ -397,9 +414,9 @@ describe("runCheck", () => {
   it("exits 1 when complete% is below --fail-under", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
-    const { exitCode } = runCheck(root, { failUnder: "100" });
+    const { exitCode } = await runCheck(root, { failUnder: "100" });
     expect(exitCode).toBe(1);
-    expect(runCheck(root, { failUnder: "71" }).exitCode).toBe(0); // 5/7 = 71%
+    expect((await runCheck(root, { failUnder: "71" })).exitCode).toBe(0); // 5/7 = 71%
   });
 
   it("rejects an out-of-range --fail-under with a data error (exit 2)", async () => {
@@ -407,7 +424,7 @@ describe("runCheck", () => {
     await runIndex(root);
     for (const bad of ["101", "-1", "abc", "50.5"]) {
       try {
-        runCheck(root, { failUnder: bad });
+        await runCheck(root, { failUnder: bad });
         throw new Error("should have thrown");
       } catch (err) {
         expect(err).toBeInstanceOf(CodeloomError);
@@ -416,11 +433,11 @@ describe("runCheck", () => {
     }
   });
 
-  it("fails with exit 2 when chains.json is missing", () => {
+  it("fails with exit 2 when chains.json is missing", async () => {
     const root = demoShopWorkspace();
-    expect(() => runCheck(root, {})).toThrow(/Run "codeloom index" first/);
+    await expect(runCheck(root, {})).rejects.toThrow(/Run "codeloom index" first/);
     try {
-      runCheck(root, {});
+      await runCheck(root, {});
     } catch (err) {
       expect((err as CodeloomError).exitCode).toBe(2);
     }
@@ -433,9 +450,9 @@ describe("runCheck", () => {
     const ep = JSON.parse(readFileSync(epPath, "utf8"));
     ep.version = 1;
     writeFileSync(epPath, JSON.stringify(ep));
-    expect(() => runCheck(root, {})).toThrow(/endpoints version 1/);
+    await expect(runCheck(root, {})).rejects.toThrow(/endpoints version 1/);
     try {
-      runCheck(root, {});
+      await runCheck(root, {});
     } catch (err) {
       expect((err as CodeloomError).exitCode).toBe(2);
     }
@@ -505,10 +522,10 @@ describe("check exit codes (final review item 2)", () => {
     expect(belowFailUnder({ ...r, summary: { ...summary, complete: 950, missingDb: 50 } }, 95)).toBe(false);
   });
 
-  it("a folder with no workspace and no git repo is a data error (exit 2)", () => {
+  it("a folder with no workspace and no git repo is a data error (exit 2)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "codeloom-nows-"));
     try {
-      runCheck(dir, {});
+      await runCheck(dir, {});
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(CodeloomError);
