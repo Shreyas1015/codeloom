@@ -20,10 +20,12 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Set up Node ${{ matrix.node }}
+      # pnpm 11 (root packageManager) needs Node >= 22.13, so install/build/typecheck run on Node 22;
+      # the tests and the CLI smoke test then run on the matrix Node (codeloom supports Node >= 20).
+      - name: Set up Node 22 for pnpm
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -35,8 +37,16 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Test (includes the eval gate)
-        run: pnpm --filter codeloom test
+      - name: Switch to Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Test on Node ${{ matrix.node }} (includes the eval gate)
+        working-directory: packages/cli
+        run: |
+          node --version
+          npx --no-install vitest run
 
       - name: CLI smoke test (built bin, demo-shop)
         shell: bash
