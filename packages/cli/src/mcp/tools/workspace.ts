@@ -56,27 +56,32 @@ function readFingerprints(repoAbs: string): Fingerprints | null {
 }
 
 /** Repo-relative paths with uncommitted changes (staged, unstaged or untracked), parsed from
- * `git status --porcelain -z -uall`: NUL-separated "XY path" entries, so non-ASCII names are not
+ * `git status --porcelain -z -uall -- .`: NUL-separated "XY path" entries, so non-ASCII names are not
  * C-quoted, and every untracked file is listed (not just its new folder). A rename/copy entry is
- * followed by an extra entry holding the old path, which is skipped. */
+ * followed by an extra entry holding the old path, which is skipped. Porcelain paths are relative to
+ * the git top level, so for a repo in a subfolder of a bigger git repo the `git rev-parse
+ * --show-prefix` prefix is stripped (and `-- .` keeps the listing to this folder). */
 function statusChangedFiles(repoAbs: string): string[] {
+  const prefix = git(repoAbs, ["rev-parse", "--show-prefix"]).trim();
   // --no-optional-locks: a read-only check must not refresh (rewrite) .git/index when stat info is stale.
-  const entries = git(repoAbs, ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"]).split("\0");
+  const entries = git(repoAbs, ["--no-optional-locks", "status", "--porcelain", "-z", "-uall", "--", "."]).split("\0");
   const files: string[] = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
     if (entry.length < 4) continue;
-    files.push(entry.slice(3));
+    const path = entry.slice(3);
+    if (path.startsWith(prefix)) files.push(path.slice(prefix.length));
     if (entry[0] === "R" || entry[0] === "C") i++;
   }
   return files;
 }
 
-/** Files that differ between two commits (`-z`: names are never C-quoted). A `from` no longer
+/** Files that differ between two commits (`-z`: names are never C-quoted; `--relative`: only files
+ * under this folder, relative to it, for a repo in a subfolder of a bigger git repo). A `from` no longer
  * reachable locally (e.g. a pruned commit) is reported as no diff rather than a tool crash. */
 function diffChangedFiles(repoAbs: string, from: string, to: string): string[] {
   try {
-    return git(repoAbs, ["--no-optional-locks", "diff", "--name-only", "-z", `${from}..${to}`])
+    return git(repoAbs, ["--no-optional-locks", "diff", "--relative", "--name-only", "-z", `${from}..${to}`])
       .split("\0")
       .filter(Boolean);
   } catch {

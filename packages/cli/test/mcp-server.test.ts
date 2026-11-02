@@ -269,6 +269,34 @@ describe("mcp server: index_status / reindex", () => {
     expect(s.changedFiles.some((f) => f.includes("\\") || f.includes('"') || f.endsWith("/"))).toBe(false);
   });
 
+  it("works for a workspace repo in a subfolder of one git repo (uncommitted edit, then commit)", async () => {
+    const root = makeRepo({
+      "apps/api/src/a.ts": "export const a = 1;\n",
+      "codeloom.workspace.json": JSON.stringify({ version: 1, name: "mono", repos: [{ id: "api", path: "apps/api" }], links: [] }),
+    });
+    await runIndex(root);
+    commitAll(root);
+    await runIndex(root);
+    const client = await connect({ start: root });
+    const get = async () =>
+      ((await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult).structuredContent as {
+        repos: IndexStatusRepo[];
+      };
+    const s0 = (await get()).repos[0]!;
+    expect(s0.id).toBe("api");
+
+    writeFileSync(join(root, "apps/api/src/a.ts"), "export const a = 2;\n");
+    const s1 = (await get()).repos[0]!;
+    expect(s1.stale).toBe(true);
+    expect(s1.changedFiles).toEqual(["src/a.ts"]);
+
+    commitAll(root);
+    const s2 = (await get()).repos[0]!;
+    expect(s2.stale).toBe(true);
+    expect(s2.changedFiles).toContain("src/a.ts");
+    expect(s2.changedFiles.every((f) => !f.startsWith("apps/"))).toBe(true);
+  });
+
   it("an un-indexed repo reports indexedCommit: null and stale: true", async () => {
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
     const client = await connect({ start: repo });
