@@ -88,13 +88,17 @@ function checkWorkspace(d: Doctor, start: string): WsInfo | null {
   const wsRoot = findWorkspaceRoot(start);
   if (wsRoot) {
     try {
-      const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema);
+      const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
       if (ws) {
         d.add("workspace", undefined, "ok", `${WORKSPACE_FILE}: ${ws.repos.length} repo${ws.repos.length === 1 ? "" : "s"}`);
         return { root: wsRoot, repos: ws.repos };
       }
     } catch (err) {
-      d.add("workspace", undefined, "error", `${errText(err)}\nIt is hand-written, so doctor never changes it.`);
+      d.add("workspace", undefined, "error", errText(err));
+      d.add(
+        "workspace", undefined, "warn",
+        `The per-repo checks (config, graph, endpoints, cache, summaries, hook, gitignore, index) were skipped until ${WORKSPACE_FILE} is fixed.`,
+      );
       return { root: wsRoot, repos: null };
     }
   }
@@ -136,27 +140,32 @@ function checkIndexed(d: Doctor, check: "graph" | "endpoints", id: string, read:
   }
 }
 
-function checkCache(d: Doctor, repoAbs: string, id: string, config: RepoConfig): void {
+/** The `cache` check. Only a corrupt cache (bad JSON or wrong shape) is fixable (deleted). A cache built
+ * for another context (codeloom version, cache format or dependencies) is fine as a file: the next index
+ * throws it away by itself, so it is reported once, by the `index` check. Returns whether it is outdated. */
+function checkCache(d: Doctor, repoAbs: string, id: string, config: RepoConfig): boolean {
   const path = join(repoAbs, CODELOOM_DIR, FILES.fingerprints);
   const file = `${CODELOOM_DIR}/${FILES.fingerprints}`;
-  const fixText = "delete it (a git-ignored cache; the next index rebuilds it)";
-  const remove = () => rmSync(path, { force: true });
   let cache;
   try {
     cache = readJson(path, FingerprintsSchema);
   } catch {
-    return d.fixable("cache", id, `${file} is corrupt`, fixText, remove);
+    d.fixable("cache", id, `${file} is corrupt`, "delete it (a git-ignored cache; the next index rebuilds it)", () =>
+      rmSync(path, { force: true }),
+    );
+    return false;
   }
-  if (cache === null) return d.add("cache", id, "ok", `no ${file} yet`);
+  if (cache === null) {
+    d.add("cache", id, "ok", `no ${file} yet`);
+    return false;
+  }
   const expected = cacheContextKey(loadContext(repoAbs, listFiles(repoAbs, config.ignore)).key);
   if (cache.contextKey !== expected) {
-    return d.fixable(
-      "cache", id,
-      `${file} was built by another codeloom version, cache format or set of dependencies`,
-      fixText, remove,
-    );
+    d.add("cache", id, "ok", `${file} is readable (outdated: see the index check)`);
+    return true;
   }
   d.add("cache", id, "ok", `${file} is current`);
+  return false;
 }
 
 function checkSummaries(d: Doctor, repoAbs: string, id: string): void {
@@ -240,19 +249,29 @@ function checkMcp(d: Doctor, root: string): void {
   }
 }
 
-function checkIndex(d: Doctor, repoAbs: string, id: string): void {
+const CACHE_OUTDATED =
+  'cache will be rebuilt on the next "codeloom index" (codeloom version, cache format or dependencies changed)';
+
+/** The `index` check: one warn per repo at most, also carrying an outdated cache (never a second warn). */
+function checkIndex(d: Doctor, repoAbs: string, id: string, cacheOutdated: boolean): void {
   const s = repoIndexStatus(repoAbs, id);
-  if (s.indexedCommit === null) return d.add("index", id, "warn", `not indexed on this machine: run "codeloom index"`);
+  if (s.indexedCommit === null) {
+    // graph.json is committed, so a repo can be indexed with no local record (fresh clone, deleted cache).
+    const indexed = existsSync(join(repoAbs, CODELOOM_DIR, FILES.graph));
+    return d.add("index", id, "warn", indexed ? "no local index record — run codeloom index" : `not indexed on this machine: run "codeloom index"`);
+  }
   if (s.stale) {
     const n = s.changedFiles.length;
     const what = n > 0 ? `${n}${s.truncated ? "+" : ""} changed file${n === 1 ? "" : "s"}` : "HEAD moved";
-    return d.add("index", id, "warn", `index is stale (${what}): run "codeloom index"`);
+    const tail = cacheOutdated ? `; ${CACHE_OUTDATED}` : `: run "codeloom index"`;
+    return d.add("index", id, "warn", `index is stale (${what})${tail}`);
   }
+  if (cacheOutdated) return d.add("index", id, "warn", CACHE_OUTDATED);
   d.add("index", id, "ok", `indexed at ${s.head.slice(0, 7)}`);
 }
 
 /** Check codeloom's data files, hooks, .gitignore line and MCP entry. With fix, repair only the safe
- * things (missing config, hook, .gitignore line, MCP entry; a corrupt or outdated cache). Hand-written
+ * things (missing config, hook, .gitignore line, MCP entry; a corrupt cache). Hand-written
  * and committed generated files are never touched. Never throws for a bad data file — reports it. */
 export function runDoctor(start: string, opts: { fix?: boolean }): DoctorReport {
   const d = new Doctor(opts.fix === true);
@@ -265,25 +284,28 @@ export function runDoctor(start: string, opts: { fix?: boolean }): DoctorReport 
   if (!ws) return finish(d);
 
   const repos = [...(ws.repos ?? [])].sort((a, b) => compare(a.id, b.id));
-  const present: Array<{ id: string; abs: string }> = [];
+  const present: Array<{ id: string; abs: string; cacheOutdated: boolean }> = [];
   for (const ref of repos) {
     const abs = join(ws.root, ref.path);
     if (!existsSync(abs) || !statSync(abs).isDirectory()) {
       d.add("config", ref.id, "error", `repo folder not found at ${abs}: fix its path in ${WORKSPACE_FILE}`);
       continue;
     }
-    present.push({ id: ref.id, abs });
+    const repo = { id: ref.id, abs, cacheOutdated: false };
+    present.push(repo);
     const config = checkConfig(d, abs, ref.id);
     checkIndexed(d, "graph", ref.id, () => readGraph(abs));
     checkIndexed(d, "endpoints", ref.id, () => readEndpoints(abs));
-    d.guard("cache", ref.id, () => checkCache(d, abs, ref.id, config));
+    d.guard("cache", ref.id, () => {
+      repo.cacheOutdated = checkCache(d, abs, ref.id, config);
+    });
     checkSummaries(d, abs, ref.id);
   }
   checkChainsAndJourneys(d, ws.root);
   for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root));
   for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));
   d.guard("mcp", undefined, () => checkMcp(d, ws.root));
-  for (const r of present) d.guard("index", r.id, () => checkIndex(d, r.abs, r.id));
+  for (const r of present) d.guard("index", r.id, () => checkIndex(d, r.abs, r.id, r.cacheOutdated));
   return finish(d);
 }
 

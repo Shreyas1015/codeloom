@@ -83,7 +83,8 @@ export function loadWorkspace(start: string): {
 } {
   const wsRoot = findWorkspaceRoot(start);
   if (wsRoot) {
-    const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema);
+    // Hand-written: a bad file must be fixed by hand, never deleted and re-indexed.
+    const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
     if (ws) return { root: wsRoot, name: ws.name, repos: ws.repos, links: ws.links, traces: ws.traces };
   }
   const top = gitToplevel(start);

@@ -60,7 +60,8 @@ function readFingerprints(repoAbs: string): Fingerprints | null {
  * C-quoted, and every untracked file is listed (not just its new folder). A rename/copy entry is
  * followed by an extra entry holding the old path, which is skipped. */
 function statusChangedFiles(repoAbs: string): string[] {
-  const entries = git(repoAbs, ["status", "--porcelain", "-z", "-uall"]).split("\0");
+  // --no-optional-locks: a read-only check must not refresh (rewrite) .git/index when stat info is stale.
+  const entries = git(repoAbs, ["--no-optional-locks", "status", "--porcelain", "-z", "-uall"]).split("\0");
   const files: string[] = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
@@ -75,7 +76,7 @@ function statusChangedFiles(repoAbs: string): string[] {
  * reachable locally (e.g. a pruned commit) is reported as no diff rather than a tool crash. */
 function diffChangedFiles(repoAbs: string, from: string, to: string): string[] {
   try {
-    return git(repoAbs, ["diff", "--name-only", "-z", `${from}..${to}`])
+    return git(repoAbs, ["--no-optional-locks", "diff", "--name-only", "-z", `${from}..${to}`])
       .split("\0")
       .filter(Boolean);
   } catch {

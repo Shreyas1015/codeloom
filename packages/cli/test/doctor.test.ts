@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import { formatDoctor, runDoctor, type DoctorReport } from "../src/commands/doct
 import { runIndex } from "../src/commands/index-cmd.js";
 import { HOOK_MARK, runInit } from "../src/commands/init.js";
 import { readJson, writeJsonAtomic } from "../src/store/json.js";
+import { loadWorkspace } from "../src/workspace/repos.js";
 import { RepoConfigSchema } from "../src/store/schemas.js";
 import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 
@@ -20,6 +22,18 @@ async function healthyShop(): Promise<string> {
   runInit(root);
   for (const r of REPOS) commitAll(join(root, r));
   await runIndex(root);
+  return root;
+}
+
+/** A fresh copy of the healthy shop. cpSync does not keep timestamps, so every git index in the copy
+ * has stale stat info (a plain `git status` would rewrite .git/index). The hooks are pointed at the copy. */
+function copyShop(src: string): string {
+  const root = mkdtempSync(join(tmpdir(), "codeloom-doctor-"));
+  cpSync(src, root, { recursive: true });
+  for (const r of REPOS) {
+    const hook = join(root, r, ".git", "hooks", "post-commit");
+    if (existsSync(hook)) writeFileSync(hook, readFileSync(hook, "utf8").split(src).join(root));
+  }
   return root;
 }
 
@@ -79,8 +93,10 @@ async function cli(root: string, args: string[]): Promise<{ out: string; code: n
 
 describe("codeloom doctor", { timeout: 90_000 }, () => {
   let healthy: string;
+  let shop: () => string;
   beforeAll(async () => {
     healthy = await healthyShop();
+    shop = () => copyShop(healthy);
   }, 90_000);
 
   it("reports a healthy indexed demo-shop as all ok, exit 0", async () => {
@@ -108,7 +124,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("finds a missing hook, gitignore line, .mcp.json entry and config; --fix repairs all four", async () => {
-    const root = await healthyShop();
+    const root = shop();
     rmSync(join(root, "api", ".git", "hooks", "post-commit"));
     const gi = join(root, "web", ".gitignore");
     writeFileSync(gi, readFileSync(gi, "utf8").replace(".codeloom/fingerprints.json\n", ""));
@@ -149,7 +165,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("deletes a corrupt fingerprints cache with --fix", async () => {
-    const root = await healthyShop();
+    const root = shop();
     const fp = join(root, "api", ".codeloom", "fingerprints.json");
     writeFileSync(fp, "{ not json");
     const r = runDoctor(root, {});
@@ -158,21 +174,46 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     const f = runDoctor(root, { fix: true });
     expect(statusOf(f, "cache", "demo-api")).toBe("fixed");
     expect(existsSync(fp)).toBe(false);
+    // graph.json is still there, so the repo is indexed: only the local record is gone
+    const index = f.items.find((i) => i.check === "index" && i.repo === "demo-api")!;
+    expect(index.status).toBe("warn");
+    expect(index.message).toContain("no local index record — run codeloom index");
+    expect(f.items.map((i) => i.message).join("\n")).not.toMatch(/not indexed on this machine/);
   });
 
-  it("flags a cache from an older cache format as fixable", async () => {
-    const root = await healthyShop();
+  it("an outdated cache context is one non-fixable index warn; --fix keeps the cache", async () => {
+    const root = shop();
     const fp = join(root, "web", ".codeloom", "fingerprints.json");
     const data = JSON.parse(readFileSync(fp, "utf8"));
     writeJsonAtomic(fp, { ...data, contextKey: "stale-format-key" });
     const r = runDoctor(root, {});
-    expect(statusOf(r, "cache", "demo-web")).toBe("warn");
-    runDoctor(root, { fix: true });
-    expect(existsSync(fp)).toBe(false);
+    expect(nonOk(r).map((i) => [i.check, i.repo, i.status, i.fix])).toEqual([["index", "demo-web", "warn", undefined]]);
+    expect(nonOk(r)[0]!.message).toContain('cache will be rebuilt on the next "codeloom index"');
+    const f = runDoctor(root, { fix: true });
+    expect(f.summary.fixed).toBe(0);
+    expect(existsSync(fp)).toBe(true);
+  });
+
+  it("a new dependency (committed) gives one warn, and --fix does not delete the cache", async () => {
+    const root = shop();
+    const pkgPath = join(root, "api", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    pkg.dependencies["left-pad"] = "^1.3.0";
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    commitAll(join(root, "api"));
+    const fp = join(root, "api", ".codeloom", "fingerprints.json");
+    const r = runDoctor(root, {});
+    const bad = nonOk(r);
+    expect(bad.map((i) => [i.check, i.repo, i.status])).toEqual([["index", "demo-api", "warn"]]);
+    expect(bad[0]!.fix).toBeUndefined();
+    expect(bad[0]!.message).toContain('cache will be rebuilt on the next "codeloom index"');
+    const f = runDoctor(root, { fix: true });
+    expect(f.summary.fixed).toBe(0);
+    expect(existsSync(fp)).toBe(true);
   });
 
   it("reports an invalid journeys.json as an error, leaves it untouched with --fix, exit 1", async () => {
-    const root = await healthyShop();
+    const root = shop();
     const path = join(root, ".codeloom", "journeys.json");
     writeFileSync(path, '{ "version": 1, "journeys": [{ "id": "bad" }] }');
     const text = readFileSync(path, "utf8");
@@ -187,7 +228,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("reports duplicate journey ids as an error", async () => {
-    const root = await healthyShop();
+    const root = shop();
     const path = join(root, ".codeloom", "journeys.json");
     const j = { id: "j_0123456789ab", name: "Sign up", area: "", note: "", chainIds: [], status: "ok" };
     writeJsonAtomic(path, { version: 1, journeys: [j, { ...j, name: "Sign up again" }] });
@@ -200,7 +241,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("warns about orphaned journeys, naming them", async () => {
-    const root = await healthyShop();
+    const root = shop();
     const path = join(root, ".codeloom", "journeys.json");
     writeJsonAtomic(path, {
       version: 1,
@@ -213,7 +254,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("reports an endpoints v1 file as an error", async () => {
-    const root = await healthyShop();
+    const root = shop();
     writeJsonAtomic(join(root, "api", ".codeloom", "endpoints.json"), { version: 1, routes: [] });
     const r = runDoctor(root, { fix: true });
     expect(statusOf(r, "endpoints", "demo-api")).toBe("error");
@@ -222,7 +263,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("reports an invalid config, summaries and workspace file as errors, never fixed", async () => {
-    const root = await healthyShop();
+    const root = shop();
     writeJsonAtomic(join(root, "web", ".codeloom", "config.json"), { version: 1 });
     writeJsonAtomic(join(root, "web", ".codeloom", "summaries.json"), { version: 9 });
     const before = hashTree(root);
@@ -235,6 +276,37 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     const w = runDoctor(root, { fix: true });
     expect(statusOf(w, "workspace")).toBe("error");
     expect(readFileSync(join(root, "codeloom.workspace.json"), "utf8")).toBe("{ nope");
+  });
+
+  it("an invalid workspace file is hand-written: fix by hand, never delete; per-repo checks are skipped", () => {
+    const root = shop();
+    writeJsonAtomic(join(root, "codeloom.workspace.json"), { version: 1, name: "x", repos: "nope" });
+    const r = runDoctor(root, {});
+    const ws = r.items.filter((i) => i.check === "workspace");
+    expect(ws[0]!.status).toBe("error");
+    expect(ws[0]!.message).toMatch(/by hand/);
+    expect(ws[0]!.message).not.toMatch(/[Dd]elete it|run "codeloom index"/);
+    expect(ws.some((i) => /per-repo checks .*skipped until .*codeloom\.workspace\.json.* fixed/.test(i.message))).toBe(true);
+    expect(r.items.some((i) => i.repo !== undefined)).toBe(false);
+    // loadWorkspace (index, serve, check, ...) says the same
+    let message = "";
+    try {
+      loadWorkspace(root);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/by hand/);
+    expect(message).not.toMatch(/[Dd]elete it|run "codeloom index"/);
+  });
+
+  it("a folder with no workspace and no git repo: a clear error, exit 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codeloom-nothing-"));
+    const r = runDoctor(dir, {});
+    expect(r.items.map((i) => [i.check, i.status])).toEqual([["git", "ok"], ["workspace", "error"]]);
+    expect(r.items[1]!.message).toMatch(/No codeloom workspace or git repo found/);
+    const { code, out } = await cli(dir, []);
+    expect(code).toBe(1);
+    expect(out).toMatch(/No codeloom workspace or git repo found/);
   });
 
   it("warns about an un-indexed repo", () => {
@@ -250,14 +322,23 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("changes no file without --fix", async () => {
-    const root = await healthyShop();
+    const root = shop();
     rmSync(join(root, "api", ".git", "hooks", "post-commit"));
     rmSync(join(root, ".mcp.json"));
     rmSync(join(root, "web", ".codeloom", "config.json"));
     writeFileSync(join(root, "billing", ".codeloom", "fingerprints.json"), "garbage");
     const before = hashTree(root);
+    expect(Object.keys(before)).toContain("/api/.git/index");
     const r = runDoctor(root, {});
     expect(r.summary.warn).toBeGreaterThanOrEqual(4);
+    expect(hashTree(root)).toEqual(before);
+  });
+
+  it("leaves .git/index alone when the copied repos have stale stat info (no --fix)", () => {
+    const root = shop();
+    const before = hashTree(root);
+    for (const r of REPOS) expect(Object.keys(before)).toContain(`/${r}/.git/index`);
+    runDoctor(root, {});
     expect(hashTree(root)).toEqual(before);
   });
 
@@ -269,7 +350,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   });
 
   it("text output groups non-ok items by check and prints the summary line", async () => {
-    const root = await healthyShop();
+    const root = shop();
     rmSync(join(root, "api", ".git", "hooks", "post-commit"));
     rmSync(join(root, "web", ".git", "hooks", "post-commit"));
     const text = formatDoctor(runDoctor(root, {}));
