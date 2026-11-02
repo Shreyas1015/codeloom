@@ -1,0 +1,323 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import http, { type IncomingHttpHeaders } from "node:http";
+import { createServer as createNetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { runIndex } from "../src/commands/index-cmd.js";
+import { CodeloomError } from "../src/errors.js";
+import { type DashboardServer, startDashboardServer } from "../src/web/server.js";
+import { makeRepo, materializeFixture } from "./helpers.js";
+
+const TOKEN = "a".repeat(64);
+const INDEX_HTML = '<!doctype html><html><body><div id="root"></div><script src="/assets/index-AbCd1234.js"></script></body></html>';
+const JS = "console.log('dashboard');";
+
+/** A temp dashboard dist: index.html plus a hashed js file, like Vite's output. */
+export function makeAssetsDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "codeloom-dash-"));
+  mkdirSync(join(dir, "assets"), { recursive: true });
+  writeFileSync(join(dir, "index.html"), INDEX_HTML);
+  writeFileSync(join(dir, "assets", "index-AbCd1234.js"), JS);
+  writeFileSync(join(dir, "favicon.svg"), "<svg/>");
+  return dir;
+}
+
+interface Res { status: number; headers: IncomingHttpHeaders; body: string }
+
+/** A raw GET (node:http, so the path reaches the server exactly as written: no client-side URL normalising). */
+function get(port: number, path: string, headers: Record<string, string> = {}): Promise<Res> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, path, method: "GET", headers: { host: `127.0.0.1:${port}`, ...headers }, agent: false },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (body += c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+const cookie = (token = TOKEN) => ({ cookie: `codeloom_session=${token}` });
+
+let demo: string;
+let assets: string;
+let server: DashboardServer;
+
+beforeAll(async () => {
+  demo = materializeFixture("demo-shop");
+  writeFileSync(
+    join(demo, "codeloom.workspace.json"),
+    JSON.stringify({ version: 1, name: "demo-shop", repos: [{ id: "api", path: "api" }, { id: "billing", path: "billing" }, { id: "web", path: "web" }], links: [] }),
+  );
+  await runIndex(demo);
+  assets = makeAssetsDir();
+  server = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+}, 120_000);
+
+afterAll(async () => {
+  await server?.close();
+});
+
+describe("startDashboardServer", () => {
+  it("returns the token URL on 127.0.0.1 with the chosen port", () => {
+    expect(server.port).toBeGreaterThan(0);
+    expect(server.token).toBe(TOKEN);
+    expect(server.url).toBe(`http://127.0.0.1:${server.port}/?token=${TOKEN}`);
+  });
+
+  it("generates a random 32-byte hex token when none is given", async () => {
+    const s = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, watch: false });
+    try {
+      expect(s.token).toMatch(/^[0-9a-f]{64}$/);
+      expect(s.token).not.toBe(TOKEN);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("binds 127.0.0.1 only", async () => {
+    const listen = vi.spyOn(http.Server.prototype, "listen");
+    const s = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+    try {
+      expect(listen).toHaveBeenCalled();
+      const srv = listen.mock.contexts.at(-1) as http.Server;
+      const addr = srv.address();
+      expect(addr && typeof addr === "object" && addr.address).toBe("127.0.0.1");
+      expect(addr && typeof addr === "object" && addr.port).toBe(s.port);
+    } finally {
+      listen.mockRestore();
+      await s.close();
+    }
+  });
+
+  it("fails clearly when the dashboard is not built (no assetsDir and none found)", async () => {
+    // assetsDir pointing at a folder with no index.html is rejected the same way.
+    const empty = mkdtempSync(join(tmpdir(), "codeloom-empty-"));
+    await expect(startDashboardServer({ start: demo, port: 0, assetsDir: empty, token: TOKEN, watch: false })).rejects.toThrow(
+      CodeloomError,
+    );
+  });
+
+  it("close() frees the port", async () => {
+    const s = await startDashboardServer({ start: demo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+    const port = s.port;
+    // A kept-alive connection must not hold the server open.
+    await get(port, "/api/overview", cookie());
+    await s.close();
+    await new Promise<void>((resolve, reject) => {
+      const probe = createNetServer();
+      probe.once("error", reject);
+      probe.listen(port, "127.0.0.1", () => probe.close(() => resolve()));
+    });
+  });
+
+  it("an explicit port that is in use → CodeloomError naming the port", async () => {
+    await expect(
+      startDashboardServer({ start: demo, port: server.port, assetsDir: assets, token: TOKEN, watch: false }),
+    ).rejects.toThrow(new RegExp(`Port ${server.port} is in use`));
+  });
+
+  it("with no port, takes the first free port from 4747 upward", async () => {
+    const s = await startDashboardServer({ start: demo, assetsDir: assets, token: TOKEN, watch: false });
+    try {
+      expect(s.port).toBeGreaterThanOrEqual(4747);
+      // Unless all 20 are taken on this machine, in which case the OS picks one.
+      if (s.port > 4766) expect(s.port).toBeGreaterThan(0);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("token flow", () => {
+  it("/api/* without the session cookie → 401 JSON error", async () => {
+    const r = await get(server.port, "/api/overview");
+    expect(r.status).toBe(401);
+    expect(r.headers["content-type"]).toMatch(/application\/json/);
+    expect(JSON.parse(r.body).error).toMatch(/token/i);
+  });
+
+  it("/api/* with a wrong cookie → 401", async () => {
+    expect((await get(server.port, "/api/overview", cookie("b".repeat(64)))).status).toBe(401);
+    expect((await get(server.port, "/api/overview", cookie("short"))).status).toBe(401);
+  });
+
+  it("/api/* with ?token= but no cookie → 401 (the token only travels in the cookie)", async () => {
+    expect((await get(server.port, `/api/overview?token=${TOKEN}`)).status).toBe(401);
+  });
+
+  it("GET /?token= sets the HttpOnly SameSite=Strict cookie and redirects to the clean URL; the cookie then works on /api/overview", async () => {
+    const r = await get(server.port, `/?token=${TOKEN}`);
+    expect(r.status).toBe(302);
+    expect(r.headers.location).toBe("/");
+    const set = r.headers["set-cookie"]?.[0] ?? "";
+    expect(set).toContain(`codeloom_session=${TOKEN}`);
+    expect(set).toContain("HttpOnly");
+    expect(set).toContain("SameSite=Strict");
+    expect(set).toContain("Path=/");
+    const sent = set.split(";")[0]!;
+    const api = await get(server.port, "/api/overview", { cookie: `other=1; ${sent}` });
+    expect(api.status).toBe(200);
+  });
+
+  it("keeps the other query params and path when stripping the token", async () => {
+    const r = await get(server.port, `/map?repo=api&token=${TOKEN}`);
+    expect(r.status).toBe(302);
+    expect(r.headers.location).toBe("/map?repo=api");
+  });
+
+  it("GET /?token=<wrong> → 401, no cookie", async () => {
+    const r = await get(server.port, "/?token=nope");
+    expect(r.status).toBe(401);
+    expect(r.headers["set-cookie"]).toBeUndefined();
+  });
+});
+
+describe("Host guard (DNS rebinding)", () => {
+  it("accepts 127.0.0.1:<port> and localhost:<port>", async () => {
+    expect((await get(server.port, "/", { host: `127.0.0.1:${server.port}` })).status).toBe(200);
+    expect((await get(server.port, "/", { host: `localhost:${server.port}` })).status).toBe(200);
+  });
+
+  it("any other Host → 403, on static and API paths alike", async () => {
+    expect((await get(server.port, "/", { host: "evil.example.com" })).status).toBe(403);
+    expect((await get(server.port, "/", { host: `evil.example.com:${server.port}` })).status).toBe(403);
+    expect((await get(server.port, "/", { host: "127.0.0.1:1" })).status).toBe(403);
+    expect((await get(server.port, "/api/overview", { host: "evil.example.com", ...cookie() })).status).toBe(403);
+    expect((await get(server.port, `/?token=${TOKEN}`, { host: "evil.example.com" })).headers["set-cookie"]).toBeUndefined();
+  });
+});
+
+describe("static files", () => {
+  it("/ → index.html with Cache-Control: no-cache", async () => {
+    const r = await get(server.port, "/");
+    expect(r.status).toBe(200);
+    expect(r.body).toBe(INDEX_HTML);
+    expect(r.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(r.headers["cache-control"]).toBe("no-cache");
+    expect(r.headers["x-content-type-options"]).toBe("nosniff");
+    expect(r.headers["referrer-policy"]).toBe("no-referrer");
+  });
+
+  it("a hashed asset → its content type and an immutable cache", async () => {
+    const r = await get(server.port, "/assets/index-AbCd1234.js");
+    expect(r.status).toBe(200);
+    expect(r.body).toBe(JS);
+    expect(r.headers["content-type"]).toBe("text/javascript; charset=utf-8");
+    expect(r.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+  });
+
+  it("an unhashed file → no-cache", async () => {
+    const r = await get(server.port, "/favicon.svg");
+    expect(r.status).toBe(200);
+    expect(r.headers["content-type"]).toBe("image/svg+xml");
+    expect(r.headers["cache-control"]).toBe("no-cache");
+  });
+
+  it("SPA fallback: unknown non-API paths → index.html", async () => {
+    for (const path of ["/journeys/j_123", "/map?repo=api&dir=src", "/some/deep/route"]) {
+      const r = await get(server.port, path);
+      expect(r.status, path).toBe(200);
+      expect(r.body, path).toBe(INDEX_HTML);
+      expect(r.headers["cache-control"], path).toBe("no-cache");
+    }
+  });
+
+  it("a missing file with an extension → 404, not index.html", async () => {
+    expect((await get(server.port, "/assets/missing-XyZ98765.js")).status).toBe(404);
+  });
+
+  it("unknown /api/ paths → 404 JSON (never the SPA)", async () => {
+    const r = await get(server.port, "/api/nope", cookie());
+    expect(r.status).toBe(404);
+    expect(JSON.parse(r.body).error).toBeTruthy();
+  });
+
+  it("path traversal never leaves the assets folder → 404", async () => {
+    for (const path of [
+      "/../../etc/passwd",
+      "/%2e%2e/%2e%2e/etc/passwd",
+      "/assets/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+      "/..%2f..%2fetc%2fpasswd",
+      "/assets/..%5c..%5cindex.html",
+      "/%2E%2E/package.json",
+      "/a%00b",
+      "/%zz",
+    ]) {
+      const r = await get(server.port, path);
+      expect(r.status, path).toBe(404);
+      expect(r.body, path).not.toContain("root:");
+    }
+  });
+
+  it("only GET and HEAD are allowed", async () => {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        { host: "127.0.0.1", port: server.port, path: "/api/overview", method: "POST", headers: cookie(), agent: false },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(status).toBe(405);
+  });
+});
+
+describe("/api/overview", () => {
+  it("is workspaceOverview plus indexStatus and mcpConnected", async () => {
+    const r = await get(server.port, "/api/overview", cookie());
+    expect(r.status).toBe(200);
+    expect(r.headers["content-type"]).toBe("application/json; charset=utf-8");
+    expect(r.headers["cache-control"]).toBe("no-store");
+    const body = JSON.parse(r.body);
+    expect(body.name).toBe("demo-shop");
+    expect(body.repos.map((x: { id: string }) => x.id)).toEqual(["api", "billing", "web"]);
+    expect(body.chains.total).toBeGreaterThan(0);
+    expect(body.indexStatus.repos.map((x: { id: string }) => x.id)).toEqual(["api", "billing", "web"]);
+    expect(body.mcpConnected).toBe(false);
+  });
+
+  it("mcpConnected is true once .mcp.json has a codeloom entry (read fresh)", async () => {
+    writeFileSync(join(demo, ".mcp.json"), JSON.stringify({ mcpServers: { codeloom: { command: "npx", args: ["codeloom", "serve"] } } }));
+    const body = JSON.parse((await get(server.port, "/api/overview", cookie())).body);
+    expect(body.mcpConnected).toBe(true);
+  });
+
+  it("a repo that is not indexed → 409 with code not-indexed", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
+    const s = await startDashboardServer({ start: repo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+    try {
+      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie() });
+      expect(r.status).toBe(409);
+      const body = JSON.parse(r.body);
+      expect(body.code).toBe("not-indexed");
+      expect(body.error).toContain("codeloom index");
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("a bad data file → 409 with code bad-data", async () => {
+    const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
+    await runIndex(repo);
+    writeFileSync(join(repo, ".codeloom", "chains.json"), "{ not json");
+    const s = await startDashboardServer({ start: repo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
+    try {
+      const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie() });
+      expect(r.status).toBe(409);
+      expect(JSON.parse(r.body).code).toBe("bad-data");
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+afterEach(() => vi.restoreAllMocks());

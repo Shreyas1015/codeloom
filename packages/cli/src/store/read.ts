@@ -25,7 +25,9 @@ export function readEndpoints(repoAbs: string): EndpointsFile | null {
     return readJson(path, EndpointsFileSchema); // reproduces readJson's own "not valid JSON" error
   }
   if (typeof raw === "object" && raw !== null && (raw as { version?: unknown }).version === 1) {
-    throw dataError(`${path} was written by an older codeloom (endpoints version 1). Run "codeloom index" to rebuild it.`);
+    throw dataError(`${path} was written by an older codeloom (endpoints version 1). Run "codeloom index" to rebuild it.`, {
+      code: "not-indexed",
+    });
   }
   return readJson(path, EndpointsFileSchema);
 }
@@ -54,7 +56,9 @@ export function loadWorkspaceData(start: string): WorkspaceData {
     const graph = readGraph(abs);
     const endpoints = readEndpoints(abs);
     if (!graph || !endpoints) {
-      throw dataError(`Repo "${ref.id}" has no .codeloom data yet. Run "codeloom index" first.`);
+      throw dataError(`Repo "${ref.id}" has no .codeloom data yet. Run "codeloom index" first.`, {
+        code: "not-indexed",
+      });
     }
     return { ref, abs, graph, endpoints };
   });

@@ -92,6 +92,7 @@ export function loadWorkspace(start: string): {
     // A usage/data problem, not a crash: exit 2 (codeloom check's contract).
     throw dataError(
       `No codeloom workspace or git repo found at ${resolve(start)}. Run "codeloom init" in a repo or a folder of repos first.`,
+      { code: "not-indexed" },
     );
   }
   // No init: derive the id the way init would (package.json name, else folder), so a renamed clone
