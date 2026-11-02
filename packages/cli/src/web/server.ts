@@ -6,6 +6,7 @@ import { extname, join, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { handleApi } from "./api.js";
 import { locateDashboardAssets } from "./assets.js";
+import { type ChangeKey, watchMap } from "./events.js";
 import { BASE_HEADERS, sendJson, sendText } from "./http.js";
 
 export interface DashboardServerOptions {
@@ -17,8 +18,10 @@ export interface DashboardServerOptions {
   assetsDir?: string;
   /** Default: randomBytes(32).toString("hex"); tests pass one. */
   token?: string;
-  /** Default true: push live changes over /api/events (added with the events stream; tests may disable). */
+  /** Default true: watch the map files and push changes over /api/events (tests may disable). */
   watch?: boolean;
+  /** Keep-alive comment interval on /api/events. Default 25 000 ms; tests pass a short one. */
+  pingMs?: number;
 }
 
 export interface DashboardServer {
@@ -125,6 +128,57 @@ function sendFile(res: ServerResponse, file: string, rel: string, head: boolean)
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
+const PING_MS = 25_000;
+
+/** The /api/events side: every open event stream, a ping timer and the map watcher. A change is written
+ * to every stream; a stream whose client went away is dropped and never written to again. Opening a
+ * stream reads nothing from the map, so it never waits behind a slow request. */
+function eventHub(start: string, opts: { watch: boolean; pingMs: number }) {
+  const clients = new Set<ServerResponse>();
+  const send = (frame: string) => {
+    for (const res of clients) {
+      if (res.writableEnded || res.destroyed) clients.delete(res);
+      else res.write(frame);
+    }
+  };
+  const stopWatch = opts.watch
+    ? watchMap(start, (keys: ChangeKey[]) => send(`event: change\ndata: ${JSON.stringify({ keys })}\n\n`))
+    : () => {};
+  const ping = setInterval(() => send(": ping\n\n"), opts.pingMs);
+  ping.unref();
+  let closed = false;
+
+  return {
+    open(req: IncomingMessage, res: ServerResponse, head: boolean): void {
+      res.writeHead(200, {
+        ...BASE_HEADERS,
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      });
+      if (head || closed) {
+        res.end();
+        return;
+      }
+      res.flushHeaders();
+      // Tell EventSource how long to wait before reconnecting, and start the stream.
+      res.write("retry: 2000\n\n");
+      clients.add(res);
+      const drop = () => clients.delete(res);
+      req.on("close", drop);
+      res.on("close", drop);
+      res.on("error", drop);
+    },
+    close(): void {
+      closed = true;
+      stopWatch();
+      clearInterval(ping);
+      for (const res of clients) res.end();
+      clients.clear();
+    },
+  };
+}
+
 /** Listen on HOST:port; resolves with the bound port, rejects with the listen error (e.g. EADDRINUSE). */
 function listenOn(server: Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -177,6 +231,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
   }
   const token = opts.token ?? randomBytes(32).toString("hex");
   let port = 0;
+  let hub: ReturnType<typeof eventHub> | undefined;
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const host = req.headers.host;
@@ -198,6 +253,11 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     if (rawPath === "/api" || rawPath.startsWith("/api/")) {
       if (!sameToken(cookieValue(req, sessionCookie(port)), token)) {
         sendJson(res, 401, { error: 'Missing or wrong session token. Open the URL that "codeloom dashboard" printed.' }, head);
+        return;
+      }
+      if (url.pathname === "/api/events") {
+        if (hub) hub.open(req, res, head);
+        else sendJson(res, 503, { error: "The server is shutting down." }, head);
         return;
       }
       await handleApi(res, opts.start, url, { head });
@@ -247,6 +307,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     });
   });
   port = await choosePort(server, opts.port);
+  hub = eventHub(opts.start, { watch: opts.watch ?? true, pingMs: opts.pingMs ?? PING_MS });
 
   let closed: Promise<void> | undefined;
   return {
@@ -254,6 +315,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     port,
     token,
     close() {
+      hub?.close();
       closed ??= new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
         server.closeAllConnections();
