@@ -1,6 +1,7 @@
 import { Command, CommanderError } from "commander";
 import { runCheck } from "./commands/check.js";
 import { CodeloomError } from "./errors.js";
+import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { runServeCommand } from "./commands/serve.js";
@@ -44,6 +45,17 @@ export function buildProgram(): Command {
       const { output, exitCode } = await runCheck(process.cwd(), opts);
       console.log(output);
       process.exitCode = exitCode;
+    });
+
+  program
+    .command("doctor")
+    .description("Check and repair data files, hooks, the .gitignore line and the MCP entry")
+    .option("--fix", "repair what is safe to repair (never hand-written or committed map files)")
+    .option("--json", "print the report as JSON")
+    .action((opts: { fix?: boolean; json?: boolean }) => {
+      const report = runDoctor(process.cwd(), { fix: opts.fix });
+      console.log(opts.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
+      process.exitCode = report.summary.error > 0 ? 1 : 0;
     });
 
   program
