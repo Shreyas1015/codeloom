@@ -1,5 +1,7 @@
 /** Same-origin JSON fetch for the local codeloom server. The session cookie rides along. */
 
+import type { ApiErrorCode } from "./types";
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -18,11 +20,11 @@ export class SessionError extends ApiError {
   }
 }
 
-/** 409: the map itself is not usable (not indexed yet, or a bad .codeloom file). */
+/** 409: the map itself is not usable (no workspace, not indexed yet, or a bad .codeloom file). */
 export class MapStateError extends ApiError {
   constructor(
     message: string,
-    readonly code: "not-indexed" | "bad-data",
+    readonly code: ApiErrorCode,
   ) {
     super(message, 409);
     this.name = "MapStateError";
@@ -56,6 +58,6 @@ export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> 
   if (res.ok) return (await res.json()) as T;
   const { message, code } = await errorMessage(res);
   if (res.status === 401) throw new SessionError();
-  if (res.status === 409) throw new MapStateError(message, code === "bad-data" ? "bad-data" : "not-indexed");
+  if (res.status === 409) throw new MapStateError(message, code === "bad-data" || code === "no-workspace" ? code : "not-indexed");
   throw new ApiError(message, res.status);
 }
