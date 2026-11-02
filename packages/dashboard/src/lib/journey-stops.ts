@@ -22,7 +22,6 @@ export function numberStops(journey: Pick<JourneyResult, "chains">): Map<string,
 /** Index, within the same chain's stops, of the stop this one was reached from (undefined when the
  * linker did not record one). */
 export function stopFrom(s: StopView): number | undefined {
-  // TODO(from): drop this cast once StopView carries `from?: number` in codeloom's api-types.
-  const from = (s as { from?: number }).from;
+  const { from } = s;
   return typeof from === "number" && Number.isInteger(from) ? from : undefined;
 }
