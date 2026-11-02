@@ -160,6 +160,24 @@ describe("mcp server", () => {
     }
   });
 
+  it("a broken journeys.json is a hand-written file: the tool error says fix it by hand, never delete it", async () => {
+    const client = await connect({ start: demo });
+    const jpath = loadMapState(demo).journeysPath;
+    const original = readFileSync(jpath, "utf8");
+    try {
+      for (const bad of ["{ not json", JSON.stringify({ version: 1, journeys: [{ id: 3 }] })]) {
+        writeFileSync(jpath, bad);
+        const r = (await client.callTool({ name: "workspace_overview", arguments: {} })) as CallToolResult;
+        expect(r.isError).toBe(true);
+        expect(text(r)).toContain("Fix it by hand");
+        expect(text(r)).not.toContain("Delete it");
+        expect(text(r)).not.toContain("delete it");
+      }
+    } finally {
+      writeFileSync(jpath, original);
+    }
+  });
+
   it("an un-indexed folder returns isError with the run-index message", async () => {
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
     const client = await connect({ start: repo });

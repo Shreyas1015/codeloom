@@ -32,7 +32,7 @@ export function loadMapState(start: string): MapState {
   const chainsPath = join(ws.root, CODELOOM_DIR, FILES.chains);
   const journeysPath = join(ws.root, CODELOOM_DIR, FILES.journeys);
   const chainsFile = readJson(chainsPath, ChainsFileSchema);
-  const journeysFile = readJson(journeysPath, JourneysFileSchema);
+  const journeysFile = readJson(journeysPath, JourneysFileSchema, { handWritten: true });
   return {
     ws,
     chains: chainsFile?.chains ?? [],
