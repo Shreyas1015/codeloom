@@ -26,18 +26,20 @@ function openBrowser(url: string): void {
 }
 
 /** `codeloom dashboard`: start the local dashboard server, print its token URL, open the browser unless
- * `open: false`. Ctrl+C (SIGINT) closes the server and exits 0. close() also removes the SIGINT handler. */
+ * `open: false`. Ctrl+C (SIGINT) or SIGTERM closes the server and exits 0. close() also removes the handlers. */
 export async function runDashboard(start: string, opts: { port?: number; open?: boolean }): Promise<DashboardServer> {
   const server = await startDashboardServer({ start, port: opts.port });
-  const onSigint = () => {
+  const signals = ["SIGINT", "SIGTERM"] as const;
+  const onSignal = () => {
+    for (const s of signals) process.off(s, onSignal);
     server.close().finally(() => process.exit(0));
   };
-  process.once("SIGINT", onSigint);
+  for (const s of signals) process.on(s, onSignal);
   const close = server.close.bind(server);
   const wrapped: DashboardServer = {
     ...server,
     close: () => {
-      process.off("SIGINT", onSigint);
+      for (const s of signals) process.off(s, onSignal);
       return close();
     },
   };

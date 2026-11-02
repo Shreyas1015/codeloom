@@ -24,17 +24,41 @@ describe("runDashboard", () => {
   it("prints the URL line and never calls the opener with open: false", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const sigints = process.listenerCount("SIGINT");
+    const sigterms = process.listenerCount("SIGTERM");
     const server = await runDashboard(assetsDir, { port: 0, open: false });
     try {
       expect(log).toHaveBeenCalledWith(`codeloom dashboard: ${server.url}  (Ctrl+C to stop)`);
       expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]{64}$/);
       expect(spawn).not.toHaveBeenCalled();
       expect(process.listenerCount("SIGINT")).toBe(sigints + 1);
+      expect(process.listenerCount("SIGTERM")).toBe(sigterms + 1);
     } finally {
       await server.close();
     }
-    // close() removes the SIGINT handler again.
+    // close() removes the signal handlers again.
     expect(process.listenerCount("SIGINT")).toBe(sigints);
+    expect(process.listenerCount("SIGTERM")).toBe(sigterms);
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)("%s closes the server and exits 0", async (signal) => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const exited = new Promise<number | undefined>((resolve) => {
+      vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        resolve(code);
+      }) as never);
+    });
+    const server = await runDashboard(assetsDir, { port: 0, open: false });
+    const handlers = process.listeners(signal);
+    (handlers.at(-1) as (s: NodeJS.Signals) => void)(signal);
+    expect(await exited).toBe(0);
+    // The port is free again.
+    const { createServer } = await import("node:net");
+    await new Promise<void>((resolve, reject) => {
+      const probe = createServer();
+      probe.once("error", reject);
+      probe.listen(server.port, "127.0.0.1", () => probe.close(() => resolve()));
+    });
+    await server.close();
   });
 
   it("opens the browser by default with the platform opener", async () => {
