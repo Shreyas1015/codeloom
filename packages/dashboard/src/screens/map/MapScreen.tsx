@@ -5,6 +5,7 @@ import { ChevronRight, Layers } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useGraphLevel, useJourney, useJourneys, useOverview } from "@/api/queries";
 import type { GraphFile, GraphLevel, Lane, SearchHit } from "@/api/types";
+import { isBlocking, MapStateScreen } from "@/components/shell/StateBanner";
 import { cn } from "@/lib/utils";
 import type { MapSearch as MapSearchParams } from "@/router";
 import { Inspector } from "./Inspector";
@@ -217,7 +218,13 @@ export function MapScreen() {
           ) : !repo ? (
             overview.isPending ? <Message>Loading the map…</Message> : <Message>No repos in this workspace yet.</Message>
           ) : level.isError ? (
-            <Message alert>{level.error.message}</Message>
+            isBlocking(level.error) ? (
+              <div className="h-full min-h-[520px] overflow-y-auto bg-card px-8">
+                <MapStateScreen error={level.error} />
+              </div>
+            ) : (
+              <Message alert>{level.error.message}</Message>
+            )
           ) : level.isPending ? (
             <Message>Loading the map…</Message>
           ) : items.length === 0 ? (

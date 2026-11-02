@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { useJourneys, useOverview } from "@/api/queries";
 import type { JourneysResponse, Overview } from "@/api/types";
+import { ScreenError } from "@/components/shell/StateBanner";
 import { CountStrip, type Counts } from "@/components/gallery/CountStrip";
 import { Button } from "@/components/ui/button";
 import { ContinueBand } from "./ContinueBand";
@@ -79,9 +80,7 @@ export function HomeScreen() {
       </header>
 
       {error ? (
-        <p role="alert" className="max-w-[70ch] rounded-xl border border-destructive/40 bg-destructive-soft px-5 py-4 text-[13.5px] text-foreground">
-          {error.message || "Something went wrong loading the journeys."}
-        </p>
+        <ScreenError error={error} fallback="Something went wrong loading the journeys." />
       ) : !o || !journeys.data ? (
         <Skeleton />
       ) : (

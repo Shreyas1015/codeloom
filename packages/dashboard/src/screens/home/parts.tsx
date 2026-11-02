@@ -1,6 +1,6 @@
-import { Check, Copy } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { Confidence, JourneyRow, Lane } from "@/api/types";
+import { CopyButton } from "@/components/gallery/CopyCommand";
 import { LANE_NAME } from "@/components/gallery/LaneColumn";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -85,38 +85,6 @@ export function AgentHint({ className, tone = "default" }: { className?: string;
       </span>
       <CopyButton text={NAME_JOURNEYS} />
     </p>
-  );
-}
-
-/** Copies `text`. Says "Copied" in its name and a polite status; when the clipboard is blocked, asks the
- * viewer to select the text instead (keep that text `select-all` next to the button). */
-export function CopyButton({ text, label = "Copy command", className }: { text: string; label?: string; className?: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  async function copy() {
-    clearTimeout(timer.current);
-    try {
-      if (!navigator.clipboard) throw new Error("no clipboard");
-      await navigator.clipboard.writeText(text);
-      setState("copied");
-      timer.current = setTimeout(() => setState("idle"), 2000);
-    } catch {
-      setState("failed");
-    }
-  }
-
-  return (
-    <>
-      <Button type="button" variant="ghost" size="xs" onClick={copy} aria-label={state === "copied" ? "Copied" : label} className={className}>
-        {state === "copied" ? <Check aria-hidden /> : <Copy aria-hidden />}
-        <span aria-hidden>{state === "copied" ? "Copied" : "Copy"}</span>
-      </Button>
-      <span role="status" className={cn("text-xs", state === "failed" ? "text-destructive" : "sr-only")}>
-        {state === "copied" ? "Copied" : state === "failed" ? "Copy failed — select the text" : ""}
-      </span>
-    </>
   );
 }
 

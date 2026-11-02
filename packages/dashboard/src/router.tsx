@@ -1,8 +1,11 @@
-import type { QueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, createRoute, createRouter, Outlet, type RouterHistory } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { SessionError } from "@/api/client";
 import { useMapEvents } from "@/api/events";
 import { useOverview } from "@/api/queries";
 import { Rail } from "@/components/shell/Rail";
+import { isBlocking, MapStateScreen, StateBanners } from "@/components/shell/StateBanner";
 import { HomeRoute } from "@/routes/index";
 import { JourneyRoute } from "@/routes/journey";
 import { MapRoute } from "@/routes/map";
@@ -11,15 +14,39 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
-/** The shell: viridian rail on the left, the screen on the gallery-white ground. */
+/** True once any request came back 401. Sticky: a lost session never comes back without a new link. */
+function useSessionExpired(): boolean {
+  const queryClient = useQueryClient();
+  const [expired, setExpired] = useState(() => queryClient.getQueryCache().getAll().some((q) => q.state.error instanceof SessionError));
+  useEffect(
+    () =>
+      queryClient.getQueryCache().subscribe((e) => {
+        if (e.type === "updated" && e.query.state.error instanceof SessionError) setExpired(true);
+      }),
+    [queryClient],
+  );
+  return expired;
+}
+
+/** The shell: viridian rail on the left, the screen on the gallery-white ground. A blocking state (session
+ * expired, not indexed, no workspace, bad data) replaces the screen; quiet banners sit above it. */
 function Shell() {
-  const { data } = useOverview();
+  const { data, error } = useOverview();
   const { paused } = useMapEvents();
+  const expired = useSessionExpired();
+  const blocking = expired ? new SessionError() : isBlocking(error) ? error : undefined;
   return (
     <div className="flex h-dvh min-h-0 bg-background">
       <Rail overview={data} livePaused={paused} />
       <main className="flex min-w-0 flex-1 flex-col gap-5.5 overflow-y-auto px-9 py-7">
-        <Outlet />
+        {blocking ? (
+          <MapStateScreen error={blocking} />
+        ) : (
+          <>
+            {data && <StateBanners overview={data} />}
+            <Outlet />
+          </>
+        )}
       </main>
     </div>
   );

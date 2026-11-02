@@ -2,6 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
 import { useJourney, useOverview } from "@/api/queries";
+import { ScreenError } from "@/components/shell/StateBanner";
 import { stopLabel } from "@/components/gallery/StopRoundel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { rememberLastJourney } from "@/screens/home/lastJourney";
@@ -84,11 +85,7 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
         </section>
       );
     }
-    return (
-      <p role="alert" className="text-[14px] text-destructive">
-        {error.message}
-      </p>
-    );
+    return <ScreenError error={error} fallback="Something went wrong loading this journey." />;
   }
 
   const m = model!;

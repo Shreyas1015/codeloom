@@ -362,20 +362,22 @@ describe("Home", () => {
       expect(screen.getByText("No named journeys yet.")).toBeInTheDocument();
     });
 
-    it("shows an inline message when the map is not usable", async () => {
+    it("shows the shared not-indexed state when the map is not usable", async () => {
       renderHome({
         "/api/overview": { status: 409, body: { error: "This folder is not indexed yet.", code: "not-indexed" } },
         "/api/journeys": { status: 409, body: { error: "This folder is not indexed yet.", code: "not-indexed" } },
       });
-      expect(await screen.findByRole("alert")).toHaveTextContent("This folder is not indexed yet.");
+      const state = await screen.findByRole("region", { name: /isn't mapped yet/ });
+      expect(state).toHaveTextContent("This folder is not indexed yet.");
+      expect(within(state).getByText("codeloom index")).toBeInTheDocument();
     });
 
-    it("shows an inline message when the session expired", async () => {
+    it("shows the shared session-expired state", async () => {
       renderHome({
         "/api/overview": { status: 401, body: { error: "no session" } },
         "/api/journeys": { status: 401, body: { error: "no session" } },
       });
-      expect(await screen.findByRole("alert")).toHaveTextContent(/session expired/i);
+      expect(await screen.findByRole("region", { name: /session expired/i })).toHaveTextContent("Reopen the dashboard from your terminal");
     });
   });
 });
