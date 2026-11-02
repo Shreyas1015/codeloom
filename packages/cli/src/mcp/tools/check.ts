@@ -210,9 +210,11 @@ export function registerCheckTools(server: McpServer, opts: ServerOptions): void
       title: "Check the map",
       description:
         "The same report as `codeloom check --json`: how many request chains run complete UI → API → DB, which " +
-        "miss the DB step or break between UI and API, unresolved calls, routes no UI calls, and guessed links.",
+        "miss the DB step or break between UI and API, unresolved calls, routes no UI calls, and guessed links. " +
+        "`traces: true` adds the runtime trace check (`codeloom check --traces`): it compares the map with the " +
+        "workspace's `traces` source in codeloom.workspace.json, an OTLP file or a Tempo URL, so it may call the " +
+        "user's own Tempo server. An unreachable source is reported as skipped.",
       inputSchema: {
-        // Accepted now so agents can pass it; ignored until runtime-trace comparison lands (Plan 2b Task 9).
         traces: z.boolean().default(false),
       },
     },

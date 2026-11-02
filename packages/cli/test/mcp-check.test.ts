@@ -104,6 +104,14 @@ describe("check_chains", () => {
     expect(plain.traces).toBeUndefined();
     expect(await sc("check_chains", { traces: true })).toEqual({ ...plain, traces: { skipped: "no trace source in codeloom.workspace.json" } });
   });
+
+  it("its description says traces: true adds the runtime trace check and may call the user's Tempo URL", async () => {
+    const { tools } = await client.listTools();
+    const d = tools.find((t) => t.name === "check_chains")!.description!;
+    expect(d).toContain("traces: true");
+    expect(d).toMatch(/runtime trace check/);
+    expect(d).toMatch(/Tempo/);
+  });
 });
 
 describe("impact_of_diff", () => {
