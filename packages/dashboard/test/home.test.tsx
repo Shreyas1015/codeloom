@@ -97,7 +97,7 @@ function renderHome(bodies: Bodies = { "/api/overview": { body: overview }, "/ap
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(<App router={router} queryClient={queryClient} />);
-  return router;
+  return Object.assign(router, { queryClient });
 }
 
 async function list() {
@@ -174,6 +174,24 @@ describe("Home", () => {
     await list();
     await userEvent.selectOptions(screen.getByLabelText(label), value);
     expect(await names()).toEqual(expected);
+  });
+
+  it("names every lane in the stops column header", async () => {
+    renderHome();
+    const l = await list();
+    expect(l.parentElement).toHaveTextContent("Stops · UI · API · Code · DB · Queue");
+  });
+
+  it("resets a filter to All when its value disappears after a live update", async () => {
+    const { queryClient } = renderHome();
+    await list();
+    await userEvent.selectOptions(screen.getByLabelText("Area"), "Customers");
+    expect(await names()).toEqual(["Customer signs up"]);
+    act(() => {
+      queryClient.setQueryData(["journeys"], { ...journeys, journeys: journeys.journeys.filter((j) => j.area !== "Customers") });
+    });
+    await waitFor(() => expect(screen.getByLabelText("Area")).toHaveValue(""));
+    expect(await names()).toEqual(["Admin voids an invoice", "Invoice is emailed"]);
   });
 
   it("searches over name, area, note and tables", async () => {
@@ -256,6 +274,13 @@ describe("Home", () => {
       expect(within(band).getByRole("link", { name: /Open journey/ })).toHaveAttribute("href", "/journeys/j_signup");
     });
 
+    it("says 'Open chain' for an unnamed chain", async () => {
+      localStorage.setItem(lastJourneyKey("demo-shop"), "ch_aaa");
+      renderHome();
+      const band = await screen.findByRole("region", { name: /Continue/ });
+      expect(within(band).getByRole("link", { name: /Open chain/ })).toHaveAttribute("href", "/journeys/ch_aaa");
+    });
+
     it("is hidden when that journey no longer exists", async () => {
       localStorage.setItem(lastJourneyKey("demo-shop"), "j_gone");
       renderHome();
@@ -291,7 +316,22 @@ describe("Home", () => {
         fireEvent.click(within(section).getByRole("button", { name: /Copy/ }));
       });
       expect(writeText).toHaveBeenCalledWith("/codeloom:name-journeys");
-      expect(await within(section).findByText("Copied")).toBeInTheDocument();
+      expect(await within(section).findByRole("button", { name: "Copied" })).toBeInTheDocument();
+      expect(within(section).getByRole("status")).toHaveTextContent("Copied");
+    });
+
+    it("asks to select the text when the clipboard fails", async () => {
+      const writeText = vi.fn(async () => {
+        throw new Error("denied");
+      });
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      renderHome();
+      const section = await screen.findByRole("region", { name: /Unnamed chains/ });
+      await act(async () => {
+        fireEvent.click(within(section).getByRole("button", { name: /Copy/ }));
+      });
+      expect(within(section).getByRole("status")).toHaveTextContent("Copy failed — select the text");
+      expect(within(section).getByText("/codeloom:name-journeys")).toHaveClass("select-all");
     });
 
     it("is hidden when every chain is named", async () => {

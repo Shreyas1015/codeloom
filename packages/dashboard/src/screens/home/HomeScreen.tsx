@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
-import { SessionError } from "@/api/client";
 import { useJourneys, useOverview } from "@/api/queries";
 import type { JourneysResponse, Overview } from "@/api/types";
 import { CountStrip, type Counts } from "@/components/gallery/CountStrip";
@@ -16,12 +15,6 @@ const plural = (n: number, one: string, many = `${one}s`) => `${fmt(n)} ${n === 
 function counts(o: Overview): Counts {
   const sum = (k: "files" | "pages" | "routes" | "tables" | "queues") => o.repos.reduce((n, r) => n + r[k], 0);
   return { files: sum("files"), pages: sum("pages"), routes: sum("routes"), tables: sum("tables"), queues: sum("queues"), journeys: o.journeys.total };
-}
-
-/** Guards against a response that is not the journeys shape (an older server, a test stub). */
-function asJourneys(d: unknown): JourneysResponse {
-  const o = (d ?? {}) as Partial<JourneysResponse>;
-  return { journeys: Array.isArray(o.journeys) ? o.journeys : [], unnamedChains: Array.isArray(o.unnamedChains) ? o.unnamedChains : [] };
 }
 
 function Skeleton() {
@@ -87,12 +80,12 @@ export function HomeScreen() {
 
       {error ? (
         <p role="alert" className="max-w-[70ch] rounded-xl border border-destructive/40 bg-destructive-soft px-5 py-4 text-[13.5px] text-foreground">
-          {error instanceof SessionError ? error.message : error.message || "Something went wrong loading the journeys."}
+          {error.message || "Something went wrong loading the journeys."}
         </p>
       ) : !o || !journeys.data ? (
         <Skeleton />
       ) : (
-        <HomeBody overview={o} data={asJourneys(journeys.data)} />
+        <HomeBody overview={o} data={journeys.data} />
       )}
     </section>
   );

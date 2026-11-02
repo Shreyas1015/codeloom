@@ -78,31 +78,45 @@ export function CompleteMark({ complete }: { complete: boolean }) {
 
 /** "Ask your agent: /codeloom:name-journeys" with a copy button. */
 export function AgentHint({ className, tone = "default" }: { className?: string; tone?: "default" | "quiet" }) {
-  const [copied, setCopied] = useState(false);
+  return (
+    <p className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px]", tone === "quiet" && "text-muted-foreground", className)}>
+      <span>
+        Ask your agent: <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12.5px] text-foreground select-all">{NAME_JOURNEYS}</code>
+      </span>
+      <CopyButton text={NAME_JOURNEYS} />
+    </p>
+  );
+}
+
+/** Copies `text`. Says "Copied" in its name and a polite status; when the clipboard is blocked, asks the
+ * viewer to select the text instead (keep that text `select-all` next to the button). */
+export function CopyButton({ text, label = "Copy command", className }: { text: string; label?: string; className?: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   async function copy() {
+    clearTimeout(timer.current);
     try {
-      await navigator.clipboard.writeText(NAME_JOURNEYS);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 2000);
+      if (!navigator.clipboard) throw new Error("no clipboard");
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+      timer.current = setTimeout(() => setState("idle"), 2000);
     } catch {
-      setCopied(false);
+      setState("failed");
     }
   }
 
   return (
-    <p className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px]", tone === "quiet" && "text-muted-foreground", className)}>
-      <span>
-        Ask your agent: <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12.5px] text-foreground">{NAME_JOURNEYS}</code>
-      </span>
-      <Button type="button" variant="ghost" size="xs" onClick={copy} aria-label="Copy command">
-        {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-        <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
+    <>
+      <Button type="button" variant="ghost" size="xs" onClick={copy} aria-label={state === "copied" ? "Copied" : label} className={className}>
+        {state === "copied" ? <Check aria-hidden /> : <Copy aria-hidden />}
+        <span aria-hidden>{state === "copied" ? "Copied" : "Copy"}</span>
       </Button>
-    </p>
+      <span role="status" className={cn("text-xs", state === "failed" ? "text-destructive" : "sr-only")}>
+        {state === "copied" ? "Copied" : state === "failed" ? "Copy failed — select the text" : ""}
+      </span>
+    </>
   );
 }
 
