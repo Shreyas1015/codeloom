@@ -7,5 +7,5 @@ export default defineConfig({
       "@codeloom/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url)),
     },
   },
-  test: { include: ["test/**/*.test.ts"], setupFiles: ["test/setup.ts"], testTimeout: 60_000 },
+  test: { include: ["test/**/*.test.ts"], setupFiles: ["test/setup.ts"], testTimeout: 60_000, hookTimeout: 120_000 },
 });
