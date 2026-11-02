@@ -25,6 +25,12 @@ const MAX_BYTES = 1_000_000;
 // a different endpoints/structure format) so stale cache entries get invalidated.
 export const CACHE_FORMAT = 19;
 
+/** The key a fingerprints cache must carry to be reused: CACHE_FORMAT, the codeloom version and the
+ * repo's dependency context (loadContext(...).key). A cache with any other key is discarded. */
+export function cacheContextKey(depsKey: string, codeloomVersion: string = VERSION): string {
+  return contentHash([`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, `deps:${depsKey}`].join(","));
+}
+
 /** The cache is disposable: a corrupt, wrong-shape or old-format file is discarded and rebuilt. */
 function readCache(path: string): Fingerprints | null {
   try {
@@ -91,10 +97,7 @@ export async function indexRepo(
   const config = readJson(join(dir, FILES.config), RepoConfigSchema) ?? defaultRepoConfig();
   const files = listFiles(repoAbs, config.ignore);
   const ctx = loadContext(repoAbs, files);
-  const codeloomVersion = opts?.codeloomVersion ?? VERSION;
-  const contextKey = contentHash(
-    [`format:${CACHE_FORMAT}`, `codeloom:${codeloomVersion}`, `deps:${ctx.key}`].join(","),
-  );
+  const contextKey = cacheContextKey(ctx.key, opts?.codeloomVersion ?? VERSION);
   const cachePath = join(dir, FILES.fingerprints);
   const old = readCache(cachePath);
   const oldFiles = old && old.contextKey === contextKey ? old.files : {};

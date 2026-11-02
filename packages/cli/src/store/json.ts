@@ -9,7 +9,11 @@ export interface ReadJsonOptions {
   handWritten?: boolean;
 }
 
-/** Read and validate a JSON file. Missing file → null. Bad JSON or bad shape → CodeloomError (exit 2). */
+/** The last line of every readJson error: where to look for a full health check. */
+export const DOCTOR_HINT = `Run "codeloom doctor" for a full check.`;
+
+/** Read and validate a JSON file. Missing file → null. Bad JSON or bad shape → CodeloomError (exit 2),
+ * whose message ends with DOCTOR_HINT on its own line. */
 export function readJson<T>(path: string, schema: z.ZodType<T>, opts: ReadJsonOptions = {}): T | null {
   if (!existsSync(path)) return null;
   const handFix = `Fix it by hand: codeloom never rebuilds this file, and it holds work that cannot be regenerated.`;
@@ -17,9 +21,9 @@ export function readJson<T>(path: string, schema: z.ZodType<T>, opts: ReadJsonOp
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    throw dataError(opts.handWritten
+    throw dataError((opts.handWritten
       ? `${path} is not valid JSON. ${handFix}`
-      : `${path} is not valid JSON. Delete it and run "codeloom index" again to rebuild it.`);
+      : `${path} is not valid JSON. Delete it and run "codeloom index" again to rebuild it.`) + `\n${DOCTOR_HINT}`);
   }
   const result = schema.safeParse(raw);
   if (!result.success) {
@@ -29,7 +33,7 @@ export function readJson<T>(path: string, schema: z.ZodType<T>, opts: ReadJsonOp
     throw dataError(
       `${path} has an unexpected shape:\n${lines.join("\n")}\n` + (opts.handWritten
         ? handFix
-        : `Fix the file by hand, or delete it and run "codeloom index" again.`),
+        : `Fix the file by hand, or delete it and run "codeloom index" again.`) + `\n${DOCTOR_HINT}`,
     );
   }
   return result.data;

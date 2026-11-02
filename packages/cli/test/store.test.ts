@@ -34,6 +34,22 @@ describe("store", () => {
     writeFileSync(file, "{ nope");
     expect(() => readJson(file, RepoConfigSchema)).toThrow(/not valid JSON/);
   });
+
+  it("ends every error with a pointer to codeloom doctor", () => {
+    const file = join(tmp(), "config.json");
+    for (const text of ["{ nope", JSON.stringify({ version: 1 })]) {
+      writeFileSync(file, text);
+      for (const handWritten of [false, true]) {
+        let message = "";
+        try {
+          readJson(file, RepoConfigSchema, { handWritten });
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message.split("\n").at(-1)).toBe('Run "codeloom doctor" for a full check.');
+      }
+    }
+  });
 });
 
 describe("writeJsonIfChanged", () => {

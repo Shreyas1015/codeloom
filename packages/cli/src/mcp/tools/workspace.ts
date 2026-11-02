@@ -83,31 +83,42 @@ function diffChangedFiles(repoAbs: string, from: string, to: string): string[] {
   }
 }
 
-/** index_status: per repo, the indexed commit (from the git-ignored fingerprints cache), whether it
+export interface RepoIndexStatus {
+  id: string;
+  head: string;
+  indexedCommit: string | null;
+  stale: boolean;
+  changedFiles: string[];
+  truncated: boolean;
+}
+
+/** One repo's index status: the indexed commit (from the git-ignored fingerprints cache), whether it
  * is stale (HEAD moved since indexing, or the working tree has uncommitted changes to indexed
- * files), and which indexed files changed (capped at 50). */
+ * files), and which indexed files changed (capped at 50). Shared by index_status and `codeloom doctor`. */
+export function repoIndexStatus(repoAbs: string, id: string): RepoIndexStatus {
+  const head = gitHead(repoAbs);
+  const indexedCommit = readFingerprints(repoAbs)?.gitCommitHash ?? null;
+  const indexable = new Set(listFiles(repoAbs));
+  const statusFiles = statusChangedFiles(repoAbs).filter((f) => indexable.has(f));
+  const diffFiles =
+    indexedCommit && indexedCommit !== head
+      ? diffChangedFiles(repoAbs, indexedCommit, head).filter((f) => indexable.has(f))
+      : [];
+  const changed = [...new Set([...diffFiles, ...statusFiles])].sort(compare);
+  return {
+    id,
+    head,
+    indexedCommit,
+    stale: indexedCommit !== head || statusFiles.length > 0,
+    changedFiles: changed.slice(0, 50),
+    truncated: changed.length > 50,
+  };
+}
+
+/** index_status: repoIndexStatus for every repo in the workspace, sorted by id. */
 export function indexStatus(start: string): Record<string, unknown> {
   const ws = loadWorkspace(start);
-  const repos = ws.repos.map((ref) => {
-    const abs = join(ws.root, ref.path);
-    const head = gitHead(abs);
-    const indexedCommit = readFingerprints(abs)?.gitCommitHash ?? null;
-    const indexable = new Set(listFiles(abs));
-    const statusFiles = statusChangedFiles(abs).filter((f) => indexable.has(f));
-    const diffFiles =
-      indexedCommit && indexedCommit !== head
-        ? diffChangedFiles(abs, indexedCommit, head).filter((f) => indexable.has(f))
-        : [];
-    const changed = [...new Set([...diffFiles, ...statusFiles])].sort(compare);
-    return {
-      id: ref.id,
-      head,
-      indexedCommit,
-      stale: indexedCommit !== head || statusFiles.length > 0,
-      changedFiles: changed.slice(0, 50),
-      truncated: changed.length > 50,
-    };
-  });
+  const repos = ws.repos.map((ref) => repoIndexStatus(join(ws.root, ref.path), ref.id));
   repos.sort((a, b) => compare(a.id, b.id));
   return { repos };
 }
