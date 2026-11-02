@@ -47,6 +47,7 @@ const JourneysResponse = z.strictObject({ journeys: z.array(JourneyRow), unnamed
 const StopView = z.strictObject({
   lane, kind: z.enum(["page", "call", "route", "handler", "function", "db", "publish", "consume"]), repo: z.string(), file: z.string(),
   line: z.number(), symbol: z.string(), label: z.string().optional(), op: z.string().optional(), confidence, reason: z.string().optional(), ref: z.string().optional(),
+  from: z.number().int().nonnegative().optional(),
 });
 const Unresolved = z.strictObject({ at: z.strictObject({ file: z.string(), line: z.number(), symbol: z.string(), repo: z.string() }), reason: z.string() });
 const ChainView = z.strictObject({

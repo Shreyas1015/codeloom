@@ -79,8 +79,11 @@ describe("list_chains", () => {
     expect(create).toMatchObject({ routeKey: "api:POST /api/customers", confidence: "exact", complete: true, journeys: [SIGNUP] });
     expect(create.stops[3]).toEqual({
       lane: "api", kind: "route", repo: "api", file: "start/routes.ts", line: 7, symbol: "CustomersController.store",
-      label: "POST /api/customers", op: "POST", confidence: "exact", ref: "api::file:start/routes.ts",
+      label: "POST /api/customers", op: "POST", confidence: "exact", ref: "api::file:start/routes.ts", from: 2,
     });
+    // every stop but the first carries `from`, the index of the stop it was reached from
+    expect(create.stops[0].from).toBeUndefined();
+    expect(create.stops.map((s: { kind: string; from?: number }) => s.from).slice(1).every((f: number | undefined, i: number) => f !== undefined && f <= i)).toBe(true);
     const viaDi = create.stops.find((s: { reason?: string }) => s.reason === "via di");
     expect(viaDi).toBeDefined();
     expect(text(await call("list_chains"))).toBe(JSON.stringify(r, null, 2));
@@ -135,6 +138,11 @@ describe("get_journey", () => {
     expect(r.queues).toEqual([]);
     expect(r.unresolved.length).toBeGreaterThan(0);
     expect(r.unresolved[0].chainId).toBe(createId);
+    // a chain's stops carry `from` (an index into that chain's stops); merged lane lists do not
+    expect(r.chains[0].stops[1].from).toBe(0);
+    for (const lane of Object.values(r.lanes) as Array<Array<Record<string, unknown>>>) {
+      for (const s of lane) expect(s).not.toHaveProperty("from");
+    }
   });
 
   it("dedupes stops shared by two chains", async () => {

@@ -12,8 +12,10 @@ import { chainsTouchingNode, findNode, formatNodeRef, loadMapState, type MapStat
 // ---- shared views ------------------------------------------------------------------------------
 
 /** A chain stop as tools show it: the hop flattened to confidence/reason, plus `ref` ("repo::nodeId") when
- * the stop sits on a graph node, ready for get_node / explain_context. */
-function stopView(s: ChainStop): Record<string, unknown> {
+ * the stop sits on a graph node, ready for get_node / explain_context, and `from` (the index, in the same
+ * chain's stops, of the stop it was reached from). `withFrom: false` for lists that merge several chains'
+ * stops (get_journey's lanes), where an index into one chain would mislead. */
+function stopView(s: ChainStop, withFrom = true): Record<string, unknown> {
   return {
     lane: s.lane, kind: s.kind, repo: s.repo, file: s.file, line: s.line, symbol: s.symbol,
     ...(s.label !== undefined ? { label: s.label } : {}),
@@ -21,6 +23,7 @@ function stopView(s: ChainStop): Record<string, unknown> {
     confidence: s.hop.confidence,
     ...(s.hop.reason !== undefined ? { reason: s.hop.reason } : {}),
     ...(s.nodeId !== undefined ? { ref: formatNodeRef({ repo: s.repo, nodeId: s.nodeId }) } : {}),
+    ...(withFrom && s.from !== undefined ? { from: s.from } : {}),
   };
 }
 
@@ -40,7 +43,7 @@ function journeyIndex(state: MapState): Map<string, string[]> {
 function chainView(c: Chain, journeys: Map<string, string[]>): Record<string, unknown> {
   return {
     id: c.id, name: c.name, entry: c.entry, routeKey: c.routeKey, confidence: c.confidence, complete: c.complete,
-    journeys: journeys.get(c.id) ?? [], stops: c.stops.map(stopView), unresolved: c.unresolved,
+    journeys: journeys.get(c.id) ?? [], stops: c.stops.map((s) => stopView(s)), unresolved: c.unresolved,
   };
 }
 
@@ -115,7 +118,7 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
       const key = JSON.stringify([s.lane, s.repo, s.file, s.line, s.symbol]);
       if (seen.has(key)) continue;
       seen.add(key);
-      lanes[s.lane]!.push(stopView(s));
+      lanes[s.lane]!.push(stopView(s, false));
     }
   }
   const journeys = journeyIndex(state);
@@ -265,7 +268,7 @@ export function traceRoute(start: string, from: string): Record<string, unknown>
   }
   return {
     from,
-    matches: hits.slice(0, TRACE_LIMIT).map((c) => ({ chainId: c.id, name: c.name, stops: c.stops.map(stopView) })),
+    matches: hits.slice(0, TRACE_LIMIT).map((c) => ({ chainId: c.id, name: c.name, stops: c.stops.map((s) => stopView(s)) })),
     truncated: hits.length > TRACE_LIMIT,
   };
 }

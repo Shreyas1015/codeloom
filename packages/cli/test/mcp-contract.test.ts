@@ -47,6 +47,7 @@ const StopView = z
     confidence: ConfidenceSchema,
     reason: str.optional(),
     ref: str.regex(/^[^:]+::.+$/).optional(),
+    from: int.nonnegative().optional(),
   })
   .strict();
 
