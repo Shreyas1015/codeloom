@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { ServerResponse } from "node:http";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
@@ -338,11 +338,16 @@ export function readCode(start: string, url: URL): CodeResponse {
   const outside = new HttpError(400, `Bad file "${file}": it is outside repo "${repoId}".`);
   const inside = (base: string, p: string) => {
     const rel = relative(base, p);
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
   };
   if (isAbsolute(file) || file.includes("\0")) throw outside;
   const abs = resolve(root, file);
   if (!inside(root, abs)) throw outside;
+  // Never show git internals or env files, even though they sit inside the repo.
+  const segments = relative(root, abs).split(sep);
+  if (segments.includes(".git") || /^\.env(\..*)?$/.test(segments[segments.length - 1]!)) {
+    throw new HttpError(400, `Bad file "${file}": codeloom does not show git internals or .env files.`);
+  }
   let real: string;
   try {
     real = realpathSync(abs);

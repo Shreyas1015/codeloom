@@ -297,6 +297,18 @@ describe("dashboard JSON API on demo-shop", () => {
     await fail("/api/code?repo=api&file=start/routes.ts&start=9999", 400);
   });
 
+  it("/api/code never serves git internals or env files, but allows names that merely start with ..", async () => {
+    writeFileSync(join(demo, "api", ".env"), "SECRET=1\n");
+    writeFileSync(join(demo, "api", ".env.local"), "SECRET=1\n");
+    writeFileSync(join(demo, "api", "..notes.ts"), "export const n = 1;\n");
+    await fail("/api/code?repo=api&file=.git/config", 400);
+    await fail("/api/code?repo=api&file=start/../.git/HEAD", 400);
+    await fail("/api/code?repo=api&file=.env", 400);
+    await fail("/api/code?repo=api&file=.env.local", 400);
+    const c = await ok("/api/code?repo=api&file=..notes.ts", CodeResponse);
+    expect(c.text).toContain("export const n");
+  });
+
   it("no endpoint accepts POST, PUT or DELETE (405)", async () => {
     const paths = [
       "/api/overview", "/api/journeys", `/api/journeys/${JOURNEY_ID}`, "/api/chains", "/api/graph?repo=api",
