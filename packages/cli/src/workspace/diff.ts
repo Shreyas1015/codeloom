@@ -2,8 +2,8 @@ import { dataError } from "../errors.js";
 import { compare } from "../util.js";
 import { git } from "./git.js";
 
-/** A changed file: repo-relative posix path, and the changed line ranges in the NEW file (inclusive), or
- * "all" for a new / untracked / deleted / renamed / binary file. */
+/** A changed file: repo-relative posix path, and the changed line ranges (inclusive) on the side the caller
+ * asked for, or "all" for a new / untracked / deleted / renamed (old and new path) / binary / mode-only file. */
 export interface ChangedFile {
   file: string;
   lines: Array<[number, number]> | "all";
@@ -43,15 +43,6 @@ function rangeRevs(range: string): { revs: string[]; spec: string } {
   return { revs, spec };
 }
 
-function resolves(repoAbs: string, rev: string): boolean {
-  try {
-    git(repoAbs, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Undo git's C-style quoting of a path ("a/tab\there.ts" with the quotes). Unquoted input is returned as is. */
 function unquote(s: string): string {
   if (!s.startsWith('"') || !s.endsWith('"') || s.length < 2) return s;
@@ -78,93 +69,160 @@ function unquote(s: string): string {
 
 /** "a/x" or "b/x" (possibly quoted) from a ---/+++ line → "x"; "/dev/null" → undefined. */
 function stripPrefix(raw: string): string | undefined {
-  // git ends an unquoted name that holds a space with a TAB, so the line stays unambiguous.
-  const p = raw.startsWith('"') ? unquote(raw) : raw.replace(/\t$/, "");
+  // git ends a name that holds a space with a TAB (after the closing quote, if quoted), so the line stays
+  // unambiguous: strip it before unquoting.
+  const p = unquote(raw.replace(/\t$/, ""));
   if (p === "/dev/null") return undefined;
   return p.startsWith("a/") || p.startsWith("b/") ? p.slice(2) : p;
 }
 
-interface Section {
-  path?: string;
-  oldPath?: string;
-  all: boolean;
-  /** After the first hunk header every line is content ("--- x" may be a removed "-- x"), never a header. */
-  inHunks: boolean;
-  ranges: Array<[number, number]>;
-}
+/** Which side of each hunk to report: "old" = line numbers in the base version, "new" = in the head /
+ * working-tree version. */
+export type DiffSide = "old" | "new";
 
-/** Parse `git diff -U0` output into per-file changes. A file's path is the NEW path (`+++ b/…`,
- * `rename to …`), else the old one for a deletion. */
-function parsePatch(out: string): ChangedFile[] {
-  const sections: Section[] = [];
-  let cur: Section | undefined;
+/** Parse `git diff -U0` output into hunk ranges per modified path (the `+++` path, else the `---` one).
+ * Only hunks are taken from the patch; which paths changed, and how, comes from `--raw`. */
+function parseHunks(out: string, side: DiffSide): Map<string, Array<[number, number]>> {
+  const hunks = new Map<string, Array<[number, number]>>();
+  let path: string | undefined;
+  let ranges: Array<[number, number]> | undefined;
+  /** After the first hunk header every line is content ("--- x" may be a removed "-- x"), never a header. */
+  let inHunks = false;
   for (const line of out.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      cur = { all: false, inHunks: false, ranges: [] };
-      sections.push(cur);
-      const sym = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
-      if (sym && sym[1] === sym[2]) cur.oldPath = sym[1];
+      path = undefined;
+      ranges = undefined;
+      inHunks = false;
       continue;
     }
-    if (!cur) continue;
     if (line.startsWith("@@ ")) {
-      cur.inHunks = true;
-      const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-      if (h) {
-        const c = Number(h[1]);
-        const d = h[2] === undefined ? 1 : Number(h[2]);
-        // d = 0: a pure deletion; git reports the line BEFORE it (c), so the gap sits at c (min 1).
-        cur.ranges.push(d === 0 ? [Math.max(c, 1), Math.max(c, 1)] : [c, c + d - 1]);
+      inHunks = true;
+      const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      if (!h || path === undefined) continue;
+      const c = Number(side === "old" ? h[1] : h[3]);
+      const dRaw = side === "old" ? h[2] : h[4];
+      const d = dRaw === undefined ? 1 : Number(dRaw);
+      if (!ranges) {
+        ranges = [];
+        hunks.set(path, ranges);
       }
+      // d = 0: nothing on this side; git reports the line BEFORE the gap (c), so the gap sits at c (min 1).
+      ranges.push(d === 0 ? [Math.max(c, 1), Math.max(c, 1)] : [c, c + d - 1]);
       continue;
     }
-    if (cur.inHunks) continue;
-    if (line.startsWith("new file mode") || line.startsWith("deleted file mode") || line.startsWith("Binary files ")) {
-      cur.all = true;
-    } else if (line.startsWith("rename to ")) {
-      cur.path = unquote(line.slice("rename to ".length));
-      cur.all = true;
-    } else if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
-      cur.all = true;
-    } else if (line.startsWith("copy to ")) {
-      cur.path = unquote(line.slice("copy to ".length));
-    } else if (line.startsWith("--- ")) {
-      cur.oldPath = stripPrefix(line.slice(4)) ?? cur.oldPath;
+    if (inHunks) continue;
+    if (line.startsWith("--- ")) {
+      path = stripPrefix(line.slice(4)) ?? path;
     } else if (line.startsWith("+++ ")) {
-      const p = stripPrefix(line.slice(4));
-      if (p !== undefined) cur.path = p;
+      path = stripPrefix(line.slice(4)) ?? path;
     }
   }
-  const files: ChangedFile[] = [];
-  for (const s of sections) {
-    const file = s.path ?? s.oldPath;
-    if (file === undefined) continue;
-    if (s.all) files.push({ file, lines: "all" });
-    else if (s.ranges.length > 0) files.push({ file, lines: s.ranges });
-    // else: a mode-only change: no lines changed.
-  }
-  return files;
+  return hunks;
 }
 
-/** Changed files and line ranges in one repo folder (paths relative to it, posix).
- * range undefined → working tree vs HEAD (staged + unstaged) plus untracked files;
- * "base..head" (or "base...head") → that diff; "base" alone → base..HEAD.
+/** Parse `git diff --raw -z` into { status letter, paths } entries (a rename or copy carries old and new). */
+function parseRaw(out: string): Array<{ status: string; paths: string[] }> {
+  const parts = out.split("\0");
+  const entries: Array<{ status: string; paths: string[] }> = [];
+  for (let i = 0; i < parts.length; i++) {
+    const meta = parts[i]!;
+    if (!meta.startsWith(":")) continue;
+    const status = meta.split(" ").pop()!.charAt(0);
+    const n = status === "R" || status === "C" ? 2 : 1;
+    entries.push({ status, paths: parts.slice(i + 1, i + 1 + n) });
+    i += n;
+  }
+  return entries;
+}
+
+const BIG = { maxBuffer: 256 * 1024 * 1024 };
+
+/** The changed files between `revs` (one rev = vs the working tree, two = commit vs commit). The list of
+ * paths comes from `--raw -z`, so binary, mode-only and type changes are never lost; the `-U0` patch only
+ * supplies line ranges. Any path that is added, deleted, renamed (both paths), or has no hunks → "all". */
+function diffFiles(repoAbs: string, revs: string[], side: DiffSide): ChangedFile[] {
+  const raw = parseRaw(git(repoAbs, ["diff", "--raw", "-z", "--no-abbrev", "-M", "--relative", "--end-of-options", ...revs], BIG));
+  const hunks = parseHunks(git(repoAbs, [...DIFF_OPTS, "--end-of-options", ...revs], BIG), side);
+  const files = new Map<string, ChangedFile>();
+  for (const { status, paths } of raw) {
+    for (const file of paths) {
+      const ranges = status === "M" ? hunks.get(file) : undefined;
+      files.set(file, ranges ? { file, lines: ranges } : { file, lines: "all" });
+    }
+  }
+  return [...files.values()];
+}
+
+/** Add untracked files (not git-ignored) as "all", skipping any path already listed. */
+function addUntracked(repoAbs: string, files: ChangedFile[]): void {
+  const untracked = git(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"], { maxBuffer: 64 * 1024 * 1024 })
+    .split("\0")
+    .filter(Boolean);
+  // A path deleted since `base` but present again as an untracked file is listed by both.
+  const seen = new Set(files.map((f) => f.file));
+  for (const file of untracked) if (!seen.has(file)) files.push({ file, lines: "all" });
+}
+
+const sortFiles = (files: ChangedFile[]) => files.sort((a, b) => compare(a.file, b.file));
+
+/** True when `dir` is inside a git work tree. */
+export function isGitRepo(dir: string): boolean {
+  try {
+    return git(dir, ["rev-parse", "--is-inside-work-tree"]).trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** The full commit id `rev` names in this repo, or undefined when git cannot resolve it to a commit. */
+export function resolveCommit(repoAbs: string, rev: string): string | undefined {
+  if (rev === "" || rev.startsWith("-")) return undefined;
+  try {
+    return git(repoAbs, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The commits a range compares: "base..head" → (base, head); "base...head" → (merge-base, head);
+ * "base" alone → (base, HEAD). Option-like or unresolvable → dataError (exit 2). */
+export function resolveRange(repoAbs: string, range: string): { base: string; head: string } {
+  const { revs } = rangeRevs(range);
+  const shas = revs.map((r) => resolveCommit(repoAbs, r));
+  const bad = shas.findIndex((s) => s === undefined);
+  if (bad !== -1) throw dataError(`Bad range "${range}": git cannot resolve "${revs[bad]}" in ${repoAbs}.`);
+  const head = shas.length === 2 ? shas[1]! : resolveCommit(repoAbs, "HEAD");
+  if (head === undefined) throw dataError(`Bad range "${range}": the repo at ${repoAbs} has no HEAD commit.`);
+  let base = shas[0]!;
+  if (range.includes("...")) base = git(repoAbs, ["merge-base", "--end-of-options", base, head]).trim();
+  return { base, head };
+}
+
+/** Changed files and line ranges in one repo folder (paths relative to it, posix), with line numbers in
+ * the NEW version (head / working tree). range undefined → working tree vs HEAD (staged + unstaged) plus
+ * untracked files; "base..head" (or "base...head") → that diff; "base" alone → base..HEAD.
  * A range that is option-like or that git cannot resolve → dataError (exit 2). Sorted by file. */
 export function changedLines(repoAbs: string, range?: string): ChangedFile[] {
-  let files: ChangedFile[];
   if (range === undefined) {
-    const base = resolves(repoAbs, "HEAD") ? "HEAD" : EMPTY_TREE;
-    files = parsePatch(git(repoAbs, [...DIFF_OPTS, "--end-of-options", base], { maxBuffer: 256 * 1024 * 1024 }));
-    const untracked = git(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"], { maxBuffer: 64 * 1024 * 1024 })
-      .split("\0")
-      .filter(Boolean);
-    const seen = new Set(files.map((f) => f.file));
-    for (const file of untracked) if (!seen.has(file)) files.push({ file, lines: "all" });
-  } else {
-    const { revs, spec } = rangeRevs(range);
-    const bad = revs.find((r) => !resolves(repoAbs, r));
-    if (bad !== undefined) throw dataError(`Bad range "${range}": git cannot resolve "${bad}" in ${repoAbs}.`);
-    files = parsePatch(git(repoAbs, [...DIFF_OPTS, "--end-of-options", spec], { maxBuffer: 256 * 1024 * 1024 }));
+    const files = diffFiles(repoAbs, [resolveCommit(repoAbs, "HEAD") ? "HEAD" : EMPTY_TREE], "new");
+    addUntracked(repoAbs, files);
+    return sortFiles(files);
   }
-  return files.sort((a, b) => compare(a.file, b.file));
+  const { revs, spec } = rangeRevs(range);
+  const bad = revs.find((r) => resolveCommit(repoAbs, r) === undefined);
+  if (bad !== undefined) throw dataError(`Bad range "${range}": git cannot resolve "${bad}" in ${repoAbs}.`);
+  return sortFiles(diffFiles(repoAbs, [spec], "new"));
 }
+
+/** Changed files with line ranges in the BASE version (the old side of each hunk): the line space of a
+ * map indexed at `base`. head undefined → `base` vs the working tree (commits since base + staged +
+ * unstaged) plus untracked files; else `base` vs `head`. `base` / `head` must be commit ids (or the empty
+ * tree). An insertion after line a is reported as [max(a,1), max(a,1)]. Sorted by file. */
+export function changedLinesAtBase(repoAbs: string, base: string, head?: string): ChangedFile[] {
+  const files = diffFiles(repoAbs, head === undefined ? [base] : [base, head], "old");
+  if (head === undefined) addUntracked(repoAbs, files);
+  return sortFiles(files);
+}
+
+/** git's empty tree id, the base to use for a repo with no commits. */
+export { EMPTY_TREE };
