@@ -33,32 +33,53 @@ function jsonEqual(a: unknown, b: unknown): boolean {
   return false;
 }
 
+/** What `ensureMcpEntry` would find in <root>/.mcp.json, without changing anything: no file
+ * ("missing-file"), no codeloom entry ("missing-entry"), an identical one ("present"), a different one
+ * ("kept-custom"), or a file it cannot safely merge into ("invalid"). */
+export type McpEntryState = "missing-file" | "missing-entry" | "present" | "kept-custom" | "invalid";
+
+function inspectMcp(root: string): { state: McpEntryState; obj?: Record<string, unknown>; servers?: Record<string, unknown> } {
+  const path = join(root, MCP_FILE);
+  if (!existsSync(path)) return { state: "missing-file" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return { state: "invalid" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { state: "invalid" };
+  const obj = parsed as Record<string, unknown>;
+  const servers = obj.mcpServers;
+  if (servers !== undefined && (servers === null || typeof servers !== "object" || Array.isArray(servers))) return { state: "invalid" };
+  const serversObj = (servers as Record<string, unknown> | undefined) ?? {};
+  if ("codeloom" in serversObj) {
+    return { state: jsonEqual(serversObj.codeloom, MCP_ENTRY) ? "present" : "kept-custom" };
+  }
+  return { state: "missing-entry", obj, servers: serversObj };
+}
+
+/** Read-only: the state of codeloom's entry in <root>/.mcp.json (used by `codeloom doctor`). */
+export function mcpEntryState(root: string): McpEntryState {
+  return inspectMcp(root).state;
+}
+
 /** Merge mcpServers.codeloom into <root>/.mcp.json, keeping every other key/entry.
  * No file → created with just the codeloom entry. Existing identical entry → left untouched,
  * "present". An existing different codeloom entry → left alone, "kept-custom". A top-level value
  * that isn't an object, or an `mcpServers` that exists but isn't an object → untouched, "invalid". */
 export function ensureMcpEntry(root: string): McpFileResult {
   const path = join(root, MCP_FILE);
-  if (!existsSync(path)) {
-    writeJsonAtomic(path, { mcpServers: { codeloom: MCP_ENTRY } });
-    return "added";
+  const found = inspectMcp(root);
+  switch (found.state) {
+    case "missing-file":
+      writeJsonAtomic(path, { mcpServers: { codeloom: MCP_ENTRY } });
+      return "added";
+    case "missing-entry":
+      writeJsonAtomic(path, { ...found.obj, mcpServers: { ...found.servers, codeloom: MCP_ENTRY } });
+      return "added";
+    default:
+      return found.state;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return "invalid";
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "invalid";
-  const obj = parsed as Record<string, unknown>;
-  const servers = obj.mcpServers;
-  if (servers !== undefined && (servers === null || typeof servers !== "object" || Array.isArray(servers))) return "invalid";
-  const serversObj = (servers as Record<string, unknown> | undefined) ?? {};
-  if ("codeloom" in serversObj) {
-    return jsonEqual(serversObj.codeloom, MCP_ENTRY) ? "present" : "kept-custom";
-  }
-  writeJsonAtomic(path, { ...obj, mcpServers: { ...serversObj, codeloom: MCP_ENTRY } });
-  return "added";
 }
 
 /** Quote a string as a single POSIX shell word, safe against shell expansion. */
@@ -132,7 +153,12 @@ function isSharedOutsideRepo(repoAbs: string, dir: string): boolean {
 
 const SHELL_SHEBANG = /^#!\s*(\S*\/)?(env\s+)?(sh|bash|zsh)(\s|$)/;
 
-export function installHook(repoAbs: string, wsRoot: string): HookResult {
+type HookPlan =
+  | { status: "skipped"; reason: string }
+  | { status: "present"; path: string }
+  | { status: "missing"; path: string; dir: string; existing: string };
+
+function planHook(repoAbs: string): HookPlan {
   let dir: string;
   try {
     dir = hooksDir(repoAbs);
@@ -158,6 +184,22 @@ export function installHook(repoAbs: string, wsRoot: string): HookResult {
       return { status: "skipped", reason: `the existing hook ${hook} is not a shell script, so codeloom left it unchanged` };
     }
   }
+  return { status: "missing", path: hook, dir, existing };
+}
+
+/** Read-only: whether the post-commit hook is installed ("present"), could be ("missing"), or
+ * codeloom would not install it ("skipped", with the reason). Used by `codeloom doctor`. */
+export function hookState(repoAbs: string):
+  | { status: "present" | "missing"; path: string }
+  | { status: "skipped"; reason: string } {
+  const plan = planHook(repoAbs);
+  return plan.status === "missing" ? { status: "missing", path: plan.path } : plan;
+}
+
+export function installHook(repoAbs: string, wsRoot: string): HookResult {
+  const plan = planHook(repoAbs);
+  if (plan.status !== "missing") return plan;
+  const { dir, existing, path: hook } = plan;
   mkdirSync(dir, { recursive: true });
   const prefix = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
   writeFileSync(hook, `${prefix}${HOOK_MARK}\n${hookLine(wsRoot)}\n`);
@@ -165,10 +207,16 @@ export function installHook(repoAbs: string, wsRoot: string): HookResult {
   return { status: "installed", path: hook };
 }
 
+/** Read-only: whether the repo's .gitignore already has the fingerprints cache line. */
+export function hasGitignoreLine(repoAbs: string): boolean {
+  const path = join(repoAbs, ".gitignore");
+  return existsSync(path) && readFileSync(path, "utf8").split(/\r?\n/).includes(CACHE_IGNORE);
+}
+
 export function ensureGitignore(repoAbs: string): boolean {
   const path = join(repoAbs, ".gitignore");
+  if (hasGitignoreLine(repoAbs)) return false;
   const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-  if (current.split(/\r?\n/).includes(CACHE_IGNORE)) return false;
   const prefix = current && !current.endsWith("\n") ? `${current}\n` : current;
   writeFileSync(path, `${prefix}${CACHE_IGNORE}\n`);
   return true;
