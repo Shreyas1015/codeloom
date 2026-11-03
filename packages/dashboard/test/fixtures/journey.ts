@@ -43,13 +43,27 @@ const indexHandler: StopWithFrom = {
   confidence: "exact",
 };
 
+/** The summary fields list_chains derives from a chain's stops: stopCount, stops per lane, tables. */
+export function chainCounts(stops: StopView[]): Pick<ChainView, "stopCount" | "lanes" | "tables"> {
+  const lanes: Record<Lane, number> = { ui: 0, api: 0, code: 0, db: 0, queue: 0 };
+  const tables = new Set<string>();
+  for (const s of stops) {
+    lanes[s.lane]++;
+    if (s.lane === "db" && s.label) tables.add(s.label);
+  }
+  return { stopCount: stops.length, lanes, tables: [...tables].sort() };
+}
+
+const stopsA = [page, postCall, postRoute, store, insertInvoice, insertLines];
+const stopsB = [page, getCall, getRoute, indexHandler];
+
 export const chainA: ChainView = {
   id: "ch_aaaa", name: "POST /api/invoices", entry: "web:/invoices/new", routeKey: "POST /api/invoices", confidence: "param",
-  complete: true, journeys: ["j_invoice"], stops: [page, postCall, postRoute, store, insertInvoice, insertLines], unresolved: [],
+  complete: true, journeys: ["j_invoice"], ...chainCounts(stopsA), stops: stopsA, unresolved: [],
 };
 export const chainB: ChainView = {
   id: "ch_bbbb", name: "GET /api/customers", entry: "web:/invoices/new", routeKey: "GET /api/customers", confidence: "guess",
-  complete: false, journeys: ["j_invoice"], stops: [page, getCall, getRoute, indexHandler],
+  complete: false, journeys: ["j_invoice"], ...chainCounts(stopsB), stops: stopsB,
   unresolved: [{ at: { repo: "api", file: "start/routes.ts", line: 12, symbol: "routes" }, reason: "No handler found for GET /api/customers" }],
 };
 

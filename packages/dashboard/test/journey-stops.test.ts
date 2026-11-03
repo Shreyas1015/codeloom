@@ -3,6 +3,7 @@ import type { ChainView, JourneyResult, StopView } from "@/api/types";
 import { numberStops, stopFrom, stopKey } from "@/lib/journey-stops";
 import { buildJourneyModel } from "@/screens/journey/model";
 import { journeyStops } from "@/screens/map/layout";
+import { chainCounts } from "./fixtures/journey";
 
 const stop = (s: Partial<StopView> & Pick<StopView, "lane" | "repo" | "file" | "line" | "symbol">): StopView => ({
   kind: "function",
@@ -19,7 +20,7 @@ const route = stop({ lane: "api", kind: "route", repo: "api", file: "start/route
 const read = stop({ lane: "db", kind: "db", repo: "api", file: "app/c.ts", line: 12, symbol: "C.index", op: "select" });
 
 const chain = (id: string, stops: StopView[]): ChainView => ({
-  id, name: id, entry: id, routeKey: id, confidence: "exact", complete: true, journeys: ["j_x"], stops, unresolved: [],
+  id, name: id, entry: id, routeKey: id, confidence: "exact", complete: true, journeys: ["j_x"], ...chainCounts(stops), stops, unresolved: [],
 });
 
 const journey: JourneyResult = {
