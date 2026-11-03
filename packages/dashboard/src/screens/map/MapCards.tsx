@@ -62,7 +62,7 @@ const LANE_INK: Record<Lane, string> = {
   queue: "text-lane-db",
 };
 
-const focusRing = "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+const focusRing = "outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 function cardFrame({ overlay, lane, selected }: Pick<CardCommon, "overlay" | "lane" | "selected">) {
   return cn(

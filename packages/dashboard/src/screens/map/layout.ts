@@ -44,8 +44,8 @@ export function levelItems(level: GraphLevel, keep?: string): { items: LevelItem
   return { items: [...shown, { kind: "more", id: MORE_ID, count: n, label }], hidden: n };
 }
 
-export const CARD_WIDTH = 248;
-const COLUMN_GAP = 96;
+export const CARD_WIDTH = 232;
+const COLUMN_GAP = 56;
 const ROW_GAP = 18;
 const PER_COLUMN = 10;
 const FOLDER_HEIGHT = 74;
@@ -224,6 +224,27 @@ export interface Viewport {
   x: number;
   y: number;
   zoom: number;
+}
+
+/** Cards stay readable: a level that would need a smaller zoom to fit is shown at this zoom and panned instead. */
+export const FIT_MIN_ZOOM = 0.9;
+/** A small level is not blown up past this. */
+export const FIT_MAX_ZOOM = 1.1;
+const FIT_PAD = 28;
+
+/** The opening view of one level: the largest zoom (within FIT_MIN_ZOOM…FIT_MAX_ZOOM) at which every card fits,
+ * cards aligned to the top of the canvas and centred across it. When the level does not fit even at
+ * FIT_MIN_ZOOM, it starts at the top-left corner and the rest is a pan away. */
+export function fitViewport(cards: Array<{ x: number; y: number; width: number; height: number }>, size: { width: number; height: number }): Viewport {
+  if (cards.length === 0 || size.width <= 0 || size.height <= 0) return { x: FIT_PAD, y: FIT_PAD, zoom: 1 };
+  const minX = Math.min(...cards.map((c) => c.x));
+  const minY = Math.min(...cards.map((c) => c.y));
+  const w = Math.max(...cards.map((c) => c.x + c.width)) - minX;
+  const h = Math.max(...cards.map((c) => c.y + c.height)) - minY;
+  const room = { width: size.width - 2 * FIT_PAD, height: size.height - 2 * FIT_PAD };
+  const zoom = Math.min(FIT_MAX_ZOOM, Math.max(FIT_MIN_ZOOM, Math.min(room.width / w, room.height / h)));
+  const x = w * zoom <= room.width ? (size.width - w * zoom) / 2 : FIT_PAD;
+  return { x: Math.round(x - minX * zoom), y: Math.round(FIT_PAD - minY * zoom), zoom };
 }
 
 /** Whether any part of a card (flow coordinates) falls outside the visible canvas of `size` pixels. */

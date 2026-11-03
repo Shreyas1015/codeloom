@@ -4,7 +4,8 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, FolderOpen } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNeighbors, useNode } from "@/api/queries";
-import type { GraphFile, GraphFolder, Neighbor } from "@/api/types";
+import type { GraphFile, GraphFolder, GraphLevel, Neighbor } from "@/api/types";
+import { Breakable } from "@/lib/breakable";
 import { cn } from "@/lib/utils";
 import { fileOfRef } from "./layout";
 
@@ -15,6 +16,8 @@ export interface InspectorProps {
   /** The level's file that is, or holds, the selected ref (gives the function list with lines). */
   file?: GraphFile;
   folder?: GraphFolder;
+  /** The open folder level, summed up when nothing is selected. */
+  level?: GraphLevel;
   onOpenFolder: (path: string) => void;
   onJump: (ref: string) => void;
 }
@@ -30,6 +33,29 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+/** Nothing selected: what this folder level holds, then how to dig in. */
+function LevelSummary({ repo, level }: { repo: string; level?: GraphLevel }) {
+  const links = level ? level.edges.reduce((n, e) => n + e.count, 0) : 0;
+  return (
+    <>
+      {level && (
+        <header className="flex flex-col gap-1 border-b border-border/70 px-4.5 py-4">
+          <h2 className="font-mono text-[15px] leading-tight font-semibold wrap-break-word">
+            <Breakable text={level.dir ? `${repo}/${level.dir}` : repo} />
+          </h2>
+          <p className="text-[13px] text-muted-foreground">
+            {plural(level.folders.length, "folder")} · {plural(level.files.length, "file")} ·{" "}
+            {links === 0 ? "no imports or calls between them" : `${plural(links, "import or call", "imports and calls")} between them`}
+          </p>
+        </header>
+      )}
+      <p className="px-4.5 py-4 text-[13px] text-muted-foreground">
+        Select a file to see its functions, journeys and neighbors. Double-click a folder to open it.
+      </p>
+    </>
+  );
+}
+
 const chip = "inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11.5px] text-muted-foreground";
 
 export function Inspector(props: InspectorProps) {
@@ -40,9 +66,7 @@ export function Inspector(props: InspectorProps) {
       ) : props.folder ? (
         <FolderDetails folder={props.folder} repo={props.repo} onOpen={props.onOpenFolder} />
       ) : (
-        <p className="px-4.5 py-4 text-[13px] text-muted-foreground">
-          Select a file to see its functions, journeys and neighbors. Double-click a folder to open it.
-        </p>
+        <LevelSummary repo={props.repo} level={props.level} />
       )}
     </aside>
   );
@@ -53,8 +77,8 @@ function FolderDetails({ folder, repo, onOpen }: { folder: GraphFolder; repo: st
     <>
       <header className="flex flex-col gap-1 border-b border-border/70 px-4.5 py-4">
         <h2 className="text-[16px] leading-tight font-bold">{folder.name}/</h2>
-        <p className="font-mono text-[12px] break-all text-muted-foreground">
-          {repo}/{folder.path}
+        <p className="font-mono text-[12px] wrap-break-word text-muted-foreground">
+          <Breakable text={`${repo}/${folder.path}`} />
         </p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           <span className={chip}>{plural(folder.files, "file")}</span>
@@ -95,11 +119,15 @@ function NodeDetails({ repo, selectedRef, file, onJump }: InspectorProps & { sel
   return (
     <>
       <header className="flex flex-col gap-1 border-b border-border/70 px-4.5 py-4">
-        <h2 className="font-mono text-[15px] leading-tight font-semibold break-all">
+        <h2 className="font-mono text-[15px] leading-tight font-semibold wrap-break-word">
           {info.name}
           {info.type === "function" ? "()" : ""}
         </h2>
-        {path && <p className="font-mono text-[12px] break-all text-muted-foreground">{`${repo}/${path}`}</p>}
+        {path && (
+          <p className="font-mono text-[12px] wrap-break-word text-muted-foreground">
+            <Breakable text={`${repo}/${path}`} />
+          </p>
+        )}
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {!isFile && <span className={chip}>{info.type}</span>}
           {info.layer && <span className={chip}>layer {info.layer}</span>}

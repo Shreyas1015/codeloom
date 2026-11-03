@@ -253,6 +253,7 @@ export function MapScreen() {
           {...(selectedRef ? { selectedRef } : {})}
           {...(levelFile ? { file: levelFile } : {})}
           {...(levelFolder ? { folder: levelFolder } : {})}
+          {...(level.data ? { level: level.data } : {})}
           onOpenFolder={openFolder}
           onJump={jumpTo}
         />

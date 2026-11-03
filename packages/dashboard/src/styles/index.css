@@ -47,3 +47,16 @@
     }
   }
 }
+
+/* React Flow's credit link: kept (it loads nothing), as a quiet caption in the canvas's bottom gutter.
+ * Unlayered on purpose: React Flow's own stylesheet is unlayered and would beat a rule inside @layer. */
+.react-flow__attribution.react-flow__panel {
+  margin: 0 0 6px;
+  padding: 0 4px;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.react-flow__attribution.react-flow__panel a {
+  color: var(--muted-foreground);
+}

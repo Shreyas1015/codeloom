@@ -2,10 +2,10 @@
  * nothing moves by physics. Each card is a real button, so Tab walks the cards and Enter acts on them. */
 import "@xyflow/react/dist/style.css";
 import { Background, BackgroundVariant, Controls, type Edge, type Node, ReactFlow, ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GraphFile, GraphLevel, Lane } from "@/api/types";
 import { type CardOverlay, type FileCardData, type FolderCardData, type MoreCardData, nodeTypes } from "./MapCards";
-import { type LevelItem, type MapStop, isOffscreen, laneOfLayer, layoutLevel, levelEdges, stopsUnder } from "./layout";
+import { type LevelItem, type MapStop, type Viewport, fitViewport, isOffscreen, laneOfLayer, layoutLevel, levelEdges, stopsUnder } from "./layout";
 
 export interface MapCanvasProps {
   level: GraphLevel;
@@ -50,6 +50,16 @@ function Canvas(props: MapCanvasProps) {
 
   const placed = useMemo(() => layoutLevel(items, expanded), [items, expanded]);
   const placedById = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
+
+  // Each level opens at a readable zoom (fitViewport). The canvas is measured before the first paint and React
+  // Flow starts from that view; opening a file's functions later keeps the view where the reader left it.
+  const [opening, setOpening] = useState<Viewport | null>(null);
+  useLayoutEffect(() => {
+    const r = box.current?.getBoundingClientRect();
+    setOpening(fitViewport(placed, { width: r?.width ?? 0, height: r?.height ?? 0 }));
+    // only the level's first layout decides the opening view
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Tab can land on a card outside the view: bring it into view, keeping the zoom
   const onFocusCard = useCallback(
@@ -153,32 +163,33 @@ function Canvas(props: MapCanvasProps) {
 
   return (
     <div ref={box} className="h-full w-full">
-      <ReactFlow
-        aria-label={`Map of ${level.repo}`}
-        disableKeyboardA11y
-        ariaLabelConfig={ARIA_LABELS}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
-        minZoom={0.2}
-        maxZoom={1.75}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        edgesFocusable={false}
-        elementsSelectable={false}
-        zoomOnDoubleClick={false}
-        deleteKeyCode={null}
-        selectionKeyCode={null}
-        multiSelectionKeyCode={null}
-        attributionPosition="top-right"
-        className="bg-[#EEF0EC]"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#C9CFCA" />
-        <Controls showInteractive={false} position="bottom-right" className="!overflow-hidden !rounded-lg !border !border-border !shadow-none" />
-      </ReactFlow>
+      {opening && (
+        <ReactFlow
+          aria-label={`Map of ${level.repo}`}
+          disableKeyboardA11y
+          ariaLabelConfig={ARIA_LABELS}
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          defaultViewport={opening}
+          minZoom={0.2}
+          maxZoom={1.75}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
+          elementsSelectable={false}
+          zoomOnDoubleClick={false}
+          deleteKeyCode={null}
+          selectionKeyCode={null}
+          multiSelectionKeyCode={null}
+          attributionPosition="bottom-center"
+          className="bg-[#EEF0EC]"
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#C9CFCA" />
+          <Controls showInteractive={false} position="bottom-right" className="!overflow-hidden !rounded-lg !border !border-border !shadow-none" />
+        </ReactFlow>
+      )}
     </div>
   );
 }
