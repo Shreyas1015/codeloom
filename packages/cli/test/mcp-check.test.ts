@@ -92,11 +92,34 @@ afterEach(() => {
 });
 
 describe("check_chains", () => {
-  it("returns the same CheckReport as codeloom check --json", async () => {
+  it("returns codeloom check --json's summary, with at most 20 items per kind and the totals per kind (H5)", async () => {
     const r = await sc("check_chains");
     const { output } = await runCheck(demo, { json: true });
-    expect(r).toEqual(JSON.parse(output));
+    const full = JSON.parse(output);
+    expect(r.version).toBe(1);
+    expect(r.summary).toEqual(full.summary);
     expect(r.summary.chains).toBe(7);
+    // demo-shop has fewer than 20 items of every kind, so every item is shown
+    expect(r.items).toEqual(full.items);
+    const totals: Record<string, number> = {};
+    for (const i of full.items) totals[i.kind] = (totals[i.kind] ?? 0) + 1;
+    expect(r.itemTotals).toEqual(totals);
+    expect(Object.keys(r.itemTotals)).toEqual(Object.keys(totals).sort());
+    expect(r).toMatchObject({ itemsTotal: full.items.length, kinds: null, perKind: 20, offset: 0, limit: null, truncated: false });
+  });
+
+  it("kinds, limit and offset page through one or more kinds' items", async () => {
+    const { output } = await runCheck(demo, { json: true });
+    const full = JSON.parse(output).items as Array<{ kind: string }>;
+    const kind = full[0]!.kind;
+    const ofKind = full.filter((i) => i.kind === kind);
+    const r = await sc("check_chains", { kinds: [kind] });
+    expect(r).toMatchObject({ kinds: [kind], perKind: null, offset: 0, limit: 50, itemsTotal: ofKind.length, truncated: false });
+    expect(r.items).toEqual(ofKind);
+    const page = await sc("check_chains", { limit: 1, offset: 1 });
+    expect(page.items).toEqual(full.slice(1, 2));
+    expect(page).toMatchObject({ kinds: null, perKind: null, offset: 1, limit: 1, itemsTotal: full.length, truncated: true });
+    expect(page.next).toMatch(/offset/);
   });
 
   it("passes traces: true through: no trace source → a skipped traces section", async () => {

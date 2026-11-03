@@ -7,7 +7,7 @@ import { buildReport } from "../../commands/check.js";
 import { CodeloomError } from "../../errors.js";
 import { readJson } from "../../store/json.js";
 import { CODELOOM_DIR, FILES } from "../../store/paths.js";
-import { type ChainStop, FingerprintsSchema } from "../../store/schemas.js";
+import { type ChainStop, type CheckItem, type CheckItemKind, CheckItemKindSchema, FingerprintsSchema } from "../../store/schemas.js";
 import { compare } from "../../util.js";
 import { type ChangedFile, changedLinesAtBase, EMPTY_TREE, isGitRepo, resolveCommit, resolveRange } from "../../workspace/diff.js";
 import { git } from "../../workspace/git.js";
@@ -22,10 +22,66 @@ const MAX_CHAINS = 500;
 
 // ---- check_chains -----------------------------------------------------------------------------
 
-export async function checkChains(opts: ServerOptions, traces: boolean): Promise<Record<string, unknown>> {
+/** Items per kind check_chains shows when no kinds/limit/offset is given. */
+export const CHECK_PER_KIND = 20;
+const CHECK_LIMIT = 50;
+
+export interface CheckChainsArgs {
+  traces?: boolean;
+  kinds?: CheckItemKind[];
+  limit?: number;
+  offset?: number;
+}
+
+/** The `codeloom check --json` report with its items bounded (H5). With no kinds/limit/offset: the first
+ * CHECK_PER_KIND items of each kind. Otherwise: the items of `kinds` (all kinds when absent), in report
+ * order, sliced by offset/limit (limit 50 when absent). `itemTotals` counts every item per kind (kinds with
+ * none are left out; keys sorted), `itemsTotal` the items the request matches. */
+export async function checkChains(opts: ServerOptions, args: CheckChainsArgs = {}): Promise<Record<string, unknown>> {
   // `traces` is passed through to buildReport, which adds the trace comparison (check/traces/run.ts).
-  const report = await buildReport(opts.start, { traces, fetchImpl: opts.fetchImpl, now: opts.now });
-  return report as unknown as Record<string, unknown>;
+  const report = await buildReport(opts.start, { traces: args.traces ?? false, fetchImpl: opts.fetchImpl, now: opts.now });
+  const counts = new Map<string, number>();
+  for (const i of report.items) counts.set(i.kind, (counts.get(i.kind) ?? 0) + 1);
+  const itemTotals = Object.fromEntries([...counts].sort((a, b) => compare(a[0], b[0])));
+
+  const paged = args.kinds !== undefined || args.limit !== undefined || args.offset !== undefined;
+  let items: CheckItem[];
+  let matching: number;
+  let next: string | undefined;
+  if (paged) {
+    const want = args.kinds === undefined ? undefined : new Set<string>(args.kinds);
+    const hits = want === undefined ? report.items : report.items.filter((i) => want.has(i.kind));
+    const offset = args.offset ?? 0;
+    const limit = args.limit ?? CHECK_LIMIT;
+    items = hits.slice(offset, offset + limit);
+    matching = hits.length;
+    if (offset + items.length < hits.length) next = `Call again with offset: ${offset + items.length} for the next items.`;
+  } else {
+    const seen = new Map<string, number>();
+    items = report.items.filter((i) => {
+      const n = (seen.get(i.kind) ?? 0) + 1;
+      seen.set(i.kind, n);
+      return n <= CHECK_PER_KIND;
+    });
+    matching = report.items.length;
+    if (items.length < matching) {
+      next = `Showing up to ${CHECK_PER_KIND} items per kind. Pass kinds (e.g. ["route-no-caller"]) with limit (up to 500) and offset to read the rest.`;
+    }
+  }
+  return {
+    version: report.version,
+    summary: report.summary,
+    itemTotals,
+    itemsTotal: matching,
+    kinds: args.kinds ? [...new Set(args.kinds)].sort(compare) : null,
+    perKind: paged ? null : CHECK_PER_KIND,
+    offset: paged ? (args.offset ?? 0) : 0,
+    limit: paged ? (args.limit ?? CHECK_LIMIT) : null,
+    items,
+    truncated: next !== undefined,
+    ...(next !== undefined ? { next } : {}),
+    ...(report.traces !== undefined ? { traces: report.traces } : {}),
+  };
 }
 
 // ---- impact_of_diff ---------------------------------------------------------------------------
@@ -214,12 +270,20 @@ export function registerCheckTools(server: McpServer, opts: ServerOptions): void
         "have a UI caller, unresolved calls, and guessed links. " +
         "`traces: true` adds the runtime trace check (`codeloom check --traces`): it compares the map with the " +
         "workspace's `traces` source in codeloom.workspace.json, an OTLP file or a Tempo URL, so it may call the " +
-        "user's own Tempo server. An unreachable source is reported as skipped.",
+        "user's own Tempo server. An unreachable source is reported as skipped. " +
+        `Items are bounded: by default the first ${CHECK_PER_KIND} of each kind, with \`itemTotals\` per kind; pass ` +
+        "`kinds` (item kinds) and/or `limit` (1-500, default 50) and `offset` to page through them in report order.",
       inputSchema: {
         traces: z.boolean().default(false),
+        kinds: z.array(CheckItemKindSchema).min(1).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+        offset: z.number().int().min(0).optional(),
       },
     },
-    withErrors((args: { traces?: boolean }) => checkChains(opts, args.traces ?? false)),
+    withErrors(
+      (args: CheckChainsArgs) => checkChains(opts, args),
+      "Pass kinds with a smaller limit and offset to page through the items.",
+    ),
   );
 
   server.registerTool(
@@ -234,6 +298,6 @@ export function registerCheckTools(server: McpServer, opts: ServerOptions): void
         "`notes` flags repos whose map was indexed at another commit than the range's base.",
       inputSchema: { range: z.string().max(200).optional() },
     },
-    withErrors((args: { range?: string }) => impactOfDiff(opts.start, args.range)),
+    withErrors((args: { range?: string }) => impactOfDiff(opts.start, args.range), "Pass a range that covers fewer commits."),
   );
 }

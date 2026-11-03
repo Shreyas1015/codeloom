@@ -383,7 +383,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
         "incoming and outgoing edges, and the request chains and journeys it takes part in.",
       inputSchema: { node: nodeArg },
     },
-    withErrors((args: { node: string }) => getNode(opts.start, args.node)),
+    withErrors((args: { node: string }) => getNode(opts.start, args.node), "Call get_neighbors with a limit for its edges, or list_chains for its chains."),
   );
 
   server.registerTool(
@@ -401,7 +401,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
         limit: z.number().int().min(1).max(500).default(100),
       },
     },
-    withErrors((args: NeighborsArgs) => getNeighbors(opts.start, args)),
+    withErrors((args: NeighborsArgs) => getNeighbors(opts.start, args), "Use a smaller limit or depth, one direction, or only some edgeTypes."),
   );
 
   server.registerTool(
@@ -414,7 +414,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
         "save_summary to record what you learn.",
       inputSchema: { node: nodeArg, maxChars: z.number().int().min(1000).max(60000).default(12000) },
     },
-    withErrors((args: { node: string; maxChars?: number }) => explainContext(opts.start, args.node, args.maxChars)),
+    withErrors((args: { node: string; maxChars?: number }) => explainContext(opts.start, args.node, args.maxChars), "Use a smaller maxChars, or call get_node / get_neighbors."),
   );
 
   server.registerTool(
