@@ -4,6 +4,7 @@ import type { RepoData, WorkspaceData } from "../store/read.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
 import type { Chain, ChainStop, CheckItem, CheckReport, ManualLinkStatus, UiReachFact } from "../store/schemas.js";
 import { compare } from "../util.js";
+import { calleeOf, isBuiltinCallee } from "./noise.js";
 
 function routeStopLoc(chain: Chain): { repo: string; file: string; line: number; symbol: string } {
   const stop = chain.stops.find((s) => s.kind === "route") ?? chain.stops[0];
@@ -71,12 +72,26 @@ export function uiUnreachedItem(repo: string, at: { file: string; line: number; 
   };
 }
 
+/** A call site's identity: repo, file, line, symbol. */
+function siteKey(repo: string, at: { file: string; line: number; symbol: string }): string {
+  return [repo, at.file, String(at.line), at.symbol].join("\0");
+}
+
 /** Built ONLY from the linker's reach facts (chains.json `uiReach`): every UI-side call no page reaches,
  * whether or not it matched a route (a matched one also has a `call:` chain). The linker already left
  * out backend, third-party and unreadable-URL calls. Never derived from chain stops, which are deduped
- * per (entry, route) and so cannot say which calls a page reaches. Per call, never part of the buckets. */
+ * per (entry, route) and so cannot say which calls a page reaches. One item per call site (H6), its
+ * labels sorted and joined; never part of the buckets. */
 function uiUnreachedItems(uiReach: UiReachFact[]): CheckItem[] {
-  return uiReach.filter((f) => !f.reached).map((f) => uiUnreachedItem(f.repo, f, `${f.method} ${f.path}`));
+  const bySite = new Map<string, { fact: UiReachFact; labels: Set<string> }>();
+  for (const f of uiReach) {
+    if (f.reached) continue;
+    const key = siteKey(f.repo, f);
+    const entry = bySite.get(key) ?? { fact: f, labels: new Set<string>() };
+    entry.labels.add(`${f.method} ${f.path}`);
+    bySite.set(key, entry);
+  }
+  return [...bySite.values()].map(({ fact, labels }) => uiUnreachedItem(fact.repo, fact, [...labels].sort(compare).join(", ")));
 }
 
 /** A route stop's identity as the linker writes it (repo, registration site, method, effective path). */
@@ -135,23 +150,63 @@ function bucketOf(chain: Chain): Bucket {
   return "missingDb";
 }
 
-/** A page chain whose UI call matched no route yields `ui-no-route` items — one per unmatched call the
- * linker recorded, or one at the call stop if it recorded none — decided by the chain's shape, never by
- * the linker's reason text. Every other unresolved entry is an `unmatched-call`, listed for information
- * only: many are framework or library calls (`res.json`, `logger.info`) and never decide a bucket. */
+/** The page a page chain starts at: its entry is `page:<repo>:<route>`. */
+function pageOf(chain: Chain): string {
+  return chain.entry.split(":").slice(2).join(":");
+}
+
+/** A page chain whose UI call matched no route yields `ui-no-route` items — decided by the chain's shape,
+ * never by the linker's reason text: one per unmatched call the linker recorded, or one at the call stop
+ * if it recorded none. Grouped by call site (H6): one item per call and reason, its detail naming every
+ * page that reaches it. */
+function uiNoRouteItems(chains: Chain[]): CheckItem[] {
+  const bySite = new Map<string, { item: CheckItem; pages: Set<string> }>();
+  const add = (repo: string, at: { file: string; line: number; symbol: string }, reason: string, page: string) => {
+    const key = `${siteKey(repo, at)}\0${reason}`;
+    const entry = bySite.get(key) ?? {
+      item: { kind: "ui-no-route" as const, repo, file: at.file, line: at.line, symbol: at.symbol, detail: reason },
+      pages: new Set<string>(),
+    };
+    entry.pages.add(page);
+    bySite.set(key, entry);
+  };
+  for (const chain of chains) {
+    if (!isUnmatchedPageChain(chain)) continue;
+    for (const u of chain.unresolved) add(u.at.repo, u.at, u.reason, pageOf(chain));
+    if (chain.unresolved.length > 0) continue;
+    const at = chain.stops.find((s) => s.kind === "call") ?? chain.stops[0];
+    if (at) add(at.repo, at, "UI call matches no route", pageOf(chain));
+  }
+  return [...bySite.values()].map(({ item, pages }) => {
+    const list = [...pages].sort(compare);
+    return { ...item, detail: `${item.detail} (${list.length === 1 ? "page" : "pages"}: ${list.join(", ")})` };
+  });
+}
+
+/** Every unresolved entry outside an unmatched page chain is an `unmatched-call`, listed for information
+ * only: many are framework or library calls (`res.json`, `logger.info`) and never decide a bucket.
+ * H6: listed once per repo + file + line + callee however many chains walk through it, and calls on
+ * global built-ins or of built-in method names (`console.log`, `items.map`) are left out. */
+function unmatchedCallItems(chains: Chain[]): CheckItem[] {
+  const seen = new Set<string>();
+  const items: CheckItem[] = [];
+  for (const chain of chains) {
+    if (isUnmatchedPageChain(chain)) continue;
+    for (const u of chain.unresolved) {
+      const callee = calleeOf(u.reason);
+      if (callee !== undefined && isBuiltinCallee(callee)) continue;
+      const key = [u.at.repo, u.at.file, String(u.at.line), callee ?? u.reason].join("\0");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ kind: "unmatched-call", repo: u.at.repo, file: u.at.file, line: u.at.line, symbol: u.at.symbol, detail: u.reason });
+    }
+  }
+  return items;
+}
+
+/** Per-chain items: guessed hops, a handler that could not be found, a walk that reaches no store. */
 function chainLevelItems(chain: Chain): CheckItem[] {
   const items: CheckItem[] = [];
-  const unmatchedPage = isUnmatchedPageChain(chain);
-  for (const u of chain.unresolved) {
-    items.push({
-      kind: unmatchedPage ? "ui-no-route" : "unmatched-call",
-      repo: u.at.repo, file: u.at.file, line: u.at.line, symbol: u.at.symbol, detail: u.reason,
-    });
-  }
-  if (unmatchedPage && chain.unresolved.length === 0) {
-    const at = chain.stops.find((s) => s.kind === "call") ?? chain.stops[0];
-    if (at) items.push({ kind: "ui-no-route", repo: at.repo, file: at.file, line: at.line, symbol: at.symbol, detail: `${chain.name}: UI call matches no route` });
-  }
   for (const stop of chain.stops) {
     if (stop.hop.confidence !== "guess") continue;
     items.push({
@@ -208,6 +263,8 @@ export function buildCheckReport(
     ...unresolvedUrlItems(ws.repos, chains),
     ...routeNoCallerItems(ws.repos, chains),
     ...uiUnreachedItems(uiReach),
+    ...uiNoRouteItems(chains),
+    ...unmatchedCallItems(chains),
     ...chains.flatMap(chainLevelItems),
   ]);
 

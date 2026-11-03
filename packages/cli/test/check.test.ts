@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCheckJson, formatCheckText } from "../src/check/format.js";
+import { calleeOf, isBuiltinCallee } from "../src/check/noise.js";
 import { belowFailUnder, buildCheckReport, completePercent } from "../src/check/report.js";
 import { buildReport, runCheck } from "../src/commands/check.js";
 import { runIndex } from "../src/commands/index-cmd.js";
@@ -251,8 +252,9 @@ describe("buildCheckReport", () => {
     });
     const report = buildCheckReport([chain], fakeWorkspace([fakeRepoData({ id: "web", path: "web" }, fakeEndpoints("web"))]));
     expect(report.summary).toMatchObject({ chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 0 });
+    // H6: one item per call; the detail names the pages that reach it
     expect(report.items).toEqual([
-      { kind: "ui-no-route", repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "no matching route for POST /api/nope" },
+      { kind: "ui-no-route", repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "no matching route for POST /api/nope (page: /x)" },
     ]);
     const text = formatCheckText(report);
     expect(text).toContain("1 journey: 0 complete UI → API → DB, 1 broken at UI → API");
@@ -622,5 +624,70 @@ describe("honest completeness (H3): complete needs a UI stop", () => {
   it("with no journey that starts in the UI, --fail-under has nothing to fail on", () => {
     const routeOnly = fakeChain({ entry: "route:api:POST /api/invoices", routeKey: "api:POST /api/invoices", stops: [route("/api/invoices", 2), handler, db] });
     expect(belowFailUnder(buildCheckReport([routeOnly], ws()), 100)).toBe(false);
+  });
+});
+
+describe("check noise (H6)", () => {
+  const ws = () => fakeWorkspace([fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api"))]);
+  const at = (line: number, callee: string) => ({ at: { repo: "api", file: "app/customers.ts", line, symbol: "CustomersController.store" }, reason: `could not resolve "${callee}(...)"` });
+  const unmatched = (r: ReturnType<typeof buildCheckReport>) => r.items.filter((i) => i.kind === "unmatched-call");
+
+  it("lists an unmatched call once, not once per chain that walks through it", () => {
+    const a = fakeChain({ id: "ch_00000000000a", unresolved: [at(4, "mailer.send"), at(5, "audit.write")] });
+    const b = fakeChain({ id: "ch_00000000000b", entry: "page:web:/customers/edit", unresolved: [at(4, "mailer.send")] });
+    expect(unmatched(buildCheckReport([a, b], ws())).map((i) => [i.line, i.detail])).toEqual([
+      [4, 'could not resolve "mailer.send(...)"'],
+      [5, 'could not resolve "audit.write(...)"'],
+    ]);
+  });
+
+  it("skips calls on global built-ins and built-in method names, keeps the app's own calls", () => {
+    const callees = [
+      "console.log", "JSON.stringify", "Math.max", "Object.keys", "Array.isArray", "Promise.all", "Date.now",
+      "Number.parseInt", "String", "Reflect.get", "setTimeout", "parseInt", ".map", "items.filter", "invoice.lines.push",
+      "fetchInvoices().then", "res.json", "customerService.create", "sendInvoiceEmail",
+    ];
+    const chain = fakeChain({ unresolved: callees.map((c, i) => at(i + 1, c)) });
+    expect(unmatched(buildCheckReport([chain], ws())).map((i) => i.detail)).toEqual([
+      'could not resolve "res.json(...)"',
+      'could not resolve "customerService.create(...)"',
+      'could not resolve "sendInvoiceEmail(...)"',
+    ]);
+  });
+
+  it("lists a UI call that matches no route once, naming every page that reaches it", () => {
+    const call = { lane: "ui" as const, kind: "call" as const, repo: "web", file: "lib/invoices.ts", line: 7, symbol: "archiveInvoice", op: "POST", label: "/api/invoices/archive", hop: { confidence: "exact" as const } };
+    const pageChain = (route: string, id: string) => fakeChain({
+      id, entry: `page:web:${route}`, routeKey: "", complete: false,
+      unresolved: [{ at: { repo: "web", file: "lib/invoices.ts", line: 7, symbol: "archiveInvoice" }, reason: "no matching route for POST /api/invoices/archive" }],
+      stops: [{ lane: "ui", kind: "page", repo: "web", file: `app${route}/page.tsx`, line: 1, symbol: "Page", hop: { confidence: "exact" } }, call],
+    });
+    const report = buildCheckReport([pageChain("/invoices/:id", "ch_00000000000b"), pageChain("/invoices", "ch_00000000000a")], ws());
+    expect(report.items.filter((i) => i.kind === "ui-no-route")).toEqual([
+      { kind: "ui-no-route", repo: "web", file: "lib/invoices.ts", line: 7, symbol: "archiveInvoice", detail: "no matching route for POST /api/invoices/archive (pages: /invoices, /invoices/:id)" },
+    ]);
+    expect(report.summary.brokenUiApi).toBe(2); // the buckets still count journeys, not calls
+  });
+
+  it("lists an unreached UI call once per call site", () => {
+    const fact = (method: "GET" | "POST", path: string) => ({ repo: "web", file: "lib/invoices.ts", line: 9, symbol: "saveInvoice", method, path, reached: false });
+    const items = buildCheckReport([], ws(), [fact("POST", "/api/invoices"), fact("GET", "/api/invoices/:id")]).items.filter((i) => i.kind === "ui-unreached");
+    expect(items).toEqual([
+      { kind: "ui-unreached", repo: "web", file: "lib/invoices.ts", line: 9, symbol: "saveInvoice", detail: "GET /api/invoices/:id, POST /api/invoices: call at lib/invoices.ts:9 is not reached from any page" },
+    ]);
+  });
+});
+
+describe("isBuiltinCallee (H6)", () => {
+  it.each([
+    ["this.lines.push", true], ["this.save", false], ["new InvoiceMailer().send", false], ["Math.round", true],
+    ["setInterval", true], ["formatInvoice", false], ["invoiceRepo.find", false], ["mailer.send", false],
+  ] as const)("%s -> %s", (callee, expected) => {
+    expect(isBuiltinCallee(callee)).toBe(expected);
+  });
+
+  it("reads the callee only from the linker's own reason wording", () => {
+    expect(calleeOf('could not resolve "console.log(...)"')).toBe("console.log");
+    expect(calleeOf("unresolved call: obj.m()")).toBeUndefined();
   });
 });
