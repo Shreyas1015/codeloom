@@ -11,37 +11,51 @@ export const PAGE = 200;
 
 export const NAME_JOURNEYS = "/codeloom:name-journeys";
 
-const LANE_CHIP: Record<Lane, string> = {
-  ui: "bg-lane-ui-soft text-lane-ui",
-  api: "bg-lane-api-soft text-lane-api",
-  code: "bg-lane-code-soft text-lane-code",
-  db: "bg-lane-db-soft text-lane-db",
-  queue: "bg-lane-queue-soft text-lane-db",
+/** A roundel's ring and number in its lane's hue; the queue lane reads in the DB umber family. */
+const LANE_RING: Record<Lane, string> = {
+  ui: "border-lane-ui text-lane-ui",
+  api: "border-lane-api text-lane-api",
+  code: "border-lane-code text-lane-code",
+  db: "border-lane-db text-lane-db",
+  queue: "border-lane-queue text-lane-db",
 };
 
-/** Stops per lane, in lane order (UI → API → Code → DB → Queue); empty lanes are left out. */
+/** At most this many roundels in a row; past it the rest fold into one dashed "+N". */
+export const MAX_ROUNDELS = 8;
+
+const ROUNDEL =
+  "inline-grid h-[22px] min-w-[22px] flex-none place-items-center rounded-full border-[1.5px] bg-card font-mono text-[10px] leading-none font-semibold tabular-nums";
+
+/** A journey's stops as a row of numbered roundels ringed in their lane's hue, in lane order
+ * (UI → API → Code → DB → Queue); empty lanes are left out. Hollow on purpose: on Home a roundel names a stop,
+ * it never claims you walked it. Each lane's run carries its count for assistive tech ("2 UI stops"). */
 export function LaneCounts({ stops, className }: { stops: JourneyRow["stops"]; className?: string }) {
   const lanes = LANES.filter((l) => (stops[l] ?? 0) > 0);
   if (lanes.length === 0) return <span className="text-[12.5px] text-muted-foreground">No stops</span>;
+  const total = lanes.reduce((sum, l) => sum + stops[l], 0);
+  const room = total > MAX_ROUNDELS ? MAX_ROUNDELS - 1 : MAX_ROUNDELS;
+  const runs = lanes.map((l, i) => {
+    const before = lanes.slice(0, i).reduce((sum, p) => sum + stops[p], 0);
+    return { lane: l, count: stops[l], first: before + 1, shown: Math.max(0, Math.min(stops[l], room - before)) };
+  });
   return (
-    <span className={cn("flex flex-wrap items-center gap-y-1", className)}>
-      {lanes.map((l, i) => {
-        const n = stops[l];
-        return (
-          <span key={l} className="flex items-center">
-            {i > 0 && <i aria-hidden className="h-px w-2 bg-connector" />}
-            <span
-              role="img"
-              aria-label={`${n} ${LANE_NAME[l]} stop${n === 1 ? "" : "s"}`}
-              data-lane={l}
-              className={cn("inline-flex items-baseline gap-1 rounded-full px-2 py-0.5 text-[11.5px] font-semibold", LANE_CHIP[l])}
-            >
-              {LANE_NAME[l]}
-              <span className="font-mono tabular">{n}</span>
+    <span data-slot="stop-row" title={lanes.map((l) => `${LANE_NAME[l]} ${stops[l]}`).join(" · ")} className={cn("flex flex-wrap items-center gap-y-1", className)}>
+      {runs.map(({ lane, count, first, shown }) => (
+        <span key={lane} role="img" aria-label={`${count} ${LANE_NAME[lane]} stop${count === 1 ? "" : "s"}`} data-lane={lane} className="flex items-center">
+          {Array.from({ length: shown }, (_, k) => (
+            <span key={k} aria-hidden className="flex items-center">
+              {first + k > 1 && <i className="h-px w-1.5 bg-connector" />}
+              <span className={cn(ROUNDEL, LANE_RING[lane])}>{first + k}</span>
             </span>
-          </span>
-        );
-      })}
+          ))}
+        </span>
+      ))}
+      {total > room && (
+        <span aria-hidden className="flex items-center">
+          <i className="h-px w-1.5 bg-connector" />
+          <span className={cn(ROUNDEL, "border-dashed border-muted-foreground px-1 text-muted-foreground")}>+{total - room}</span>
+        </span>
+      )}
     </span>
   );
 }
@@ -100,7 +114,7 @@ export function ShowMore({ shown, total, onMore }: { shown: number; total: numbe
   const next = Math.min(PAGE, total - shown);
   return (
     <div className="flex items-center justify-center gap-3 border-t border-border px-5 py-3 text-[12.5px] text-muted-foreground">
-      <span className="tabular">
+      <span>
         Showing {shown.toLocaleString("en-US")} of {total.toLocaleString("en-US")}
       </span>
       <Button type="button" variant="outline" size="sm" onClick={onMore}>

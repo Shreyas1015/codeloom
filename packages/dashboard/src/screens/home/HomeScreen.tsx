@@ -73,7 +73,7 @@ export function HomeScreen() {
           {o?.name ?? "Home"}
         </h1>
         {o && (
-          <p className="text-[13.5px] text-muted-foreground tabular">
+          <p className="text-[13.5px] text-muted-foreground">
             {plural(o.journeys.total, "journey")} · {plural(o.chains.total, "chain")}, {fmt(o.chains.complete)} complete
           </p>
         )}

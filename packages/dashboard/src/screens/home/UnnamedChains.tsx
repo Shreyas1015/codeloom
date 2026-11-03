@@ -24,12 +24,12 @@ export function UnnamedChains({ chains }: { chains: ChainRow[] }) {
               <Link
                 to="/journeys/$id"
                 params={{ id: c.id }}
-                className="flex flex-col gap-1.5 px-5 py-2.5 transition-colors outline-none hover:bg-muted/50 focus-visible:bg-accent-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] md:items-center md:gap-4.5"
+                className="flex flex-col gap-1.5 px-5 py-2.5 transition-colors outline-none hover:bg-muted/50 focus-visible:bg-accent-soft focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] md:items-center md:gap-4.5"
               >
-                <span className="truncate font-mono text-[13px] font-semibold">{c.name}</span>
-                <span className="truncate font-mono text-xs text-muted-foreground">{c.entry}</span>
+                <span title={c.name} className="truncate font-mono text-[13px] font-semibold">{c.name}</span>
+                <span title={c.entry} className="truncate font-mono text-xs text-muted-foreground">{c.entry}</span>
                 <span className="truncate font-mono text-xs text-muted-foreground">{c.repos.join(", ")}</span>
-                <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span className="flex flex-col items-start gap-0.5">
                   <ConfidenceMark confidence={c.confidence} />
                   <CompleteMark complete={c.complete} />
                 </span>
