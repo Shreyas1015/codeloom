@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import { z } from "zod";
 import { buildProgram, exitCodeFor } from "../src/cli.js";
 import { formatDoctor, runDoctor, type DoctorReport } from "../src/commands/doctor.js";
 import { runIndex } from "../src/commands/index-cmd.js";
-import { HOOK_MARK, runInit } from "../src/commands/init.js";
+import { HOOK_MARK, runInit, shellQuote } from "../src/commands/init.js";
 import { readJson, writeJsonAtomic } from "../src/store/json.js";
 import { loadWorkspace } from "../src/workspace/repos.js";
 import { RepoConfigSchema } from "../src/store/schemas.js";
@@ -16,10 +16,22 @@ import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 const REPOS = ["api", "billing", "web"];
 const IDS = ["demo-api", "demo-billing", "demo-web"];
 
+/** An executable stand-in for the codeloom bin, in a folder of its own. */
+function fakeBin(name = "bin.js"): string {
+  const dir = mkdtempSync(join(tmpdir(), "codeloom-doctor-bin-"));
+  const bin = join(dir, name);
+  writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+/** The hooks run this bin, so the hook check passes whatever is on the machine's PATH (H7). */
+const SHOP_BIN = fakeBin();
+
 /** demo-shop, set up and indexed with every repo committed, so nothing is stale. */
 async function healthyShop(): Promise<string> {
   const root = materializeFixture("demo-shop");
-  runInit(root);
+  runInit(root, { bin: SHOP_BIN });
   for (const r of REPOS) commitAll(join(root, r));
   await runIndex(root);
   return root;
@@ -147,7 +159,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(bad.every((i) => i.fix)).toBe(true);
     expect(formatDoctor(before)).toContain('Run "codeloom doctor --fix" to repair 4 items.');
 
-    const fixed = runDoctor(root, { fix: true });
+    const fixed = runDoctor(root, { fix: true, bin: SHOP_BIN }); // as the CLI does (H7): the repaired hook runs this bin
     expect(nonOk(fixed).map((i) => i.status)).toEqual(["fixed", "fixed", "fixed", "fixed"]);
     expect(fixed.summary.fixed).toBe(4);
     expect(readFileSync(join(root, "api", ".git", "hooks", "post-commit"), "utf8")).toContain(HOOK_MARK);
@@ -373,5 +385,54 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(text).toMatch(/demo-web: post-commit hook not installed/);
     expect(text).toMatch(/\d+ ok, 2 warnings, 0 errors, 0 fixed/);
     expect(text).toContain('Run "codeloom doctor --fix" to repair 2 items.');
+  });
+});
+
+describe("codeloom doctor: can the hook run codeloom? (H7)", () => {
+  const EMPTY_PATH = mkdtempSync(join(tmpdir(), "codeloom-doctor-emptypath-"));
+  const hookItem = (repo: string, opts: Parameters<typeof runDoctor>[1]) =>
+    runDoctor(repo, opts).items.find((i) => i.check === "hook")!;
+
+  it("ok while the bin the hook names exists", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    runInit(repo, { bin: fakeBin() });
+    expect(hookItem(repo, { pathEnv: EMPTY_PATH })).toMatchObject({ status: "ok" });
+  });
+
+  it("warns when the hook's bin is gone and codeloom is not on PATH; --fix points the hook at the current bin", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    const gone = fakeBin();
+    runInit(repo, { bin: gone });
+    rmSync(gone);
+    const item = hookItem(repo, { pathEnv: EMPTY_PATH });
+    expect(item.status).toBe("warn");
+    expect(item.message).toContain(`post-commit hook cannot run codeloom: ${gone} is missing and codeloom is not on PATH`);
+    expect(item.fix).toBeUndefined(); // without a current bin there is nothing to point it at
+
+    const now = fakeBin();
+    expect(hookItem(repo, { pathEnv: EMPTY_PATH, bin: now }).fix).toBe("point the hook at " + now);
+    expect(hookItem(repo, { pathEnv: EMPTY_PATH, bin: now, fix: true })).toMatchObject({ status: "fixed" });
+    const body = readFileSync(join(repo, ".git/hooks/post-commit"), "utf8");
+    expect(body).toContain(`${shellQuote(now)} index --quiet`);
+    expect(body).not.toContain(gone);
+    expect(body.split(HOOK_MARK).length - 1).toBe(1);
+    expect(hookItem(repo, { pathEnv: EMPTY_PATH })).toMatchObject({ status: "ok" });
+  });
+
+  it("ok when the bin is gone but codeloom is on PATH", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    const gone = fakeBin();
+    runInit(repo, { bin: gone });
+    rmSync(gone);
+    const onPath = fakeBin("codeloom");
+    expect(hookItem(repo, { pathEnv: `${EMPTY_PATH}:${join(onPath, "..")}` })).toMatchObject({ status: "ok" });
+  });
+
+  it("warns when a PATH-only hook finds no codeloom on PATH", () => {
+    const repo = makeRepo({ "a.ts": "" });
+    runInit(repo);
+    const item = hookItem(repo, { pathEnv: EMPTY_PATH });
+    expect(item.status).toBe("warn");
+    expect(item.message).toContain("post-commit hook cannot run codeloom: codeloom is not on PATH");
   });
 });

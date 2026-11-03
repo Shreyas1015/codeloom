@@ -3,7 +3,7 @@ import { runCheck } from "./commands/check.js";
 import { runDashboard } from "./commands/dashboard.js";
 import { CodeloomError, dataError } from "./errors.js";
 import { formatDoctor, runDoctor } from "./commands/doctor.js";
-import { formatInit, runInit } from "./commands/init.js";
+import { codeloomBin, formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { runServeCommand } from "./commands/serve.js";
 import { VERSION } from "./version.js";
@@ -24,7 +24,7 @@ export function buildProgram(): Command {
     .description("Set up codeloom in a repo, or in a folder of repos (a workspace)")
     .argument("[dir]", "folder to set up", ".")
     .action((dir: string) => {
-      console.log(formatInit(runInit(dir)));
+      console.log(formatInit(runInit(dir, { bin: codeloomBin() })));
     });
 
   program
@@ -57,7 +57,7 @@ export function buildProgram(): Command {
     .option("--fix", "repair what is safe to repair (never hand-written or committed map files)")
     .option("--json", "print the report as JSON")
     .action((opts: { fix?: boolean; json?: boolean }) => {
-      const report = runDoctor(process.cwd(), { fix: opts.fix });
+      const report = runDoctor(process.cwd(), { fix: opts.fix, bin: codeloomBin() });
       console.log(opts.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
       process.exitCode = report.summary.error > 0 ? 1 : 0;
     });

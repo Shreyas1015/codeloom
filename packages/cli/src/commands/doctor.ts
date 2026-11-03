@@ -25,11 +25,13 @@ import {
   ensureGitignore,
   ensureMcpEntry,
   hasGitignoreLine,
+  hookCommandProblem,
   hookState,
   installHook,
   mcpEntryState,
   mcpInvalidReason,
   mcpInvalidText,
+  rewriteHookLine,
 } from "./init.js";
 
 export type DoctorStatus = "ok" | "warn" | "error" | "fixed";
@@ -218,12 +220,20 @@ function checkChainsAndJourneys(d: Doctor, root: string): void {
   }
 }
 
-function checkHook(d: Doctor, repoAbs: string, id: string, wsRoot: string): void {
+/** `bin`: the codeloom bin running doctor (codeloomBin()), which an installed or repaired hook runs.
+ * `pathEnv`: the PATH the hook would search for `codeloom`. */
+function checkHook(d: Doctor, repoAbs: string, id: string, wsRoot: string, bin: string | undefined, pathEnv: string): void {
   const state = hookState(repoAbs);
-  if (state.status === "present") return d.add("hook", id, "ok", "post-commit hook installed");
+  if (state.status === "present") {
+    const problem = hookCommandProblem(state.path, pathEnv);
+    if (problem === undefined) return d.add("hook", id, "ok", "post-commit hook installed");
+    const message = `post-commit hook cannot run codeloom: ${problem} (the map won't update after each commit)`;
+    if (bin === undefined) return d.add("hook", id, "warn", `${message}. Install codeloom (npm i -g codeloom) or edit the hook.`);
+    return d.fixable("hook", id, message, `point the hook at ${bin}`, () => rewriteHookLine(state.path, wsRoot, bin));
+  }
   if (state.status === "skipped") return d.add("hook", id, "warn", `post-commit hook not installed: ${state.reason}`);
   d.fixable("hook", id, "post-commit hook not installed (the map won't update after each commit)", "install the post-commit hook", () => {
-    const r = installHook(repoAbs, wsRoot);
+    const r = installHook(repoAbs, wsRoot, bin);
     if (r.status === "skipped") throw new Error(r.reason);
   });
 }
@@ -282,7 +292,9 @@ function checkIndex(d: Doctor, repoAbs: string, id: string, cacheOutdated: boole
 /** Check codeloom's data files, hooks, .gitignore line and MCP entry. With fix, repair only the safe
  * things (missing config, hook, .gitignore line, MCP entry; a corrupt cache). Hand-written
  * and committed generated files are never touched. Never throws for a bad data file — reports it. */
-export function runDoctor(start: string, opts: { fix?: boolean }): DoctorReport {
+/** `bin`: the running codeloom bin (the CLI passes codeloomBin()); the hook check and its repair use it.
+ * `pathEnv`: the PATH the hook check searches (default: this process's). */
+export function runDoctor(start: string, opts: { fix?: boolean; bin?: string; pathEnv?: string }): DoctorReport {
   const d = new Doctor(opts.fix === true);
   if (!gitAvailable()) {
     d.add("git", undefined, "error", "git was not found on PATH. Install git (https://git-scm.com) and try again.");
@@ -311,7 +323,8 @@ export function runDoctor(start: string, opts: { fix?: boolean }): DoctorReport 
     checkSummaries(d, abs, ref.id);
   }
   checkChainsAndJourneys(d, ws.root);
-  for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root));
+  const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
+  for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root, opts.bin, pathEnv));
   for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));
   d.guard("mcp", undefined, () => checkMcp(d, ws.root));
   for (const r of present) d.guard("index", r.id, () => checkIndex(d, r.abs, r.id, r.cacheOutdated));

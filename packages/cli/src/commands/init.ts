@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, MCP_FILE, WORKSPACE_FILE } from "../store/paths.js";
@@ -129,6 +129,8 @@ export interface InitResult {
   mcp: McpFileResult;
   /** Why, when `mcp` is "invalid". */
   mcpInvalid?: McpInvalidReason;
+  /** The codeloom bin the hook runs, when init was given one. */
+  bin?: string;
 }
 
 export type HookResult =
@@ -136,9 +138,23 @@ export type HookResult =
   | { status: "present"; path: string }
   | { status: "skipped"; reason: string };
 
-/** The line the post-commit hook runs: re-index the workspace in the background. */
-export function hookLine(wsRoot: string): string {
-  return `if command -v codeloom >/dev/null 2>&1; then (cd ${shellQuote(wsRoot)} && codeloom index --quiet) >/dev/null 2>&1 & fi`;
+/** The codeloom bin that is running (`process.argv[1]`, made absolute), when it is an executable file —
+ * the command the post-commit hook should run, so it works without codeloom on PATH (an `npx` or local
+ * install). Undefined otherwise. */
+export function codeloomBin(argv1: string | undefined = process.argv[1]): string | undefined {
+  if (!argv1) return undefined;
+  const abs = resolve(argv1);
+  return isExecutable(abs) ? abs : undefined;
+}
+
+/** The line the post-commit hook runs: re-index the workspace in the background with `bin` (the absolute
+ * path of the codeloom that ran init) while it is still there, else with `codeloom` on PATH, else
+ * nothing — never `npx`, which could download in a hook. */
+export function hookLine(wsRoot: string, bin?: string): string {
+  const run = (cmd: string) => `(cd ${shellQuote(wsRoot)} && ${cmd} index --quiet) >/dev/null 2>&1 &`;
+  const onPath = `command -v codeloom >/dev/null 2>&1; then ${run("codeloom")}`;
+  if (bin === undefined) return `if ${onPath} fi`;
+  return `if [ -x ${shellQuote(bin)} ]; then ${run(shellQuote(bin))} elif ${onPath} fi`;
 }
 
 /** The repo's hooks folder as git sees it (handles worktrees and core.hooksPath, e.g. husky). */
@@ -227,15 +243,58 @@ export function hookState(repoAbs: string):
   return plan.status === "missing" ? { status: "missing", path: plan.path } : plan;
 }
 
-export function installHook(repoAbs: string, wsRoot: string): HookResult {
+export function installHook(repoAbs: string, wsRoot: string, bin?: string): HookResult {
   const plan = planHook(repoAbs);
   if (plan.status !== "missing") return plan;
   const { dir, existing, path: hook } = plan;
   mkdirSync(dir, { recursive: true });
   const prefix = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
-  writeFileSync(hook, `${prefix}${HOOK_MARK}\n${hookLine(wsRoot)}\n`);
+  writeFileSync(hook, `${prefix}${HOOK_MARK}\n${hookLine(wsRoot, bin)}\n`);
   chmodSync(hook, 0o755);
   return { status: "installed", path: hook };
+}
+
+/** Undo shellQuote. */
+function shellUnquote(word: string): string {
+  return word.slice(1, -1).split(`'\\''`).join("'");
+}
+
+function isExecutable(path: string): boolean {
+  try {
+    return statSync(path).isFile() && (accessSync(path, constants.X_OK), true);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `cmd` is an executable file in one of `pathEnv`'s folders (what `command -v` finds). */
+function onPath(cmd: string, pathEnv: string): boolean {
+  return pathEnv.split(delimiter).some((dir) => dir !== "" && isExecutable(join(dir, cmd)));
+}
+
+/** Read-only, for `codeloom doctor` (H7): why the installed hook at `hookPath` cannot run codeloom — its
+ * bin (`[ -x '<bin>' ]`) is gone and `codeloom` is not on `pathEnv` — or undefined when it can (or when
+ * codeloom's line was edited into something this check does not recognise). */
+export function hookCommandProblem(hookPath: string, pathEnv: string = process.env.PATH ?? ""): string | undefined {
+  const lines = readFileSync(hookPath, "utf8").split(/\r?\n/);
+  const line = lines[lines.indexOf(HOOK_MARK) + 1] ?? "";
+  const bins = [...line.matchAll(/\[ -x ('(?:[^']|'\\'')*') \]/g)].map((m) => shellUnquote(m[1]!));
+  const pathFallback = line.includes("command -v codeloom");
+  if (bins.length === 0 && !pathFallback) return undefined;
+  if (bins.some(isExecutable)) return undefined;
+  if (pathFallback && onPath("codeloom", pathEnv)) return undefined;
+  const missing = bins.map((b) => `${b} is missing`);
+  return [...missing, pathFallback ? "codeloom is not on PATH" : undefined].filter(Boolean).join(" and ");
+}
+
+/** Replace codeloom's line (the one after HOOK_MARK) in an installed hook with hookLine(wsRoot, bin);
+ * the rest of the hook is left as it is. */
+export function rewriteHookLine(hookPath: string, wsRoot: string, bin: string): void {
+  const lines = readFileSync(hookPath, "utf8").split("\n");
+  const at = lines.indexOf(HOOK_MARK);
+  if (at === -1) throw new Error(`${hookPath} has no codeloom line`);
+  lines[at + 1] = hookLine(wsRoot, bin);
+  writeFileSync(hookPath, lines.join("\n"));
 }
 
 /** Read-only: whether the repo's .gitignore already has the fingerprints cache line. */
@@ -253,7 +312,9 @@ export function ensureGitignore(repoAbs: string): boolean {
   return true;
 }
 
-export function runInit(dir: string): InitResult {
+/** `bin`: the codeloom bin the hook should run (the CLI passes codeloomBin()); without it the hook
+ * runs `codeloom` from PATH. */
+export function runInit(dir: string, opts: { bin?: string } = {}): InitResult {
   const root = resolve(dir);
   if (!existsSync(root) || !statSync(root).isDirectory()) throw new CodeloomError(`Folder not found: ${root}`);
   const repos = discoverRepos(root);
@@ -282,7 +343,7 @@ export function runInit(dir: string): InitResult {
       writeJsonAtomic(config, defaultRepoConfig());
       created.push(posix.join(repo.path, CODELOOM_DIR, FILES.config));
     }
-    const hook = installHook(repoAbs, root);
+    const hook = installHook(repoAbs, root, opts.bin);
     if (hook.status === "installed") {
       const rel = relative(root, hook.path).split(sep).join("/");
       created.push(rel.startsWith("..") || isAbsolute(rel) ? hook.path : rel);
@@ -296,7 +357,9 @@ export function runInit(dir: string): InitResult {
   const mcpRoot = insideWorkspace ? enclosingWorkspaceRoot! : root;
   const mcp = ensureMcpEntry(mcpRoot);
   const mcpInvalid = mcp === "invalid" ? mcpInvalidReason(mcpRoot) : undefined;
-  return { root, repos, created, present, skipped, mcp, ...(mcpInvalid ? { mcpInvalid } : {}) };
+  return {
+    root, repos, created, present, skipped, mcp, ...(mcpInvalid ? { mcpInvalid } : {}), ...(opts.bin ? { bin: opts.bin } : {}),
+  };
 }
 
 function mcpLine(mcp: McpFileResult, reason: McpInvalidReason = "not-json"): string {
@@ -324,7 +387,7 @@ export function formatInit(r: InitResult): string {
           "Git hook not installed (the map won't update after each commit):",
           ...r.skipped.map((s) => `  ${s.repo}: ${s.reason}`),
           "  To auto-update, add this line to that repo's post-commit hook (a shell script):",
-          `    ${hookLine(r.root)}`,
+          `    ${hookLine(r.root, r.bin)}`,
         ]
       : []),
     "",
