@@ -2,6 +2,7 @@ codeloom includes code from Understand Anything
 https://github.com/Egonex-AI/Understand-Anything
 Vendored from upstream commit 9545eb5 into packages/core,
 packages/tree-sitter-dart-wasm and packages/tree-sitter-swift-wasm.
+packages/core modified: grammar file resolution (grammar-path.ts)
 
 MIT License
 

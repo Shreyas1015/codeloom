@@ -6,7 +6,8 @@
   "main": "tree-sitter-dart.wasm",
   "files": [
     "tree-sitter-dart.wasm",
-    "BUILD.md"
+    "BUILD.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "private": true
