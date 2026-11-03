@@ -2,6 +2,7 @@ import { absoluteHost, normalizePath } from "../adapters/ast.js";
 import type { Confidence, HttpCall } from "../store/schemas.js";
 import { compare } from "../util.js";
 import type { HttpWrapper } from "./code-index.js";
+import type { ConfigArg } from "./config-wrappers.js";
 import { joinPaths, worse } from "./paths.js";
 import type { CallResolver } from "./resolve-calls.js";
 
@@ -44,13 +45,39 @@ function derived(
 }
 
 /**
+ * A call to a config-object wrapper (`httpClient({ method, url })`): method from the caller's config
+ * (unless the wrapper fixes it; default GET), url from its `url`. A config whose method or url cannot be
+ * read gives an unknown-kind call. The wrapper's inner call names the real client instance.
+ */
+function derivedFromConfig(
+  wrapper: HttpWrapper, wrapperKey: string, client: string, file: string, line: number, caller: string,
+  arg: ConfigArg | undefined, confidence: Confidence,
+): LinkedCall {
+  const at = { file, line, symbol: caller };
+  const method = wrapper.methodFixed ? wrapper.method : arg?.method ?? "GET";
+  const common = { method, client, at, via: "wrapper" as const, wrapper: wrapperKey, confidence };
+  if (!arg?.url || (arg.methodUnknown && !wrapper.methodFixed)) {
+    return { ...common, path: "", raw: arg?.url?.raw ?? "", resolved: false, kind: "unknown" };
+  }
+  const base = arg.url.base ?? wrapper.base;
+  return {
+    ...common, path: arg.url.path, raw: arg.url.raw, resolved: arg.url.resolved, kind: arg.url.kind,
+    ...(base !== undefined ? { base } : {}),
+  };
+}
+
+/**
  * Every resolved call to an HTTP wrapper becomes an HTTP call at the caller: with a literal/template URL
  * argument it carries that path (after the wrapper's literal base); with anything else it is an
  * unknown-kind call, which the linker reports unresolved. Confidence: the call resolution's, capped at
  * "param". Calls from inside a wrapper to itself are skipped. Sorted by file, line, symbol.
+ *
+ * A config-object wrapper counts only when `adapterCalls` holds an HTTP call at its inner call (the
+ * adapter has checked that the callee is an HTTP client); without `adapterCalls` none count.
  */
-export function wrapperCalls(resolver: CallResolver): LinkedCall[] {
+export function wrapperCalls(resolver: CallResolver, adapterCalls: HttpCall[] = []): LinkedCall[] {
   const out: LinkedCall[] = [];
+  const adapterAt = new Map(adapterCalls.map((c) => [`${c.at.file}:${c.at.line}`, c]));
   for (const file of resolver.indexedFiles()) {
     for (const site of resolver.fileIndex(file)?.calls ?? []) {
       // A wrapper handed to JSX (`onClick={apiGet}`) is not called here, with no URL argument.
@@ -60,8 +87,17 @@ export function wrapperCalls(resolver: CallResolver): LinkedCall[] {
       const wrapper = resolver.fileIndex(rc.target.file)?.wrappers?.find((w) => w.symbol === rc.target.symbol);
       if (!wrapper) continue;
       if (rc.target.file === file && rc.target.symbol === site.caller) continue;
+      const key = `${rc.target.file}#${rc.target.symbol}`;
+      const confidence = worse(rc.confidence, "param");
+      if (wrapper.config) {
+        const inner = adapterAt.get(`${rc.target.file}:${wrapper.line}`);
+        if (!inner) continue;
+        const arg = site.configArgs?.find((a) => a.index === wrapper.param);
+        out.push(derivedFromConfig(wrapper, key, inner.client, file, site.line, site.caller, arg, confidence));
+        continue;
+      }
       const arg = site.urlArgs?.find((a) => a.index === wrapper.param);
-      out.push(derived(wrapper, `${rc.target.file}#${rc.target.symbol}`, file, site.line, site.caller, arg, worse(rc.confidence, "param")));
+      out.push(derived(wrapper, key, file, site.line, site.caller, arg, confidence));
     }
   }
   return out.sort((a, b) => compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.at.symbol, b.at.symbol));

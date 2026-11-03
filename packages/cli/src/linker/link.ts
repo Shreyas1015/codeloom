@@ -129,7 +129,7 @@ function isInternalHost(host: string, known: Set<string>): boolean {
   return LOOPBACK_HOSTS.has(hostname) || known.has(host) || known.has(hostname);
 }
 
-const ENV_VAR_RE = /process\.env\.(\w+)/;
+const ENV_VAR_RE = /(?:process\.env|import\.meta\.env)\.(\w+)/;
 
 /** Text of whatever base expression a call carries, or its client's, to match against `apiBase` hints. */
 function baseHintText(call: HttpCall, clients: HttpClient[]): string {
@@ -223,7 +223,7 @@ export function linkUi(input: LinkInput): UiLink[] {
     // Keyed on file, line, method and path so a different call sharing the line is kept.
     const key = (c: HttpCall) => `${c.at.file}:${c.at.line}:${c.method}:${c.path}`;
     const seen = new Set(repo.endpoints.httpCalls.map(key));
-    const derived = resolver ? wrapperCalls(resolver).filter((c) => !seen.has(key(c))) : [];
+    const derived = resolver ? wrapperCalls(resolver, repo.endpoints.httpCalls).filter((c) => !seen.has(key(c))) : [];
     const calls: LinkedCall[] = [...repo.endpoints.httpCalls, ...derived];
     for (const call of calls) {
       links.push({

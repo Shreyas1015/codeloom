@@ -90,7 +90,7 @@ export interface HttpCallShape {
 
 /** Method from a config object's `method` property: its literal value, `fallback` when absent, undefined
  * when present but not a literal (a variable method), or when absent but a spread may supply it. */
-function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
+export function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
   const m = obj && prop(obj, "method");
   if (!m) return obj?.properties.some(ts.isSpreadAssignment) ? undefined : fallback;
   const v = stringValue(m);
@@ -269,7 +269,7 @@ export function detectHttpCalls(file: ParsedFile): HttpCall[] {
 /** Import bindings (default and named, aliases kept) of repo modules that may export an HTTP client:
  * local name -> { from, imported name ("default" for a default import) }. Known HTTP libraries and
  * type-only imports are skipped. */
-function importedBindings(sf: ts.SourceFile): Map<string, { from: string; name: string }> {
+export function importedBindings(sf: ts.SourceFile): Map<string, { from: string; name: string }> {
   const out = new Map<string, { from: string; name: string }>();
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
