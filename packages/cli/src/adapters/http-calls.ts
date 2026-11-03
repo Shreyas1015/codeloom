@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
 import { absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
-import type { ParsedFile } from "./types.js";
+import type { HttpCallDraft, HttpClientDraft, ParsedFile } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
@@ -182,10 +182,15 @@ function configCall(
     ts.isIdentifier(callee.expression) && (scope.clients.has(callee.expression.text) || isClientReceiver(callee.expression.text, node))
   ) client = callee.expression.text;
   else return undefined;
-  const obj = configObject(first, node);
+  return { ...readConfig(first, node), client };
+}
+
+/** Method and url of a config argument; no `urlExpr` when the url cannot be read. */
+function readConfig(arg: ts.Expression, call: ts.Node): { method: HttpMethod | undefined; urlExpr?: ts.Expression } {
+  const obj = configObject(arg, call);
   const url = obj && prop(obj, "url");
-  if (!url) return { method: "GET", client };
-  return { method: configMethod(obj, "GET"), urlExpr: url, client };
+  if (!url) return { method: "GET" };
+  return { method: configMethod(obj, "GET"), urlExpr: url };
 }
 
 /** Recognise an HTTP client call (fetch, axios(config), client.request(config), client.get(url), superagent). */
@@ -226,6 +231,27 @@ export function urlPattern(urlExpr: ts.Expression, env: Map<string, string>): Re
   return pattern && envBase !== undefined ? { ...pattern, base: envBase } : pattern;
 }
 
+type AnyShape = { method: HttpMethod | undefined; urlExpr?: ts.Expression; client: string; methodStyle?: boolean };
+
+/** The HttpCall for a recognised shape, or undefined when a method-style URL does not look like one. */
+function callOf(file: ParsedFile, node: ts.CallExpression, shape: AnyShape, env: Map<string, string>): HttpCall | undefined {
+  const { urlExpr } = shape;
+  if (shape.methodStyle && !(urlExpr && pathPattern(urlExpr) && looksLikeUrl(literalText(urlExpr)))) return undefined;
+  // A variable method keeps the adapter's historical default (GET); wrapper inference treats it apart.
+  const method = shape.method ?? "GET";
+  const pattern = urlExpr && urlPattern(urlExpr, env);
+  return {
+    method,
+    path: pattern?.path ?? "",
+    raw: urlExpr?.getText() ?? node.arguments[0]!.getText(),
+    resolved: pattern?.resolved ?? false,
+    client: shape.client,
+    at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
+    kind: pattern?.kind ?? "unknown",
+    ...(pattern?.base !== undefined ? { base: pattern.base } : {}),
+  };
+}
+
 export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   if (!file.sf) return [];
   const superagent = superagentReceivers(file.sf);
@@ -234,22 +260,80 @@ export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node)) return;
     const shape = configCall(node, scope) ?? httpCallShape(node, superagent, scope);
-    if (!shape) return;
-    const { urlExpr } = shape;
-    if ("methodStyle" in shape && shape.methodStyle && !(pathPattern(urlExpr) && looksLikeUrl(literalText(urlExpr)))) return;
-    // A variable method keeps the adapter's historical default (GET); wrapper inference treats it apart.
-    const method = shape.method ?? "GET";
-    const pattern = urlExpr && urlPattern(urlExpr, scope.envConsts);
-    out.push({
-      method,
-      path: pattern?.path ?? "",
-      raw: urlExpr?.getText() ?? node.arguments[0]!.getText(),
-      resolved: pattern?.resolved ?? false,
-      client: shape.client,
-      at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
-      kind: pattern?.kind ?? "unknown",
-      ...(pattern?.base !== undefined ? { base: pattern.base } : {}),
-    });
+    const call = shape && callOf(file, node, shape, scope.envConsts);
+    if (call) out.push(call);
+  });
+  return out;
+}
+
+/** Import bindings (default and named, aliases kept) of repo modules that may export an HTTP client:
+ * local name -> { from, imported name ("default" for a default import) }. Known HTTP libraries and
+ * type-only imports are skipped. */
+function importedBindings(sf: ts.SourceFile): Map<string, { from: string; name: string }> {
+  const out = new Map<string, { from: string; name: string }>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const from = stmt.moduleSpecifier.text;
+    const clause = stmt.importClause;
+    if (!clause || clause.isTypeOnly || KNOWN_HTTP_LIB_PACKAGES.has(from)) continue;
+    if (clause.name) out.set(clause.name.text, { from, name: "default" });
+    if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        if (!el.isTypeOnly) out.set(el.name.text, { from, name: (el.propertyName ?? el.name).text });
+      }
+    }
+  }
+  return out;
+}
+
+/** True when `name` is re-declared (a parameter, a variable, a function) in a function or block around `node`. */
+function shadowed(node: ts.Node, name: string): boolean {
+  const declares = (n: ts.BindingName): boolean =>
+    ts.isIdentifier(n) ? n.text === name : n.elements.some((e) => !ts.isOmittedExpression(e) && declares(e.name));
+  for (let cur = node.parent; cur && !ts.isSourceFile(cur); cur = cur.parent) {
+    if (ts.isFunctionLike(cur) && cur.parameters.some((p) => declares(p.name))) return true;
+    if (ts.isBlock(cur)) {
+      for (const s of cur.statements) {
+        if (ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => declares(d.name))) return true;
+        if ((ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s)) && s.name?.text === name) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Calls on an imported binding that would be HTTP calls if the binding is an HTTP client instance:
+ * `svc.get(url)` (and post/put/patch/delete), `svc.request(config)` and `svc(config)`. Each carries a
+ * `clientImport` for `finalizeEndpoints` to check against the exporting file's clients. Calls that
+ * `detectHttpCalls` already finds (e.g. a receiver named like a client) are not repeated.
+ */
+export function detectImportedClientCalls(file: ParsedFile): HttpCallDraft[] {
+  if (!file.sf) return [];
+  const imports = importedBindings(file.sf);
+  if (imports.size === 0) return [];
+  const superagent = superagentReceivers(file.sf);
+  const scope = clientScope(file);
+  const env = scope.envConsts;
+  const out: HttpCallDraft[] = [];
+  walk(file.sf, (node) => {
+    if (!ts.isCallExpression(node) || !node.arguments[0]) return;
+    const callee = node.expression;
+    const local = ts.isIdentifier(callee) ? callee.text
+      : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? callee.expression.text : undefined;
+    const imp = local !== undefined ? imports.get(local) : undefined;
+    if (!imp || local === undefined || shadowed(node, local)) return;
+    if (configCall(node, scope) ?? httpCallShape(node, superagent, scope)) return;
+    const first = node.arguments[0];
+    let shape: AnyShape | undefined;
+    const configLike = ts.isObjectLiteralExpression(first) || ts.isIdentifier(first);
+    if (configLike && (ts.isIdentifier(callee) || (ts.isPropertyAccessExpression(callee) && callee.name.text === "request"))) {
+      shape = { ...readConfig(first, node), client: local };
+    } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text]) {
+      shape = { method: METHODS[callee.name.text], urlExpr: first, client: local, methodStyle: true };
+    }
+    const call = shape && callOf(file, node, shape, env);
+    if (call) out.push({ ...call, clientImport: imp });
   });
   return out;
 }
@@ -358,4 +442,32 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
     });
   });
   return out;
+}
+
+/** Top-level names other files can import each local name under: `export const x`, `export { x as y }`,
+ * `export default x` ("default"). */
+function moduleExportNames(sf: ts.SourceFile): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const add = (local: string, exported: string) => out.set(local, [...(out.get(local) ?? []), exported]);
+  for (const stmt of sf.statements) {
+    if (ts.isVariableStatement(stmt) && stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      for (const d of stmt.declarationList.declarations) if (ts.isIdentifier(d.name)) add(d.name.text, d.name.text);
+    } else if (ts.isExportDeclaration(stmt) && !stmt.moduleSpecifier && !stmt.isTypeOnly && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+      for (const el of stmt.exportClause.elements) add((el.propertyName ?? el.name).text, el.name.text);
+    } else if (ts.isExportAssignment(stmt) && !stmt.isExportEquals && ts.isIdentifier(stmt.expression)) {
+      add(stmt.expression.text, "default");
+    }
+  }
+  return out;
+}
+
+/** detectHttpClients plus, for each top-level instance, the names it is exported under (for imported-call checks). */
+export function detectHttpClientDrafts(file: ParsedFile): HttpClientDraft[] {
+  const clients = detectHttpClients(file);
+  if (!file.sf || clients.length === 0) return clients;
+  const exports = moduleExportNames(file.sf);
+  return clients.map((c) => {
+    const names = exports.get(c.name);
+    return names ? { ...c, exportNames: names } : c;
+  });
 }

@@ -76,3 +76,71 @@ describe("runAdapters + finalizeEndpoints", () => {
     expect(ep.dbAccess[0]).toMatchObject({ model: "User", table: "users", op: "read" });
   });
 });
+
+describe("imported axios instances (hardening H2)", () => {
+  const ctx = ctxWith("axios", "react");
+  /** Resolves "./x" / "@/x" specifiers against src/ files by name. */
+  const files = ["src/api/client.ts", "src/api/default-client.ts", "src/api/cache.ts", "src/api/invoices.ts"];
+  const resolve = (_from: string, spec: string) => {
+    const name = spec.replace(/^(\.\/|\.\.\/|@\/)+/, "").replace(/^api\//, "");
+    return files.find((f) => f === `src/api/${name}.ts`) ?? null;
+  };
+  const endpointsOf = (calls: string) => finalizeEndpoints("web", [
+    runAdapters("src/api/client.ts", `
+      import axios from "axios";
+      const API_URL = import.meta.env.VITE_API_URL;
+      const customerClient = axios.create({ baseURL: API_URL });
+      export const backend = axios.create({ baseURL: "/v1" });
+      export { customerClient as customerApi };
+    `, ctx),
+    runAdapters("src/api/default-client.ts", `
+      import axios from "axios";
+      const http = axios.create({ baseURL: process.env.API_URL });
+      export default http;
+    `, ctx),
+    runAdapters("src/api/cache.ts", `export const store = { get(k: string) {}, remove(k: string) {} }; export default function track(e: any) {}`, ctx),
+    runAdapters("src/api/invoices.ts", calls, ctx),
+  ], resolve);
+  const show = (ep: ReturnType<typeof finalizeEndpoints>) =>
+    ep.httpCalls.map((c) => `${c.method} [${c.path}] ${c.kind}${c.base ? ` base=${c.base}` : ""} client=${c.client} @${c.at.symbol}`);
+
+  it("finds client.get(url) and client(config) on an imported instance, incl. aliases and default exports", () => {
+    const ep = endpointsOf(`
+      import { backend as svc, customerApi } from "./client";
+      import http from "@/api/default-client";
+      export const listInvoices = () => svc.get("/invoices");
+      export const createCustomer = (data: unknown) => customerApi({ method: "post", url: "/customers", data });
+      export async function getCustomer(id: string) {
+        const config = { url: \`/customers/\${id}\` };
+        return http(config);
+      }
+    `);
+    expect(show(ep)).toEqual([
+      "GET [/invoices] literal client=backend @listInvoices",
+      "POST [/customers] literal client=customerClient @createCustomer",
+      "GET [/customers/:id] template client=http @getCustomer",
+    ]);
+    // Imported calls take the instance's own name, so its baseURL applies.
+    expect(ep.httpClients.map((c) => `${c.name} ${c.baseLiteral ?? c.baseExpr ?? ""}`)).toEqual([
+      "customerClient import.meta.env.VITE_API_URL", "backend /v1", "http process.env.API_URL",
+    ]);
+  });
+
+  it("drops calls on imports that are not HTTP clients, or whose module cannot be resolved", () => {
+    const ep = endpointsOf(`
+      import track, { store } from "./cache";
+      import { gone } from "./missing";
+      import { backend } from "./client";
+      export const a = () => store.get("/customers/last");
+      export const b = () => track({ url: "/customers" });
+      export const c = () => gone({ url: "/customers" });
+      export const d = () => backend.get("/invoices");
+    `);
+    expect(show(ep)).toEqual(["GET [/invoices] literal client=backend @d"]);
+  });
+
+  it("drops imported-client calls when no import resolver is given", () => {
+    const parts = [runAdapters("src/x.ts", `import { backend } from "./client"; export const d = () => backend({ url: "/x" });`, ctx)];
+    expect(finalizeEndpoints("web", parts).httpCalls).toEqual([]);
+  });
+});
