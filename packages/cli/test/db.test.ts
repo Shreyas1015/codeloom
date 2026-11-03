@@ -235,3 +235,53 @@ describe("sqlTables", () => {
     expect(sqlTables(`not sql from orders`)).toEqual([]);
   });
 });
+
+describe("H1: aliases and CTEs never become table names", () => {
+  it("takes the table before ` as ` in query-builder args (from, join, Model.query().from, knex())", () => {
+    expect(access("app/services/invoice_service.ts", `
+      import db from "@adonisjs/lucid/services/db";
+      import Invoice from "#models/invoice";
+      export const a = () => db.from("customers as cust").join("invoices AS inv", "inv.customer_id", "cust.id");
+      export const b = () => Invoice.query().from(" invoice_lines as line ");
+      export const c = () => knex("\`payments\` as pay").where({});
+      export const d = () => db.from("customers").leftJoin("invoices as inv2", "inv2.customer_id", "customers.id");
+    `, "@adonisjs/lucid", "knex")).toEqual([
+      "read invoices via query-builder @a",
+      "read customers via query-builder @a",
+      "read invoice_lines via query-builder @b",
+      "read model:Invoice via lucid @b",
+      "read payments via query-builder @c",
+      "read invoices via query-builder @d",
+      "read customers via query-builder @d",
+    ]);
+  });
+
+  it("does not read Array#join or other non-query join calls as tables", () => {
+    expect(access("src/fmt.ts", `
+      export const f = (xs: string[]) => xs.map((x) => x.trim()).join(", ");
+      export const g = (xs: string[]) => xs.join("customers");
+      export const h = () => path.join("invoices", "x");
+    `, "knex")).toEqual([]);
+  });
+
+  it("never reports CTE names declared in a WITH list", () => {
+    expect(sqlTables(`WITH recent_invoices AS (SELECT * FROM invoices), big AS (SELECT * FROM recent_invoices r WHERE r.total > 9)
+      SELECT c.id FROM customers AS c JOIN big b ON b.customer_id = c.id`)).toEqual([
+      { table: "invoices", op: "read" },
+      { table: "customers", op: "read" },
+    ]);
+    expect(sqlTables(`with recursive tree as (select id from customers union all select c.id from customers c join tree t on t.id = c.parent_id) select * from tree`))
+      .toEqual([{ table: "customers", op: "read" }]);
+    expect(sqlTables(`SELECT * FROM public.customers cust JOIN "billing"."invoices" AS inv ON inv.customer_id = cust.id`)).toEqual([
+      { table: "customers", op: "read" },
+      { table: "invoices", op: "read" },
+    ]);
+  });
+
+  it("records a model imported under another name by its real class name", () => {
+    expect(access("app/services/s.ts", `
+      import { Customer as CustomerModel } from "#models/customer";
+      export const f = () => CustomerModel.findOrFail(1);
+    `, "@adonisjs/lucid")).toEqual(["read model:Customer via lucid @f"]);
+  });
+});

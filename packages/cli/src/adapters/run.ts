@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import type { EndpointsFile, HttpClient, Mount, QueueOp, Route, TableDef } from "../store/schemas.js";
+import type { DbAccess, EndpointsFile, HttpClient, Mount, QueueOp, Route, TableDef } from "../store/schemas.js";
 import { compare } from "../util.js";
-import { JS_EXT, parseSource } from "./ast.js";
+import { JS_EXT, parseSource, pascal } from "./ast.js";
 import { detectDb } from "./db.js";
 import { detectHttpCalls, detectHttpClients } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectMounts, detectRouters, detectRoutes } from "./routes.js";
-import { type AdapterContext, type EndpointsPart, emptyPart, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
+import { type AdapterContext, type DbAccessDraft, type EndpointsPart, emptyPart, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
   const deps = new Set<string>();
@@ -103,6 +103,19 @@ function resolveMount(draft: MountDraft, resolve?: ImportResolver): Mount | unde
 
 const TOP_LEVEL_NAMES = new Set(["app", "server", "fastify"]);
 
+/** Turn a draft access's default-import `modelImport` into the imported file's model class (its local name
+ * may be any alias), and drop the internal field. Falls back to the import path's naming convention
+ * (`#models/invoice_line` -> `InvoiceLine`) when the file is not resolved or defines no model. */
+function resolveModelImport(draft: DbAccessDraft, modelsByFile: Map<string, string>, resolve?: ImportResolver): DbAccess {
+  const { modelImport, ...access } = draft;
+  if (modelImport === undefined) return access;
+  const file = resolve?.(access.at.file, modelImport);
+  const fromFile = file ? modelsByFile.get(file) : undefined;
+  const base = modelImport.split("/").pop()!.replace(/\.(m|c)?[jt]sx?$/, "");
+  const model = fromFile ?? (pascal(base) || access.model);
+  return model ? { ...access, model } : access;
+}
+
 const byLoc = <T extends { at: { file: string; line: number } }>(a: T, b: T) =>
   compare(a.at.file, b.at.file) || a.at.line - b.at.line;
 
@@ -126,6 +139,8 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
       (all[key] as unknown[]).push(...(p[key] as unknown[]));
     }
   }
+  const modelsByFile = new Map<string, string>();
+  for (const m of [...all.models].sort((a, b) => compare(a.model, b.model))) if (!modelsByFile.has(m.file)) modelsByFile.set(m.file, m.model);
   // First-wins collision rule: only set a key if not already present (matches tables dedup behavior)
   const exact = new Map<string, string>();
   for (const m of all.models) if (!exact.has(m.model)) exact.set(m.model, m.table);
@@ -134,7 +149,7 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
     const lower_key = m.model.toLowerCase();
     if (!lower.has(lower_key)) lower.set(lower_key, m.table);
   }
-  const dbAccess = all.dbAccess.map((a) => {
+  const dbAccess = all.dbAccess.map((d) => resolveModelImport(d, modelsByFile, resolveImport)).map((a) => {
     if (a.table || !a.model) return a;
     const table = exact.get(a.model) ?? lower.get(a.model.toLowerCase());
     return table ? { ...a, table } : a;

@@ -15,6 +15,11 @@ export type MountDraft = Mount & {
   onImport?: string;
 };
 
+/** A DB access as an adapter sees it: `modelImport` is the raw module specifier a model was default-imported
+ * from, resolved by `finalizeEndpoints` to that file's model class (so a local alias never becomes the model
+ * name) and then dropped. */
+export type DbAccessDraft = DbAccess & { modelImport?: string };
+
 export interface ParsedFile {
   rel: string;
   content: string;
@@ -50,7 +55,7 @@ export interface EndpointsPart {
   routes: RouteDraft[];
   mounts: MountDraft[];
   routers: RouterDef[];
-  dbAccess: DbAccess[];
+  dbAccess: DbAccessDraft[];
   tables: TableDef[];
   models: ModelDef[];
   queues: QueueOp[];

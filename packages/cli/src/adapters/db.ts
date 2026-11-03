@@ -1,7 +1,7 @@
 import ts from "typescript";
-import type { DbAccess, DbOp, ModelDef, TableDef } from "../store/schemas.js";
+import type { DbOp, ModelDef, TableDef } from "../store/schemas.js";
 import { enclosingSymbol, lastName, lineOf, prop, rootName, snakePlural, stringValue, walk } from "./ast.js";
-import type { AdapterContext, EndpointsPart, ParsedFile } from "./types.js";
+import type { AdapterContext, DbAccessDraft, EndpointsPart, ParsedFile } from "./types.js";
 
 type DbPart = Pick<EndpointsPart, "dbAccess" | "tables" | "models">;
 
@@ -9,6 +9,8 @@ const DB_DEPS = ["@adonisjs/lucid", "knex", "@prisma/client", "drizzle-orm", "ty
 const QB_ROOTS = /^(db|knex|trx|database|Database|connection|query|qb|sql|tx)$/;
 const DRIZZLE_ROOTS = /^(db|tx|trx|database|client|conn|connection)$/;
 const SQL_CALL_RE = /^(query|execute|raw|unsafe|prepare|exec|queryRaw|executeRaw|\$queryRaw|\$executeRaw|\$queryRawUnsafe|\$executeRawUnsafe|rawQuery)$/;
+/** Query-builder join methods; their first argument is a table (`.join("invoices as i", ...)`). */
+const QB_JOIN_RE = /^(join|innerJoin|leftJoin|leftOuterJoin|rightJoin|rightOuterJoin|fullOuterJoin|crossJoin|joinRaw)$/;
 const SQL_TAG_RE = /^(sql|raw|\$queryRaw|\$executeRaw)$/;
 const MODEL_STATIC: Record<string, DbOp> = {
   create: "insert", createMany: "insert", firstOrCreate: "insert", fetchOrCreateMany: "insert",
@@ -34,13 +36,31 @@ const PARAM_PROP_MODS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.PublicKeyword, ts.SyntaxKind.PrivateKeyword, ts.SyntaxKind.ProtectedKeyword, ts.SyntaxKind.ReadonlyKeyword,
 ]);
 
+/** The table named by a query-builder table argument: the part before ` as ` (any case), trimmed and
+ * unquoted (`"customers as c"` -> `customers`). Undefined when what is left is not a table name. */
+export function qbTable(arg: string): string | undefined {
+  const name = arg.trim().split(/\s+as\s+/i)[0]!.trim().replace(/["`[\]]/g, "");
+  return /^[A-Za-z_][\w$]*(\.[A-Za-z_][\w$]*)?$/.test(name) ? name : undefined;
+}
+
+/** Names declared by a leading `WITH [RECURSIVE] name AS (` / `, name AS (` list: CTEs, not tables. */
+function cteNames(text: string): Set<string> {
+  const names = new Set<string>();
+  if (!/^\s*with\b/i.test(text)) return names;
+  for (const m of text.matchAll(/(?:\bwith(?:\s+recursive)?|,)\s*([\w"`]+)\s*(?:\([^)]*\)\s*)?as\s*(?:(?:not\s+)?materialized\s*)?\(/gi)) {
+    names.add(m[1]!.replace(/["`]/g, "").toLowerCase());
+  }
+  return names;
+}
+
 export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
   if (!/^\s*(select|insert|update|delete|with)\b/i.test(text)) return [];
   const out: Array<{ table: string; op: DbOp }> = [];
   const seen = new Set<string>();
+  const ctes = cteNames(text);
   const add = (raw: string, op: DbOp) => {
     const name = raw.replace(/["`[\]]/g, "").split(".").pop()!.toLowerCase();
-    if (!/^[a-z_][a-z0-9_]*$/.test(name) || seen.has(`${op}:${name}`)) return;
+    if (!/^[a-z_][a-z0-9_]*$/.test(name) || ctes.has(name) || seen.has(`${op}:${name}`)) return;
     seen.add(`${op}:${name}`);
     out.push({ table: name, op });
   };
@@ -68,15 +88,27 @@ function isLucidModelSpecifier(spec: string): boolean {
   return spec.startsWith("#models/") || spec.startsWith("App/Models/") || /\/models\//.test(spec);
 }
 
-/** Local names imported from a real Lucid models path (not any path with "model" in it). */
-function lucidModelImports(sf: ts.SourceFile): Set<string> {
-  const names = new Set<string>();
+/** How a local name was imported from a real Lucid models path (not any path with "model" in it). */
+interface ModelImport {
+  /** The exported name for a named import (`{ Customer as C }` -> `Customer`); the local name for a default import. */
+  model: string;
+  /** The specifier of a default import, whose class name only the imported file knows. */
+  defaultFrom?: string;
+}
+
+function lucidModelImports(sf: ts.SourceFile): Map<string, ModelImport> {
+  const names = new Map<string, ModelImport>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !isLucidModelSpecifier(st.moduleSpecifier.text)) continue;
     const clause = st.importClause;
-    if (clause?.name && /^[A-Z]/.test(clause.name.text)) names.add(clause.name.text);
+    if (clause?.name && /^[A-Z]/.test(clause.name.text)) {
+      names.set(clause.name.text, { model: clause.name.text, defaultFrom: st.moduleSpecifier.text });
+    }
     if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-      for (const el of clause.namedBindings.elements) if (/^[A-Z]/.test(el.name.text)) names.add(el.name.text);
+      for (const el of clause.namedBindings.elements) {
+        const imported = (el.propertyName ?? el.name).text;
+        if (/^[A-Z]/.test(el.name.text) && /^[A-Z]/.test(imported)) names.set(el.name.text, { model: imported });
+      }
     }
   }
   return names;
@@ -194,10 +226,10 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
   if (file.rel.endsWith(".sql")) return sqlFile(file);
   const res: DbPart = { dbAccess: [], tables: [], models: [] };
   if (!file.sf || !DB_DEPS.some((d) => ctx.deps.has(d))) return res;
-  const modelImports = ctx.deps.has("@adonisjs/lucid") ? lucidModelImports(file.sf) : new Set<string>();
+  const modelImports = ctx.deps.has("@adonisjs/lucid") ? lucidModelImports(file.sf) : new Map<string, ModelImport>();
   const drizzle = ctx.deps.has("drizzle-orm");
   const at = (n: ts.Node) => ({ file: file.rel, line: lineOf(n), symbol: enclosingSymbol(n) });
-  const push = (a: DbAccess) => res.dbAccess.push(a);
+  const push = (a: DbAccessDraft) => res.dbAccess.push(a);
   const classRepoFields = new Map<ts.ClassLikeDeclaration, Map<string, string>>();
   const repoFieldsFor = (cls: ts.ClassLikeDeclaration): Map<string, string> => {
     let m = classRepoFields.get(cls);
@@ -231,7 +263,8 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
 
     if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && modelImports.has(e.expression.text) && MODEL_STATIC[e.name.text]) {
       const op = e.name.text === "query" ? opFromChain(node) : MODEL_STATIC[e.name.text]!;
-      push({ model: e.expression.text, op, via: "lucid", at: at(node) });
+      const imp = modelImports.get(e.expression.text)!;
+      push({ model: imp.model, op, via: "lucid", at: at(node), ...(imp.defaultFrom ? { modelImport: imp.defaultFrom } : {}) });
       return;
     }
     if (ctx.deps.has("@prisma/client") && ts.isPropertyAccessExpression(e) && PRISMA_OPS[e.name.text] && ts.isPropertyAccessExpression(e.expression) && /prisma|db|client|tx/i.test(rootName(e.expression))) {
@@ -260,7 +293,9 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       return;
     }
     if (ts.isPropertyAccessExpression(e) && ["from", "table", "into"].includes(e.name.text) && arg0) {
-      const table = stringValue(arg0);
+      const raw = stringValue(arg0);
+      const table = raw === undefined ? undefined : qbTable(raw);
+      if (raw !== undefined && !table) return;
       if (table && (QB_ROOTS.test(rootName(e.expression)) || ts.isCallExpression(e.expression))) {
         push({ table, op: opFromChain(node), via: "query-builder", at: at(node) });
         return;
@@ -270,8 +305,17 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
         return;
       }
     }
+    if (ts.isPropertyAccessExpression(e) && QB_JOIN_RE.test(e.name.text) && e.name.text !== "joinRaw" && stringValue(arg0) !== undefined) {
+      const root = rootName(e.expression);
+      const table = qbTable(stringValue(arg0)!);
+      if (table && (QB_ROOTS.test(root) || (modelImports.has(root) && ts.isCallExpression(e.expression)))) {
+        push({ table, op: "read", via: "query-builder", at: at(node) });
+      }
+      return;
+    }
     if (ts.isIdentifier(e) && /^(knex|db|trx)$/.test(e.text) && stringValue(arg0)) {
-      push({ table: stringValue(arg0)!, op: opFromChain(node), via: "query-builder", at: at(node) });
+      const table = qbTable(stringValue(arg0)!);
+      if (table) push({ table, op: opFromChain(node), via: "query-builder", at: at(node) });
       return;
     }
     if (ts.isPropertyAccessExpression(e) && /^createTable(IfNotExists)?$/.test(e.name.text) && arg0) {
