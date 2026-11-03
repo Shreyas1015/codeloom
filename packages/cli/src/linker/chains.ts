@@ -326,12 +326,18 @@ function makeChain(entry: string, rKey: string, stops: ChainStop[], unresolved: 
 }
 
 /** A db access with neither a table nor a model names no store: it is not a db stop (no empty-label
- * hop). It moves to the link's unresolved list instead, so the chain counts as missing its store. */
+ * hop). Nor is a mongoose access whose collection is unknown: a document model's name is not its
+ * collection (H9). Either moves to the link's unresolved list instead, so the chain counts as missing its store. */
 function dropUnlabeledDb<L extends BackendLink | ConsumerLink>(link: L): L {
-  const unlabeled = (h: StoreHit) => h.kind === "db" && !h.access.table && !h.access.model;
+  const unlabeled = (h: StoreHit) => h.kind === "db" && !h.access.table && (!h.access.model || h.access.via === "mongoose");
   if (!link.hits.some(unlabeled)) return link;
   const extra = link.hits.flatMap((h) => (h.kind === "db" && unlabeled(h)
-    ? [{ at: h.access.at, reason: `database access (${h.access.op}) with no table or model` }] : []));
+    ? [{
+      at: h.access.at,
+      reason: h.access.model
+        ? `mongoose model "${h.access.model}" (${h.access.op}): collection unknown`
+        : `database access (${h.access.op}) with no table or model`,
+    }] : []));
   return { ...link, hits: link.hits.filter((h) => !unlabeled(h)), unresolved: [...link.unresolved, ...extra] };
 }
 

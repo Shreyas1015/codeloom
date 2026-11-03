@@ -127,7 +127,7 @@ export const DbAccessSchema = z.object({
   table: z.string().optional(),
   model: z.string().optional(),
   op: DbOpSchema,
-  via: z.enum(["lucid", "prisma", "typeorm", "drizzle", "query-builder", "sql"]),
+  via: z.enum(["lucid", "prisma", "typeorm", "drizzle", "mongoose", "query-builder", "sql"]),
   at: LocSchema,
 });
 export type DbAccess = z.infer<typeof DbAccessSchema>;
@@ -144,7 +144,7 @@ export const ModelDefSchema = z.object({
   model: z.string(),
   table: z.string(),
   file: z.string(),
-  source: z.enum(["lucid", "typeorm", "prisma", "drizzle"]),
+  source: z.enum(["lucid", "typeorm", "prisma", "drizzle", "mongoose"]),
 });
 export type ModelDef = z.infer<typeof ModelDefSchema>;
 

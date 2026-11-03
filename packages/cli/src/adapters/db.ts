@@ -5,7 +5,7 @@ import type { AdapterContext, DbAccessDraft, EndpointsPart, ParsedFile } from ".
 
 type DbPart = Pick<EndpointsPart, "dbAccess" | "tables" | "models">;
 
-const DB_DEPS = ["@adonisjs/lucid", "knex", "@prisma/client", "drizzle-orm", "typeorm", "@nestjs/typeorm", "pg", "mysql2", "better-sqlite3", "postgres", "sqlite3"];
+const DB_DEPS = ["@adonisjs/lucid", "knex", "mongoose", "@prisma/client", "drizzle-orm", "typeorm", "@nestjs/typeorm", "pg", "mysql2", "better-sqlite3", "postgres", "sqlite3"];
 const QB_ROOTS = /^(db|knex|trx|database|Database|connection|query|qb|sql|tx)$/;
 const DRIZZLE_ROOTS = /^(db|tx|trx|database|client|conn|connection)$/;
 const SQL_CALL_RE = /^(query|execute|raw|unsafe|prepare|exec|queryRaw|executeRaw|\$queryRaw|\$executeRaw|\$queryRawUnsafe|\$executeRawUnsafe|rawQuery)$/;
@@ -30,6 +30,17 @@ const REPO_OPS: Record<string, DbOp> = {
   save: "insert", insert: "insert", create: "insert", update: "update", upsert: "update", merge: "update",
   delete: "delete", remove: "delete", softDelete: "delete",
 };
+const MONGOOSE_OPS: Record<string, DbOp> = {
+  find: "read", findOne: "read", findById: "read", countDocuments: "read", estimatedDocumentCount: "read",
+  exists: "read", aggregate: "read", distinct: "read", where: "read",
+  create: "insert", insertMany: "insert",
+  updateOne: "update", updateMany: "update", replaceOne: "update", findByIdAndUpdate: "update",
+  findOneAndUpdate: "update", findOneAndReplace: "update", bulkWrite: "update",
+  deleteOne: "delete", deleteMany: "delete", findByIdAndDelete: "delete", findOneAndDelete: "delete",
+  findByIdAndRemove: "delete", findOneAndRemove: "delete",
+};
+/** A relative import of a model file: a `models/` folder, or a `*.model` / `*-model` file. */
+const MONGOOSE_MODEL_SPEC = /^\.{1,2}\/(.*\/)?(models?\/|[^/]*[.-]model(\.[cm]?[jt]s)?$)/i;
 /** Type-reference names that TypeORM injects as a repository field. */
 const REPO_TYPE_RE = /^(Repository|MongoRepository|TreeRepository)$/;
 const PARAM_PROP_MODS = new Set<ts.SyntaxKind>([
@@ -279,6 +290,129 @@ function modelClass(cls: ts.ClassDeclaration, rel: string): ModelDef | undefined
   return undefined;
 }
 
+/** Mongoose's pluralisation rules (first match wins), applied to the lowercased model name. */
+const MONGOOSE_PLURAL: Array<[RegExp, string]> = [
+  [/human$/, "humans"], [/(m)an$/, "$1en"], [/(pe)rson$/, "$1ople"], [/(child)$/, "$1ren"], [/^(ox)$/, "$1en"],
+  [/(ax|test)is$/, "$1es"], [/(octop|vir)us$/, "$1i"], [/(alias|status)$/, "$1es"], [/(bu)s$/, "$1ses"],
+  [/(buffal|tomat|potat)o$/, "$1oes"], [/([ti])um$/, "$1a"], [/sis$/, "ses"], [/(?:([^f])fe|([lr])f)$/, "$1$2ves"],
+  [/(hive)$/, "$1s"], [/([^aeiouy]|qu)y$/, "$1ies"], [/(x|ch|ss|sh)$/, "$1es"], [/(matr|vert|ind)ix|ex$/, "$1ices"],
+  [/([ml])ouse$/, "$1ice"], [/(kn|w|l)ife$/, "$1ives"], [/(quiz)$/, "$1zes"], [/s$/, "s"], [/([^a-z])$/, "$1"], [/$/, "s"],
+];
+const MONGOOSE_UNCOUNTABLE = new Set([
+  "advice", "energy", "excretion", "digestion", "cooperation", "health", "justice", "labour", "machinery", "equipment",
+  "information", "pollution", "sewage", "paper", "money", "species", "series", "rain", "rice", "fish", "sheep", "moose",
+  "deer", "news", "expertise", "status", "media",
+]);
+
+/** The collection mongoose gives a model when nothing names one: the model name lowercased and pluralised. */
+export function mongooseCollection(model: string): string {
+  const name = model.toLowerCase();
+  if (MONGOOSE_UNCOUNTABLE.has(name)) return name;
+  const rule = MONGOOSE_PLURAL.find(([re]) => re.test(name));
+  return rule ? name.replace(rule[0], rule[1]) : name;
+}
+
+/** Local names bound to the mongoose module: its default/namespace import (`mongoose`), and named
+ * imports of `model` / `Schema` under their local names. */
+function mongooseImports(sf: ts.SourceFile): { root: Set<string>; model: Set<string>; schema: Set<string> } {
+  const out = { root: new Set<string>(), model: new Set<string>(), schema: new Set<string>() };
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || st.moduleSpecifier.text !== "mongoose") continue;
+    const clause = st.importClause;
+    if (clause?.name) out.root.add(clause.name.text);
+    const nb = clause?.namedBindings;
+    if (nb && ts.isNamespaceImport(nb)) out.root.add(nb.name.text);
+    if (nb && ts.isNamedImports(nb)) {
+      for (const el of nb.elements) {
+        const imported = (el.propertyName ?? el.name).text;
+        if (imported === "model") out.model.add(el.name.text);
+        if (imported === "Schema") out.schema.add(el.name.text);
+      }
+    }
+  }
+  return out;
+}
+
+/** The variable a model call is assigned to, through `mongoose.models.X || model(…)`, parentheses and
+ * casts (`const Customer = …`). Undefined when it is not assigned to a plain name. */
+function assignedName(node: ts.Node): string | undefined {
+  let cur = node.parent;
+  while (cur && (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isNonNullExpression(cur)
+    || ts.isConditionalExpression(cur) || ts.isTypeAssertionExpression(cur)
+    || (ts.isBinaryExpression(cur) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(cur.operatorToken.kind)))) {
+    cur = cur.parent;
+  }
+  return cur && ts.isVariableDeclaration(cur) && ts.isIdentifier(cur.name) ? cur.name.text : undefined;
+}
+
+/** Mongoose models declared in this file: each `model(Name, schema[, collection])` call (via the
+ * mongoose import or a named `model` import), keyed by the local name it is assigned to (else Name).
+ * The collection is the literal 3rd argument, else the schema's literal `collection` option, else
+ * mongoose's rule on a literal Name; `table` is undefined when none of those can be read, so no table
+ * is ever invented from a variable or class name. */
+function mongooseModels(sf: ts.SourceFile): Map<string, { table?: string; node: ts.Node }> {
+  const imp = mongooseImports(sf);
+  const models = new Map<string, { table?: string; node: ts.Node }>();
+  if (imp.root.size === 0 && imp.model.size === 0) return models;
+  const isSchemaNew = (e: ts.Expression): e is ts.NewExpression => ts.isNewExpression(e)
+    && ((ts.isIdentifier(e.expression) && imp.schema.has(e.expression.text))
+      || (ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "Schema" && imp.root.has(rootName(e.expression))));
+  const schemaCollection = new Map<string, string | null>();
+  const optionOf = (e: ts.NewExpression): string | null => {
+    const opts = e.arguments?.[1];
+    if (!opts) return null;
+    if (!ts.isObjectLiteralExpression(opts)) return "?";
+    const c = prop(opts, "collection");
+    return c === undefined ? null : (stringValue(c) ?? "?");
+  };
+  walk(sf, (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isSchemaNew(node.initializer)) {
+      schemaCollection.set(node.name.text, optionOf(node.initializer));
+    }
+  });
+  walk(sf, (node) => {
+    if (!ts.isCallExpression(node) || node.arguments.length < 2) return;
+    const e = node.expression;
+    const isModel = (ts.isIdentifier(e) && imp.model.has(e.text))
+      || (ts.isPropertyAccessExpression(e) && e.name.text === "model" && ts.isIdentifier(e.expression) && imp.root.has(e.expression.text));
+    if (!isModel) return;
+    const [nameArg, schemaArg, collArg] = node.arguments;
+    const name = stringValue(nameArg);
+    const local = assignedName(node) ?? name;
+    if (!local) return;
+    let option: string | null | undefined;
+    if (schemaArg && ts.isIdentifier(schemaArg)) option = schemaCollection.get(schemaArg.text);
+    else if (schemaArg && isSchemaNew(schemaArg)) option = optionOf(schemaArg);
+    let table: string | undefined;
+    if (collArg) table = stringValue(collArg);
+    else if (option === "?") table = undefined;
+    else if (typeof option === "string") table = option;
+    else if (name !== undefined) table = mongooseCollection(name);
+    models.set(local, table === undefined ? { node } : { table, node });
+  });
+  return models;
+}
+
+/** Imports of a relative model file (`../models/customer`, `./invoice.model`), as lucidModelImports
+ * reads them: the default import resolves through the imported file's own model. */
+function mongooseModelImports(sf: ts.SourceFile): Map<string, ModelImport> {
+  const names = new Map<string, ModelImport>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !MONGOOSE_MODEL_SPEC.test(st.moduleSpecifier.text)) continue;
+    const clause = st.importClause;
+    if (clause?.name && /^[A-Z]/.test(clause.name.text)) {
+      names.set(clause.name.text, { model: clause.name.text, defaultFrom: st.moduleSpecifier.text });
+    }
+    if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        const imported = (el.propertyName ?? el.name).text;
+        if (/^[A-Z]/.test(el.name.text) && /^[A-Z]/.test(imported)) names.set(el.name.text, { model: imported });
+      }
+    }
+  }
+  return names;
+}
+
 function prismaSchema(file: ParsedFile): DbPart {
   const tables: TableDef[] = [];
   const models: ModelDef[] = [];
@@ -308,6 +442,12 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
   if (!file.sf || !DB_DEPS.some((d) => ctx.deps.has(d))) return res;
   const modelImports = ctx.deps.has("@adonisjs/lucid") ? lucidModelImports(file.sf) : new Map<string, ModelImport>();
   const drizzle = ctx.deps.has("drizzle-orm");
+  const mongoose = ctx.deps.has("mongoose");
+  const mgModels = mongoose ? mongooseModels(file.sf) : new Map<string, { table?: string; node: ts.Node }>();
+  const mgImports = mongoose ? mongooseModelImports(file.sf) : new Map<string, ModelImport>();
+  for (const [model, m] of mgModels) {
+    if (m.table !== undefined) res.models.push({ model, table: m.table, file: file.rel, source: "mongoose" });
+  }
   const at = (n: ts.Node) => ({ file: file.rel, line: lineOf(n), symbol: enclosingSymbol(n) });
   const push = (a: DbAccessDraft) => res.dbAccess.push(a);
   const classRepoFields = new Map<ts.ClassLikeDeclaration, Map<string, string>>();
@@ -346,6 +486,18 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       const imp = modelImports.get(e.expression.text)!;
       push({ model: imp.model, op, via: "lucid", at: at(node), ...(imp.defaultFrom ? { modelImport: imp.defaultFrom } : {}) });
       return;
+    }
+    if (mongoose && ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && MONGOOSE_OPS[e.name.text]) {
+      const local = e.expression.text;
+      const imp = mgModels.has(local) ? undefined : mgImports.get(local);
+      if (mgModels.has(local) || imp) {
+        // A model whose collection could not be read keeps its model name and no table (never a guessed one).
+        push({
+          model: imp ? imp.model : local, op: MONGOOSE_OPS[e.name.text]!, via: "mongoose", at: at(node),
+          ...(imp?.defaultFrom ? { modelImport: imp.defaultFrom } : {}),
+        });
+        return;
+      }
     }
     if (ctx.deps.has("@prisma/client") && ts.isPropertyAccessExpression(e) && PRISMA_OPS[e.name.text] && ts.isPropertyAccessExpression(e.expression) && /prisma|db|client|tx/i.test(rootName(e.expression))) {
       push({ model: e.expression.name.text, op: PRISMA_OPS[e.name.text]!, via: "prisma", at: at(node) });
