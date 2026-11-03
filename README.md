@@ -71,13 +71,25 @@ Journeys need JS/TS.
 |---|---|
 | `codeloom init [dir]` | Set up a repo or a folder of repos: workspace file, `.codeloom/config.json` per repo, post-commit hook, `.gitignore` line, `.mcp.json` entry. |
 | `codeloom index` | Index every repo in the workspace. Only changed files are parsed again. `--quiet` prints nothing on success. |
-| `codeloom check` | Report how complete the map is: chains that run UI → API → DB, chains missing the DB step or broken at UI → API, unresolved calls, routes no UI calls, guessed links. |
+| `codeloom check` | Report how complete the map is: chains that run UI → API → DB, chains that run API → DB only (no UI caller), chains missing the DB step or broken at UI → API, how many routes have a UI caller, unresolved calls, guessed links. |
 | `codeloom check --json` | The same report as JSON. |
-| `codeloom check --fail-under 80` | Exit 1 when less than 80% of chains are complete. Useful in CI. |
+| `codeloom check --fail-under 80` | Exit 1 when less than 80% of the chains that start in the UI are complete. Useful in CI. |
 | `codeloom check --traces` | Also compare the map with real traffic (see [Trace check](#trace-check)). |
 | `codeloom doctor` | Check the data files, hooks, `.gitignore` line and MCP entry. `--fix` repairs what is safe to repair. `--json` prints JSON. |
 | `codeloom dashboard` | Serve the dashboard on 127.0.0.1 and open it. `--port <port>` picks the port; `--no-open` only prints the URL. |
 | `codeloom serve` | Run the MCP server on stdio. `init` puts this in `.mcp.json` as `npx -y codeloom serve`. |
+
+`check` starts with a summary like this:
+
+```text
+7 journeys: 3 complete UI → API → DB, 2 API → DB only (no UI caller), 2 missing the DB step
+routes with a UI caller: 3/5
+complete: 100% of journeys that start in the UI (3/3)
+```
+
+A chain is complete only when it starts at a page or UI call and reaches a database table or queue. A
+route or queue consumer that reaches the database but that no UI code calls counts as API → DB only, and
+`--fail-under` leaves it out of the ratio.
 
 Exit codes: `0` ok, `1` `--fail-under` not met (or `doctor` found errors), `2` a data or usage error
 (missing or broken `.codeloom` files, bad flag value).

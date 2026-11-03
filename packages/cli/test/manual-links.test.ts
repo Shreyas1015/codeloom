@@ -91,7 +91,7 @@ describe("manual links into chains", () => {
     const at = refund.stops.findIndex((s) => s.hop.reason === "manual link");
     expect(refund.stops[at - 1]!.kind).toBe("route");
     expect(brief(refund).slice(at)).toEqual(["handler:refund:exact(manual)", "db:Payment:exact"]);
-    expect(refund.complete).toBe(true);
+    expect(refund.complete).toBe(false); // H3: reaches a store but no UI stop: API → DB only
   });
 
   it("route -> route appends the linked route and its backend half", async () => {
@@ -121,7 +121,7 @@ describe("manual links into chains", () => {
     const health = chainsFile(root).chains.find((c) => c.entry === "route:billing:GET /health")!;
     const at = health.stops.findIndex((s) => s.hop.reason === "manual link");
     expect(brief(health).slice(at)).toEqual(["consume:emails:exact(manual)", "handler:handleEmail:exact(manual)", "db:email_logs:exact"]);
-    expect(health.complete).toBe(true);
+    expect(health.complete).toBe(false); // H3: reaches a store but no UI stop: API → DB only
   });
 
   it("broken links are check items (text + --json); a link whose from matches no stop is an info item", async () => {

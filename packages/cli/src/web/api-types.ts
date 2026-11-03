@@ -78,6 +78,8 @@ export interface JourneyRow {
   confidence: Confidence;
   /** Every chain present and complete. */
   complete: boolean;
+  /** Not complete, but every chain present reaches a store, and some have no UI stop (H3: "API → DB"). */
+  apiOnly: boolean;
   /** Tables its db stops touch, sorted. */
   tables: string[];
 }
@@ -88,6 +90,8 @@ export interface ChainRow {
   entry: string;
   confidence: Confidence;
   complete: boolean;
+  /** Reaches a store but has no UI stop (H3: "API → DB"); never true when `complete`. */
+  apiOnly: boolean;
   repos: string[];
 }
 

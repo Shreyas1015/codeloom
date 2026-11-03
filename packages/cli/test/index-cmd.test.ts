@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { formatIndexSummary, runIndex } from "../src/commands/index-cmd.js";
+import { formatIndexSummary, type IndexRunResult, runIndex } from "../src/commands/index-cmd.js";
 import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 
 function workspace() {
@@ -123,5 +123,34 @@ describe("stable repo ids across clones (final review batch 2, item C)", () => {
     }
     expect(out[0]).toContain('"route:shop:');
     expect(out[1]).toBe(out[0]);
+  });
+});
+
+describe("index summary: files vs parsed (H7)", () => {
+  const endpoints = { version: 2 as const, repo: "x", pages: [], httpCalls: [], httpClients: [], routes: [], mounts: [], dbAccess: [], tables: [], models: [], queues: [] };
+  const result = (repos: Array<{ id: string; files: number; parsed: number; reused: number; skipped?: number }>): IndexRunResult => ({
+    root: "/ws",
+    repos: repos.map((r) => ({
+      id: r.id,
+      stats: { files: r.files, parsed: r.parsed, reused: r.reused, skipped: Array.from({ length: r.skipped ?? 0 }, (_, i) => ({ file: `big${i}.ts`, reason: "larger than 1 MB" })) },
+      endpoints: { ...endpoints, repo: r.id },
+    })),
+    linker: { chains: 0, complete: 0, orphanedJourneys: 0, wrote: false },
+  });
+
+  it("explains, per repo, why files and parsed differ", () => {
+    const text = formatIndexSummary(result([
+      { id: "api", files: 12, parsed: 6, reused: 2, skipped: 1 },
+      { id: "web", files: 3, parsed: 3, reused: 0 },
+      { id: "billing", files: 5, parsed: 4, reused: 0 },
+    ]));
+    expect(text).toContain("files counts every file in the repo; parsed counts the source files read again this run:");
+    expect(text).toContain("  api: 3 files had nothing to parse, 2 unchanged since the last run, 1 skipped");
+    expect(text).toContain("  billing: 1 file had nothing to parse");
+    expect(text).not.toMatch(/^ {2}web:/m);
+  });
+
+  it("says nothing when every file was parsed", () => {
+    expect(formatIndexSummary(result([{ id: "web", files: 3, parsed: 3, reused: 0 }]))).not.toContain("nothing to parse");
   });
 });

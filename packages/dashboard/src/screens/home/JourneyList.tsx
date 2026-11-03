@@ -91,7 +91,7 @@ function Row({ r }: { r: JourneyRow }) {
         <span className="truncate font-mono text-xs text-muted-foreground">{r.repos.join(", ")}</span>
         <span className="flex flex-col items-start gap-0.5">
           <ConfidenceMark confidence={r.confidence} />
-          <CompleteMark complete={r.complete} />
+          <CompleteMark complete={r.complete} apiOnly={r.apiOnly} />
         </span>
       </Link>
     </li>
@@ -165,6 +165,7 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
               options={[
                 ["", "Any"],
                 ["complete", "Complete"],
+                ["api-only", "API → DB"],
                 ["incomplete", "Incomplete"],
               ]}
             />

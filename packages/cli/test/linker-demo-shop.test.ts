@@ -50,14 +50,14 @@ describe("the linker on demo-shop", () => {
     expect(byEntry["page:web:/invoices/new"]).toMatchObject({ routeKey: "billing:POST /billing/invoices", complete: true, confidence: "exact" });
 
     // param: the pay route's publish continues into the "emails" consumer through the invoice.* wildcard binding
-    expect(byEntry["route:billing:POST /billing/invoices/:id/pay"]).toMatchObject({ complete: true, confidence: "param" });
+    expect(byEntry["route:billing:POST /billing/invoices/:id/pay"]).toMatchObject({ complete: false, confidence: "param" }); // H3: no UI caller, so API → DB only
     expect(byEntry["route:billing:GET /health"]).toMatchObject({ complete: false }); // no db/queue hit: check's "no-store"
     // the inline handler's stop points at its own first line, not line 1 of the file
     expect((byEntry["route:billing:GET /health"] as { stops: Stop[] }).stops[1]).toMatchObject({ kind: "handler", symbol: "GET /health", line: 10 });
 
     expect(byEntry["consumer:billing:invoice.created#src/events.ts#startConsumer"]).toMatchObject({ complete: false, name: "consume invoice.created · startConsumer" }); // ack-only, no store
     const emails = byEntry["consumer:billing:emails#src/notify-consumer.ts#handleEmail"] as { stops: Stop[] };
-    expect(emails).toMatchObject({ complete: true, confidence: "exact", name: "consume emails · handleEmail" }); // named handler -> email_logs insert
+    expect(emails).toMatchObject({ complete: false, confidence: "exact", name: "consume emails · handleEmail" }); // named handler -> email_logs insert; H3: no UI stop, so API → DB only
     // Only the guessed hops at store sites are dropped: no false invoices hit through a same-named method.
     expect(emails.stops.filter((s) => s.lane === "db" || s.kind === "publish").map((s) => `${s.op} ${s.label}`)).toEqual(["insert email_logs"]);
   });

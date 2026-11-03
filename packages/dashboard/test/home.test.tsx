@@ -31,6 +31,7 @@ function row(p: Partial<JourneyRow> & { id: string; name: string }): JourneyRow 
     stops: { ui: 0, api: 0, code: 0, db: 0, queue: 0 },
     confidence: "exact",
     complete: true,
+    apiOnly: false,
     tables: [],
     ...p,
   };
@@ -67,12 +68,14 @@ const journeys: JourneysResponse = {
       repos: ["api"],
       stops: { ui: 0, api: 1, code: 2, db: 1, queue: 1 },
       confidence: "param",
+      complete: false,
+      apiOnly: true,
       tables: ["invoice_emails"],
     }),
   ],
   unnamedChains: [
-    { id: "ch_aaa", name: "GET /api/customers/:id", entry: "web/src/pages/customer.tsx", confidence: "exact", complete: true, repos: ["api", "web"] },
-    { id: "ch_bbb", name: "POST /api/invoices", entry: "api/src/routes/invoices.ts", confidence: "guess", complete: false, repos: ["api"] },
+    { id: "ch_aaa", name: "GET /api/customers/:id", entry: "web/src/pages/customer.tsx", confidence: "exact", complete: true, apiOnly: false, repos: ["api", "web"] },
+    { id: "ch_bbb", name: "POST /api/invoices", entry: "api/src/routes/invoices.ts", confidence: "guess", complete: false, apiOnly: true, repos: ["api"] },
   ],
 };
 
@@ -161,6 +164,9 @@ describe("Home", () => {
     const orphan = within(l).getByRole("link", { name: /Invoice is emailed/ });
     expect(orphan).toHaveTextContent("Orphaned");
     expect(vd).not.toHaveTextContent("Orphaned");
+    // H3: no UI stop but reaches the DB: neither "Complete" nor "Incomplete"
+    expect(orphan).toHaveTextContent("API → DB");
+    expect(orphan).not.toHaveTextContent(/\bComplete|Incomplete/);
   });
 
   it.each([
@@ -168,7 +174,8 @@ describe("Home", () => {
     ["Repo", "web", ["Admin voids an invoice", "Customer signs up"]],
     ["Confidence", "param", ["Invoice is emailed"]],
     ["Status", "incomplete", ["Admin voids an invoice"]],
-    ["Status", "complete", ["Customer signs up", "Invoice is emailed"]],
+    ["Status", "complete", ["Customer signs up"]],
+    ["Status", "api-only", ["Invoice is emailed"]], // H3: no UI stop, reaches the DB
   ])("filters by %s = %s", async (label, value, expected) => {
     renderHome();
     await list();
@@ -310,7 +317,9 @@ describe("Home", () => {
       expect(items[0]).toHaveTextContent("GET /api/customers/:id");
       expect(items[0]).toHaveTextContent("web/src/pages/customer.tsx");
       expect(items[1]).toHaveTextContent("Guess");
-      expect(items[1]).toHaveTextContent("Incomplete");
+      // H3: a route-only chain that reaches the DB says "API → DB"
+      expect(items[1]).toHaveTextContent("API → DB");
+      expect(items[1]).not.toHaveTextContent("Incomplete");
       expect(section).toHaveTextContent("Ask your agent: /mcp__codeloom__name-journeys");
       await act(async () => {
         fireEvent.click(within(section).getByRole("button", { name: /Copy/ }));

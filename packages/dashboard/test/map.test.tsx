@@ -135,6 +135,7 @@ const journeys: JourneysResponse = {
       stops: { ui: 1, api: 1, code: 1, db: 0, queue: 0 },
       confidence: "exact",
       complete: true,
+      apiOnly: false,
       tables: [],
     },
   ],

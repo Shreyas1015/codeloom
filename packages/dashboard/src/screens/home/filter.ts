@@ -3,7 +3,8 @@ import type { Confidence, JourneyRow, Lane } from "@/api/types";
 export const LANES: Lane[] = ["ui", "api", "code", "db", "queue"];
 
 export type SortKey = "name" | "area" | "stops" | "confidence";
-export type CompleteFilter = "" | "complete" | "incomplete";
+/** "api-only": reaches the DB but no UI calls it (H3); "incomplete" excludes those. */
+export type CompleteFilter = "" | "complete" | "api-only" | "incomplete";
 
 export interface JourneyFilter {
   /** Free text: every word must appear in the name, area, note or a table. */
@@ -41,7 +42,8 @@ export function filterJourneys(rows: JourneyRow[], f: JourneyFilter): JourneyRow
     if (f.repo && !r.repos.includes(f.repo)) return false;
     if (f.confidence && r.confidence !== f.confidence) return false;
     if (f.complete === "complete" && !r.complete) return false;
-    if (f.complete === "incomplete" && r.complete) return false;
+    if (f.complete === "api-only" && !r.apiOnly) return false;
+    if (f.complete === "incomplete" && (r.complete || r.apiOnly)) return false;
     if (words.length) {
       const hay = [r.name, r.area, r.note, ...r.tables].join("\n").toLowerCase();
       if (!words.every((w) => hay.includes(w))) return false;

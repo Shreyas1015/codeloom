@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
+import { isComplete } from "./completeness.js";
 import { parseLinkRef, stepKey, uiReachKey } from "./link.js";
 import type { BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, StoreHit, UiLink } from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
@@ -282,12 +283,6 @@ function toUnresolved(repo: string, u: { at: { file: string; line: number; symbo
 function sortUnresolved(list: Unresolved[]): Unresolved[] {
   return list.sort((a, b) => compare(a.at.repo, b.at.repo) || compare(a.at.file, b.at.file) || a.at.line - b.at.line
     || compare(a.at.symbol, b.at.symbol) || compare(a.reason, b.reason));
-}
-
-/** Complete = reaches a database table or publishes to a queue. Unresolved calls (often framework calls
- * such as `res.json(...)`) are reported on the chain but never affect completeness. */
-function isComplete(stops: ChainStop[]): boolean {
-  return stops.some((s) => s.kind === "db" || s.kind === "publish");
 }
 
 function worstConfidence(stops: ChainStop[]): Confidence {

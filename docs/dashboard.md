@@ -19,7 +19,7 @@ It listens on `127.0.0.1` only. The URL carries a one-time token; after the firs
 
 | Screen | What you see |
 |---|---|
-| **Home** (`/`) | Counts (files, pages, routes, tables, queues, journeys), the journey you last opened, all journeys with filters, search and sort (`j` / `k`, Enter), and chains no journey names yet. |
+| **Home** (`/`) | Counts (files, pages, routes, tables, queues, journeys), the journey you last opened, all journeys with filters, search and sort (`j` / `k`, Enter), and chains no journey names yet. Each is marked Complete (UI → API → DB), API → DB (reaches the database, but no UI code calls it) or Incomplete. |
 | **Journey** (`/journeys/<id>`) | UI → API → Code → DB lanes with numbered stops. Lines show real hops only: solid when exact, thinner for a param match, dashed when guessed. Unresolved hops are listed in red. Click a stop (or use ← / →) to see its code. |
 | **Map** (`/map`) | One repo at a time: folders → files → functions. Double-click a folder to open it. Pick a journey to highlight its files, or colour by layer. Search jumps to a file. |
 

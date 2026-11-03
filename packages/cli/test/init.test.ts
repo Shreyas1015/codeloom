@@ -13,7 +13,7 @@ import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureMcpEntry, formatInit, HOOK_MARK, installHook, MCP_ENTRY, runInit, shellQuote } from "../src/commands/init.js";
+import { codeloomBin, ensureMcpEntry, formatInit, HOOK_MARK, hookLine, installHook, MCP_ENTRY, runInit, shellQuote } from "../src/commands/init.js";
 import { CodeloomError } from "../src/errors.js";
 import { makeRepo } from "./helpers.js";
 
@@ -467,5 +467,66 @@ describe("formatInit on an already-initialized workspace", () => {
     expect(text).toContain("api");
     expect(text).toContain("web");
     expect(text).toContain("hook already installed");
+  });
+});
+
+describe("post-commit hook command (H7)", () => {
+  /** An executable stand-in for the codeloom bin: records its working folder and arguments. */
+  function fakeBin(dirName = "codeloom bin's dir"): { bin: string; out: string } {
+    const dir = join(mkdtempSync(join(tmpdir(), "codeloom-h7-")), dirName);
+    mkdirSync(dir, { recursive: true });
+    const out = join(dir, "ran.txt");
+    const bin = join(dir, "bin.js");
+    writeFileSync(bin, `#!/bin/sh\necho "$PWD|$*" > ${shellQuote(out)}\n`);
+    chmodSync(bin, 0o755);
+    return { bin, out };
+  }
+
+  it("codeloomBin is the absolute path of the running bin when it exists and is executable", () => {
+    const { bin } = fakeBin();
+    expect(codeloomBin(bin)).toBe(bin);
+    expect(codeloomBin(join(bin, "..", "bin.js"))).toBe(bin);
+    expect(codeloomBin(join(tmpdir(), "no-such-codeloom-bin.js"))).toBeUndefined();
+    expect(codeloomBin(undefined)).toBeUndefined();
+    const plain = join(mkdtempSync(join(tmpdir(), "codeloom-h7-")), "bin.js");
+    writeFileSync(plain, "console.log(1)\n");
+    chmodSync(plain, 0o644);
+    expect(codeloomBin(plain)).toBeUndefined();
+  });
+
+  it("the hook runs the bin that ran init, by its quoted absolute path, then codeloom on PATH; never npx", () => {
+    const { bin } = fakeBin();
+    const line = hookLine("/ws", bin);
+    expect(line).toContain(`[ -x ${shellQuote(bin)} ]`);
+    expect(line).toContain(`${shellQuote(bin)} index --quiet`);
+    expect(line).toContain("command -v codeloom");
+    expect(line.indexOf(shellQuote(bin))).toBeLessThan(line.indexOf("command -v codeloom"));
+    expect(line).not.toContain("npx");
+    expect(hookLine("/ws")).not.toContain("[ -x");
+    expect(hookLine("/ws")).toContain("command -v codeloom");
+    expect(hookLine("/ws")).not.toContain("npx");
+  });
+
+  it("init writes that line, and the installed hook runs the bin in the workspace root", () => {
+    const { bin, out } = fakeBin();
+    const repo = makeRepo({ "a.ts": "" });
+    runInit(repo, { bin });
+    const hookPath = join(repo, ".git/hooks/post-commit");
+    expect(readFileSync(hookPath, "utf8")).toContain(`${shellQuote(bin)} index --quiet`);
+    // PATH holds no codeloom: only the absolute path can have run it
+    execFileSync("sh", [hookPath], { cwd: repo, env: { ...process.env, PATH: "/usr/bin:/bin" }, stdio: "pipe" });
+    waitUntil(() => existsSync(out));
+    expect(readFileSync(out, "utf8").trim()).toBe(`${resolve(repo)}|index --quiet`);
+  });
+
+  it("formatInit's hand-install hint uses the same line", () => {
+    const { bin } = fakeBin();
+    const folder = mkdtempSync(join(tmpdir(), "codeloom-h7-nohooks-"));
+    const repo = makeRepo({ "a.ts": "" }, join(folder, "web"));
+    // core.hooksPath outside the repo: init skips the hook and prints the line to add by hand
+    execFileSync("git", ["config", "core.hooksPath", join(folder, "shared-hooks")], { cwd: repo });
+    const res = runInit(folder, { bin });
+    expect(res.skipped).toHaveLength(1);
+    expect(formatInit(res)).toContain(hookLine(res.root, bin));
   });
 });

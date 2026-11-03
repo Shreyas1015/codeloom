@@ -25,6 +25,25 @@ export async function runIndex(start: string): Promise<IndexRunResult> {
   return { root: ws.root, repos, linker };
 }
 
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** H7: why `files` and `parsed` differ, one line per repo where they do. `files` counts every file in the
+ * repo; the rest were not source code (nothing to parse), unchanged (reused from the cache) or skipped. */
+function filesNote(r: IndexRunResult): string[] {
+  const lines = r.repos.flatMap(({ id, stats }) => {
+    if (stats.files === stats.parsed) return [];
+    const skipped = stats.skipped.length;
+    const nothing = stats.files - stats.parsed - stats.reused - skipped;
+    const parts = [
+      nothing > 0 ? `${count(nothing, "file", "files")} had nothing to parse` : "",
+      stats.reused > 0 ? `${stats.reused} unchanged since the last run` : "",
+      skipped > 0 ? `${skipped} skipped` : "",
+    ].filter(Boolean);
+    return parts.length > 0 ? [`  ${id}: ${parts.join(", ")}`] : [];
+  });
+  return lines.length > 0 ? ["files counts every file in the repo; parsed counts the source files read again this run:", ...lines] : [];
+}
+
 export function formatIndexSummary(r: IndexRunResult): string {
   const header = ["repo", "files", "parsed", "reused", "pages", "calls", "routes", "tables", "queues", "skipped"];
   const rows = r.repos.map((x) => [
@@ -47,6 +66,7 @@ export function formatIndexSummary(r: IndexRunResult): string {
     line(header),
     ...rows.map(line),
     "",
+    ...filesNote(r),
     `${r.repos.length} repos indexed in ${r.root}`,
     `${r.linker.chains} chains (${r.linker.complete} complete) written to .codeloom/chains.json`,
     ...orphanedNote,

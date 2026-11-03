@@ -12,6 +12,7 @@ function row(p: Partial<JourneyRow> & { id: string; name: string }): JourneyRow 
     stops: { ui: 0, api: 0, code: 0, db: 0, queue: 0 },
     confidence: "exact",
     complete: true,
+    apiOnly: false,
     tables: [],
     ...p,
   };
@@ -46,6 +47,9 @@ const rows: JourneyRow[] = [
     repos: ["worker"],
     stops: { ui: 0, api: 1, code: 3, db: 1, queue: 2 },
     confidence: "param",
+    // H3: a worker journey with no UI stop reaches the DB: "API → DB", not complete.
+    complete: false,
+    apiOnly: true,
     tables: ["invoice_emails", "invoices"],
   }),
 ];
@@ -69,7 +73,8 @@ describe("home filter", () => {
     ["area", { area: "Invoices" }, ["j_2", "j_3"]],
     ["repo", { repo: "api" }, ["j_1", "j_2"]],
     ["confidence", { confidence: "guess" }, ["j_2"]],
-    ["complete", { complete: "complete" }, ["j_1", "j_3"]],
+    ["complete", { complete: "complete" }, ["j_1"]],
+    ["api-only", { complete: "api-only" }, ["j_3"]],
     ["incomplete", { complete: "incomplete" }, ["j_2"]],
   ] as const)("filters by %s", (_n, f, ids) => {
     expect(filterJourneys(rows, { ...all, ...f }).map((r) => r.id)).toEqual(ids);
