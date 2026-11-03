@@ -299,9 +299,9 @@ export function buildCheckReport(
 
 /** Complete chains over the chains that start in the UI (have a UI stop), as an unrounded percentage.
  * Route-only and consumer chains are not in the ratio: no UI journey can be complete without a UI stop.
- * 100 when no chain has a UI stop (nothing for `--fail-under` to fail on). */
+ * 0 when no chain has a UI stop: nothing is proven end to end, so `--fail-under` must not pass. */
 export function completeRatio(r: CheckReport): number {
-  if (r.summary.uiChains === 0) return 100;
+  if (r.summary.uiChains === 0) return 0;
   return (r.summary.complete / r.summary.uiChains) * 100;
 }
 

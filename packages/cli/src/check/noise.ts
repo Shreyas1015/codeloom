@@ -15,8 +15,9 @@ export const GLOBAL_BUILTINS: ReadonlySet<string> = new Set([
   "encodeURIComponent", "decodeURIComponent", "encodeURI", "decodeURI", "atob", "btoa", "require",
 ]);
 
-// TODO(H4 merge): replace this list with part A's exported built-in method name constant in
-// linker/resolve-calls.ts once that branch is merged, so the resolver and check share one list.
+// Deliberately separate from linker/resolve-calls.ts BUILTIN_METHOD_NAMES: the resolver never *guesses*
+// on built-in or ORM names, while check only *hides* true built-ins — an unresolved `x.create()` may be a
+// lost hop and stays listed.
 /** Method names of built-in values (arrays, strings, promises, numbers, dates) whose call on an unknown
  * receiver (`items.map(...)`, `.then(...)`) is never a lost hop. Names that ORMs and services also use
  * (`find`, `get`, `set`, `create`, `delete`, ...) are left out on purpose. */

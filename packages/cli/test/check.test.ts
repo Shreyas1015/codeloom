@@ -292,8 +292,8 @@ describe("buildCheckReport", () => {
 });
 
 describe("completePercent", () => {
-  it("is 100 when there are no chains", () => {
-    expect(completePercent({ version: 1, summary: S({ chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] })).toBe(100);
+  it("is 0 when there are no chains (an empty map proves nothing)", () => {
+    expect(completePercent({ version: 1, summary: S({ chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] })).toBe(0);
   });
 
   it("rounds complete/chains to a whole percent", () => {
@@ -574,6 +574,12 @@ describe("check exit codes (final review item 2)", () => {
     expect(belowFailUnder({ ...r, summary: { ...summary, complete: 950, missingDb: 50 } }, 95)).toBe(false);
   });
 
+  it("with no journey that starts in the UI, --fail-under fails (0%, nothing proven end to end)", () => {
+    const r = { version: 1 as const, summary: { ...summary, uiChains: 0, complete: 0, apiOnly: 900 }, items: [] };
+    expect(belowFailUnder(r, 1)).toBe(true);
+    expect(belowFailUnder(r, 0)).toBe(false);
+  });
+
   it("a folder with no workspace and no git repo is a data error (exit 2)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "codeloom-nows-"));
     try {
@@ -621,9 +627,9 @@ describe("honest completeness (H3): complete needs a UI stop", () => {
     expect(lines).toContain("complete: 50% of journeys that start in the UI (1/2)");
   });
 
-  it("with no journey that starts in the UI, --fail-under has nothing to fail on", () => {
+  it("with no journey that starts in the UI, --fail-under fails (route-only chains prove no UI journey)", () => {
     const routeOnly = fakeChain({ entry: "route:api:POST /api/invoices", routeKey: "api:POST /api/invoices", stops: [route("/api/invoices", 2), handler, db] });
-    expect(belowFailUnder(buildCheckReport([routeOnly], ws()), 100)).toBe(false);
+    expect(belowFailUnder(buildCheckReport([routeOnly], ws()), 1)).toBe(true);
   });
 });
 

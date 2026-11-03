@@ -91,7 +91,8 @@ complete: 100% of journeys that start in the UI (3/3)
 
 A chain is complete only when it starts at a page or UI call and reaches a database table or queue. A
 route or queue consumer that reaches the database but that no UI code calls counts as API → DB only, and
-`--fail-under` leaves it out of the ratio.
+`--fail-under` leaves it out of the ratio. With no chain that starts in the UI, the ratio is 0%, so
+`--fail-under` fails: nothing is proven end to end.
 
 Exit codes: `0` ok, `1` `--fail-under` not met (or `doctor` found errors), `2` a data or usage error
 (missing or broken `.codeloom` files, bad flag value).
