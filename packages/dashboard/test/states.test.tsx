@@ -186,6 +186,29 @@ describe("full-screen states", () => {
     await waitFor(() => expect(h1).toHaveFocus());
   });
 
+  it("an idle viewer whose session expires sees it: the live stream's error refetches the overview once", async () => {
+    renderAt("/");
+    await screen.findByRole("heading", { level: 1, name: "demo-shop" });
+    const fetch = vi.mocked(globalThis.fetch);
+    const overviewCalls = () => fetch.mock.calls.filter((c) => String(c[0]).startsWith("/api/overview")).length;
+    const before = overviewCalls();
+    act(() => sources[0]!.onopen?.());
+    replies["/api/overview"] = { status: 401, body: { error: "no session" } };
+    act(() => sources[0]!.onerror?.());
+    expect(await screen.findByRole("alert", { name: /session expired/i })).toBeInTheDocument();
+    expect(overviewCalls()).toBe(before + 1);
+  });
+
+  it("a stream that never opened does not refetch the overview on error", async () => {
+    renderAt("/");
+    await screen.findByRole("heading", { level: 1, name: "demo-shop" });
+    const fetch = vi.mocked(globalThis.fetch);
+    const before = fetch.mock.calls.length;
+    act(() => sources[0]!.onerror?.());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetch.mock.calls.length).toBe(before);
+  });
+
   it("a state shown on first load does not steal focus", async () => {
     replies["/api/overview"] = notIndexed;
     renderAt("/");

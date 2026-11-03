@@ -51,7 +51,9 @@ const MAX_RETRY_MS = 30_000;
 /** Live updates: listens to /api/events and invalidates the queries each change touches. On an error it
  * closes the stream and reconnects with backoff (1 s, 2 s, 4 s … 30 s); `paused` is true from the error
  * until a stream opens again, and on reopening every query is invalidated, since changes may have been
- * missed meanwhile. Mount once (the shell). */
+ * missed meanwhile. The first error after an open stream also refetches the overview once: an idle viewer
+ * whose session expired makes no other request, and that 401 is what shows the session-expired state.
+ * Mount once (the shell). */
 export function useMapEvents(): { paused: boolean } {
   const queryClient = useQueryClient();
   const [paused, setPaused] = useState(false);
@@ -62,6 +64,7 @@ export function useMapEvents(): { paused: boolean } {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let retryMs = FIRST_RETRY_MS;
     let missed = false;
+    let wasOpen = false;
     let disposed = false;
 
     const onChange = (e: MessageEvent) => {
@@ -81,6 +84,7 @@ export function useMapEvents(): { paused: boolean } {
       source.addEventListener("change", onChange as EventListener);
       source.onopen = () => {
         retryMs = FIRST_RETRY_MS;
+        wasOpen = true;
         setPaused(false);
         if (missed) {
           missed = false;
@@ -93,6 +97,10 @@ export function useMapEvents(): { paused: boolean } {
         if (disposed || es !== source) return;
         missed = true;
         setPaused(true);
+        if (wasOpen) {
+          wasOpen = false;
+          void queryClient.refetchQueries({ queryKey: ["overview"], exact: true });
+        }
         const wait = retryMs;
         retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
         timer = setTimeout(connect, wait);
