@@ -1,13 +1,19 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "@codeloom/core";
 import { finalizeEndpoints, runAdapters } from "../src/adapters/run.js";
+import { runIndex } from "../src/commands/index-cmd.js";
 import { buildFileCodeIndex } from "../src/linker/code-index.js";
 import type { RepoCodeIndex } from "../src/linker/code-index.js";
 import { linkUi } from "../src/linker/link.js";
 import { createCallResolver } from "../src/linker/resolve-calls.js";
 import type { RepoData, WorkspaceData } from "../src/store/read.js";
+import { ChainsFileSchema } from "../src/store/schemas.js";
 import type { EndpointsFile, UiPage } from "../src/store/schemas.js";
 import { ctxWith, parsed } from "./adapter-helpers.js";
+import { makeRepo } from "./helpers.js";
 
 function graphStub(): KnowledgeGraph {
   return {
@@ -182,5 +188,76 @@ export const a = () => track({ method: "GET", url: "/customers" });
 `,
     }, []);
     expect(links).toEqual([]);
+  });
+});
+
+describe("codeloom index: axios instance + config wrapper workspace (hardening H2)", () => {
+  function workspace(): string {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-h2-"));
+    makeRepo({
+      "package.json": JSON.stringify({ name: "web", dependencies: { axios: "^1", react: "^18", "react-router-dom": "^6" } }),
+      "src/api/client.ts": clientTs,
+      "src/api/http.ts": httpTs,
+      "src/api/customers.ts": [
+        "import client from './client';",
+        "import { httpClient } from './http';",
+        "export async function getCustomer(id: string) {",
+        "  const config = { method: 'GET', url: `/customers/${id}` };",
+        "  const res = await client(config);",
+        "  return res.data;",
+        "}",
+        "export const createCustomer = (data: unknown) => httpClient({ method: 'POST', url: '/customers', data });",
+        "",
+      ].join("\n"),
+      "src/hooks/useCustomer.ts": [
+        "import { getCustomer, createCustomer } from '../api/customers';",
+        "export function useCustomer(id: string) { return getCustomer(id); }",
+        "export function useCreateCustomer() { return (d: unknown) => createCustomer(d); }",
+        "",
+      ].join("\n"),
+      "src/pages/CustomerPage.tsx": [
+        "import { useCustomer, useCreateCustomer } from '../hooks/useCustomer';",
+        "export default function CustomerPage() { const c = useCustomer('1'); const save = useCreateCustomer(); return <button onClick={() => save(c)} />; }",
+        "",
+      ].join("\n"),
+      "src/App.tsx": [
+        "import { Route, Routes } from 'react-router-dom';",
+        "import CustomerPage from './pages/CustomerPage';",
+        "export const App = () => <Routes><Route path=\"/customers/:id\" element={<CustomerPage />} /></Routes>;",
+        "",
+      ].join("\n"),
+    }, join(root, "web"));
+    makeRepo({
+      "package.json": JSON.stringify({ name: "api", dependencies: { express: "^4" } }),
+      "src/app.ts": [
+        "import express from 'express';",
+        "const app = express();",
+        "app.get('/customers/:id', (req, res) => { res.json({}); });",
+        "app.post('/customers', (req, res) => { res.json({}); });",
+        "",
+      ].join("\n"),
+    }, join(root, "api"));
+    writeFileSync(join(root, "codeloom.workspace.json"), JSON.stringify({
+      version: 1, name: "h2",
+      repos: [{ id: "api", path: "api", role: "api", apiBase: ["VITE_API_URL"] }, { id: "web", path: "web", role: "ui" }],
+      links: [],
+    }));
+    return root;
+  }
+
+  it("links both calls from the page, and re-runs byte-identical", async () => {
+    const root = workspace();
+    await runIndex(root);
+    const path = join(root, ".codeloom", "chains.json");
+    const first = readFileSync(path, "utf8");
+    const file = ChainsFileSchema.parse(JSON.parse(first));
+    expect(file.uiReach!.map((f) => [f.symbol, f.method, f.path, f.reached])).toEqual([
+      ["getCustomer", "GET", "/customers/:id", true],
+      ["createCustomer", "POST", "/customers", true],
+    ]);
+    const routeKeys = file.chains.filter((c) => c.entry.startsWith("page:")).map((c) => c.routeKey).sort();
+    expect(routeKeys).toEqual(expect.arrayContaining([expect.stringContaining("GET /customers/:id"), expect.stringContaining("POST /customers")]));
+    expect((await runIndex(root)).linker.wrote).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(first);
   });
 });
