@@ -7,10 +7,12 @@ import type { ServerOptions } from "./server.js";
 
 const NAME_JOURNEYS_TEXT = `Group the map's unnamed chains into named user journeys.
 
-1. Call \`list_chains\` with \`unnamed: true\`. It returns one page at a time (\`limit\`, default 100) with
-   a \`total\` and a \`truncated\` flag. Keep calling it with a growing \`offset\` until \`truncated\` is
-   false, so you see every unnamed chain, not just the first page.
-2. Look at each chain's \`entry\`, \`routeKey\`, and \`stops\` to see what it does. Group chains that serve
+1. Call \`list_chains\` with \`unnamed: true, detail: true\` (\`detail: true\` adds each chain's stops). It
+   returns one page at a time (\`limit\`, default 100) with a \`total\` and a \`truncated\` flag. Keep calling
+   it, growing \`offset\` by the number of chains you got, until \`truncated\` is false, so you see every
+   unnamed chain, not just the first page. If a reply has a \`truncatedNote\`, it was cut to fit: use a
+   smaller \`limit\`.
+2. Look at each chain's \`entry\`, \`routeKey\`, \`tables\` and \`stops\` to see what it does. Group chains that serve
    the same user-facing goal into one journey — e.g. the page, the API route, and the DB write behind
    "create a customer" all belong together.
 3. For each group, write a short, plain name a non-technical person would recognize, e.g.
@@ -32,7 +34,8 @@ function verifyJourneyText(journey: string): string {
 
 1. Call \`get_journey\` with \`{ id: "${journey}" }\`. It returns the journey's chains and its stops laid
    out by lane (ui / api / code / db / queue), each with a \`ref\` ("<repo>::<nodeId>") when it sits on a
-   graph node.
+   graph node. If the reply says \`truncated\` (a very large journey), call get_journey again with each
+   chain id (ch_…) from the journey's \`chainIds\` and verify one chain at a time.
 2. For every stop that has a \`ref\`, call \`explain_context\` with \`{ node: ref }\` to read its source
    code and its neighbors. A stop without a \`ref\` (often a DB or queue stop) still has \`repo\`, \`file\`
    and \`line\`: read the code at that line yourself.

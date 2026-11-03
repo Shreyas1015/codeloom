@@ -109,7 +109,7 @@ and `save_summary` write anything; `reindex` runs the indexer.
 | `index_status` | Per repo: the commit it was indexed at and whether the index is stale. |
 | `reindex` | Runs the indexer and linker again. |
 | `get_layers` | The architectural layers found in a repo, with node counts. |
-| `list_chains` | Request chains, filtered by repo, completeness, confidence, or unnamed. Paged. |
+| `list_chains` | Request chains, filtered by repo, completeness, confidence, or unnamed. Paged. Compact rows (stops per lane, tables); `detail: true` adds the stops. |
 | `get_journey` | One journey (`j_…`) or chain (`ch_…`) laid out by lane, with what could not be resolved. |
 | `trace_route` | The chains that pass through a route, page, table or queue. |
 | `save_journeys` | Create, update, merge, split or delete journeys in `.codeloom/journeys.json`. |
@@ -118,7 +118,7 @@ and `save_summary` write anything; `reindex` runs the indexer.
 | `get_neighbors` | The nodes around one node, 1 to 3 hops away. |
 | `explain_context` | One node's source, summary, neighbours, chains and journeys, in one call. |
 | `save_summary` | Save a short summary of a node to `.codeloom/summaries.json`. |
-| `check_chains` | The `codeloom check` report (optionally with the trace check). |
+| `check_chains` | The `codeloom check` summary, totals per item kind and up to 20 items per kind (optionally with the trace check). `kinds`, `limit` and `offset` page through the items. |
 | `impact_of_diff` | The files, nodes, chains and journeys a code change touches. |
 
 | Prompt | What it asks the agent to do |

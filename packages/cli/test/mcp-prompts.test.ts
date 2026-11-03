@@ -48,6 +48,9 @@ describe("mcp prompts", () => {
     expect(t).toContain("chainIds");
     expect(t).toMatch(/never invent chain ids/i);
     expect(t).toMatch(/leave/i);
+    // list_chains rows are compact by default: the prompt asks for stops explicitly (H5)
+    expect(t).toContain("detail: true");
+    expect(t).toMatch(/truncatedNote/);
   });
 
   it("verify-journey names get_journey and explain_context, includes the given id, and never changes confidence", async () => {
@@ -68,6 +71,8 @@ describe("mcp prompts", () => {
     expect(t).toMatch(/chain id\s+\(ch_…\)[^.]*`chains\[0\]\.journeys`/);
     expect(t).toMatch(/list is empty[^.]*nothing\s+to save — just report/);
     expect(t).toMatch(/without a `ref`[^.]*`file`/);
+    // a journey too big for one response: verify it one chain at a time (H5)
+    expect(t).toMatch(/`truncated`[^.]*get_journey[^.]*chain id/);
   });
 
   it("verify-journey without the journey arg errors", async () => {
