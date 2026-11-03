@@ -1,3 +1,4 @@
+import { chainReach, hasUiStop, reachesStore } from "../linker/completeness.js";
 import { effectiveRoutes, type EffectiveRoute, routeKey } from "../linker/mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
@@ -12,10 +13,6 @@ function routeStopLoc(chain: Chain): { repo: string; file: string; line: number;
 
 function lastStop(chain: Chain): ChainStop | undefined {
   return chain.stops[chain.stops.length - 1];
-}
-
-function hasStoreStop(chain: Chain): boolean {
-  return chain.stops.some((s) => s.kind === "db" || s.kind === "publish");
 }
 
 function hasHandlerStop(chain: Chain): boolean {
@@ -120,16 +117,20 @@ function routeNoCallerItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
 }
 
 /** The one bucket a chain falls into. Every chain lands in exactly one, so
- *   chains = complete + missingDb + brokenUiApi
- * - complete: reaches a database table or queue (a db or publish stop);
+ *   chains = complete + apiOnly + missingDb + brokenUiApi
+ * Decided from the stops (linker/completeness.ts), never from the chain's stored `complete` flag:
+ * - complete: has a UI stop (page or call) and reaches a database table or queue (a db or publish stop);
+ * - apiOnly: reaches a store but has no UI stop — a route or consumer no UI code calls (API → DB only);
  * - brokenUiApi: a page chain whose UI call matched no route, or a chain whose handler was not found
  *   (its walk stops at the route);
  * - missingDb: everything else.
  * Unreadable URLs (`unresolved-url`) are per call, not per chain, and are never part of these buckets. */
-type Bucket = "complete" | "brokenUiApi" | "missingDb";
+type Bucket = "complete" | "apiOnly" | "brokenUiApi" | "missingDb";
 
 function bucketOf(chain: Chain): Bucket {
-  if (hasStoreStop(chain)) return "complete";
+  const reach = chainReach(chain.stops);
+  if (reach === "complete") return "complete";
+  if (reach === "api-only") return "apiOnly";
   if (isUnmatchedPageChain(chain) || lastStop(chain)?.kind === "route") return "brokenUiApi";
   return "missingDb";
 }
@@ -166,7 +167,7 @@ function chainLevelItems(chain: Chain): CheckItem[] {
   if (last && last.kind === "route") {
     const loc = routeStopLoc(chain);
     items.push({ kind: "handler-not-found", repo: loc.repo, file: loc.file, line: loc.line, symbol: loc.symbol, detail: `${chain.name}: handler could not be located` });
-  } else if (last && hasHandlerStop(chain) && !hasStoreStop(chain)) {
+  } else if (last && hasHandlerStop(chain) && !reachesStore(chain.stops)) {
     items.push({ kind: "no-store", repo: last.repo, file: last.file, line: last.line, symbol: last.symbol, detail: `${chain.name} reaches no database table or queue` });
   }
   return items;
@@ -214,18 +215,23 @@ export function buildCheckReport(
   for (const chain of chains) for (const stop of chain.stops) byConfidence[stop.hop.confidence]++;
 
   const count = (kind: CheckItem["kind"]) => items.filter((i) => i.kind === kind).length;
-  const buckets: Record<Bucket, number> = { complete: 0, brokenUiApi: 0, missingDb: 0 };
+  const buckets: Record<Bucket, number> = { complete: 0, apiOnly: 0, brokenUiApi: 0, missingDb: 0 };
   for (const chain of chains) buckets[bucketOf(chain)]++;
+  const routes = ws.repos.reduce((n, repo) => n + effectiveRoutes(repo.endpoints).length, 0);
 
   return {
     version: 1,
     summary: {
-      // chains = complete + missingDb + brokenUiApi (see bucketOf); unresolvedCalls is a separate per-call
-      // count of unreadable URLs and is never added into the journey buckets.
+      // chains = complete + apiOnly + missingDb + brokenUiApi (see bucketOf); unresolvedCalls is a separate
+      // per-call count of unreadable URLs and is never added into the journey buckets.
       chains: chains.length,
       complete: buckets.complete,
+      apiOnly: buckets.apiOnly,
       missingDb: buckets.missingDb,
       brokenUiApi: buckets.brokenUiApi,
+      uiChains: chains.filter((c) => hasUiStop(c.stops)).length,
+      routes,
+      routesWithUiCaller: routes - count("route-no-caller"),
       unresolvedCalls: count("unresolved-url"),
       uncalledRoutes: count("route-no-caller"),
       byConfidence,
@@ -234,10 +240,12 @@ export function buildCheckReport(
   };
 }
 
-/** Complete chains as an unrounded percentage (100 when there are no chains). */
+/** Complete chains over the chains that start in the UI (have a UI stop), as an unrounded percentage.
+ * Route-only and consumer chains are not in the ratio: no UI journey can be complete without a UI stop.
+ * 100 when no chain has a UI stop (nothing for `--fail-under` to fail on). */
 export function completeRatio(r: CheckReport): number {
-  if (r.summary.chains === 0) return 100;
-  return (r.summary.complete / r.summary.chains) * 100;
+  if (r.summary.uiChains === 0) return 100;
+  return (r.summary.complete / r.summary.uiChains) * 100;
 }
 
 /** `--fail-under N` fails on the unrounded ratio: 94.6% is below 95 even though it prints as 95%. */
@@ -245,8 +253,7 @@ export function belowFailUnder(r: CheckReport, failUnder: number): boolean {
   return completeRatio(r) < failUnder;
 }
 
-/** Complete chains as a whole percentage, for display only. */
+/** completeRatio as a whole percentage, for display only. */
 export function completePercent(r: CheckReport): number {
-  if (r.summary.chains === 0) return 100;
-  return Math.round((r.summary.complete / r.summary.chains) * 100);
+  return Math.round(completeRatio(r));
 }

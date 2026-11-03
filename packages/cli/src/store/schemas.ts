@@ -392,12 +392,22 @@ export type TracesSkipped = z.infer<typeof TracesSkippedSchema>;
 export const CheckReportSchema = z.object({
   version: z.literal(1),
   summary: z.object({
+    /** chains = complete + apiOnly + missingDb + brokenUiApi (each chain lands in exactly one). */
     chains: z.number().int(),
+    /** Has a UI stop (page or call) and reaches a database table or queue: UI → API → DB. */
     complete: z.number().int(),
+    /** Reaches a store but has no UI stop (a route or consumer no UI code calls): API → DB only. */
+    apiOnly: z.number().int(),
     missingDb: z.number().int(),
     brokenUiApi: z.number().int(),
+    /** Chains with a UI stop: `--fail-under` compares complete / uiChains. */
+    uiChains: z.number().int(),
+    /** Every route in the workspace, and those a page or UI call reaches (routes = routesWithUiCaller +
+     * uncalledRoutes). */
+    routes: z.number().int(),
+    routesWithUiCaller: z.number().int(),
     /** Calls whose URL codeloom could not read (`unresolved-url` items). Per call, not per chain: never
-     * part of chains = complete + missingDb + brokenUiApi. */
+     * part of chains = complete + apiOnly + missingDb + brokenUiApi. */
     unresolvedCalls: z.number().int(),
     uncalledRoutes: z.number().int(),
     byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),

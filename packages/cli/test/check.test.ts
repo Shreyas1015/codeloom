@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import type { RepoData, WorkspaceData } from "../src/store/read.js";
 import { type Chain, CheckReportSchema, type EndpointsFile } from "../src/store/schemas.js";
-import { materializeFixture } from "./helpers.js";
+import { commitAll, materializeFixture } from "./helpers.js";
 
 function fakeGraph() {
   return {
@@ -45,6 +45,11 @@ function fakeRepoData(ref: RepoData["ref"], endpoints: EndpointsFile): RepoData 
 
 function fakeWorkspace(repos: RepoData[]): WorkspaceData {
   return { root: "/tmp/ws", name: "ws", repos, links: [] };
+}
+
+/** A CheckReport summary: the H3 fields default to "every chain starts in the UI, no routes". */
+function S(s: { chains: number; complete: number; missingDb: number; brokenUiApi: number; unresolvedCalls: number; uncalledRoutes: number; byConfidence: { exact: number; param: number; guess: number }; apiOnly?: number; uiChains?: number; routes?: number; routesWithUiCaller?: number }) {
+  return { apiOnly: 0, uiChains: s.chains, routes: 0, routesWithUiCaller: 0, ...s };
 }
 
 function fakeChain(overrides: Partial<Chain>): Chain {
@@ -218,7 +223,9 @@ describe("buildCheckReport", () => {
         { at: { repo: "api", file: "app/c.ts", line: 3, symbol: "C.store" }, reason: 'could not resolve "res.json(...)"' },
         { at: { repo: "api", file: "app/c.ts", line: 4, symbol: "C.store" }, reason: 'could not resolve "logger.info(...)"' },
       ],
+      // H3: a UI stop is what makes it complete (a route-only chain would be API → DB only).
       stops: [
+        { lane: "ui", kind: "page", repo: "web", file: "app/x/page.tsx", line: 1, symbol: "XPage", hop: { confidence: "exact" } },
         { lane: "api", kind: "route", repo: "api", file: "start/routes.ts", line: 1, symbol: "C.store", op: "POST", label: "POST /api/x", hop: { confidence: "exact" } },
         { lane: "code", kind: "handler", repo: "api", file: "app/c.ts", line: 2, symbol: "C.store", hop: { confidence: "exact" } },
         { lane: "db", kind: "db", repo: "api", file: "app/c.ts", line: 5, symbol: "C.store", op: "insert", label: "customers", hop: { confidence: "exact" } },
@@ -273,7 +280,7 @@ describe("buildCheckReport", () => {
     const lines = formatCheckText(report).split("\n");
     expect(lines[0]).toBe("1 journey: 1 complete UI → API → DB");
     expect(lines).toContain("1 call with a URL codeloom could not read");
-    expect(lines).toContain("complete: 100%");
+    expect(lines).toContain("complete: 100% of journeys that start in the UI (1/1)");
   });
 
   it("produces a report that passes CheckReportSchema", () => {
@@ -284,11 +291,11 @@ describe("buildCheckReport", () => {
 
 describe("completePercent", () => {
   it("is 100 when there are no chains", () => {
-    expect(completePercent({ version: 1, summary: { chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }, items: [] })).toBe(100);
+    expect(completePercent({ version: 1, summary: S({ chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] })).toBe(100);
   });
 
   it("rounds complete/chains to a whole percent", () => {
-    expect(completePercent({ version: 1, summary: { chains: 3, complete: 2, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }, items: [] })).toBe(67);
+    expect(completePercent({ version: 1, summary: S({ chains: 3, complete: 2, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] })).toBe(67);
   });
 });
 
@@ -296,7 +303,7 @@ describe("formatCheckText", () => {
   it("prints the §7a summary line, complete %, and groups items by kind", () => {
     const report = {
       version: 1 as const,
-      summary: { chains: 3, complete: 1, missingDb: 1, brokenUiApi: 1, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 2, param: 1, guess: 0 } },
+      summary: S({ chains: 3, complete: 1, missingDb: 1, brokenUiApi: 1, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 2, param: 1, guess: 0 } }),
       items: [
         { kind: "no-store" as const, repo: "billing", file: "src/server.ts", line: 9, symbol: "GET /health", detail: "GET /health reaches no database table or queue" },
         { kind: "unresolved-url" as const, repo: "web", file: "lib/x.ts", line: 3, symbol: "getX", detail: "cannot read URL from fetch(url)" },
@@ -312,19 +319,19 @@ describe("formatCheckText", () => {
   });
 
   it("says so when there are no issues", () => {
-    const report = { version: 1 as const, summary: { chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } }, items: [] };
+    const report = { version: 1 as const, summary: S({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } }), items: [] };
     expect(formatCheckText(report)).toContain("No issues found.");
   });
 
   it("handles zero chains", () => {
-    const report = { version: 1 as const, summary: { chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }, items: [] };
+    const report = { version: 1 as const, summary: S({ chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] };
     expect(formatCheckText(report)).toContain("0 journeys: nothing indexed yet.");
   });
 
   it("lists unresolved calls last, marked as info that does not affect completeness", () => {
     const report = {
       version: 1 as const,
-      summary: { chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 1, uncalledRoutes: 1, byConfidence: { exact: 1, param: 0, guess: 0 } },
+      summary: S({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 1, uncalledRoutes: 1, byConfidence: { exact: 1, param: 0, guess: 0 } }),
       items: [
         { kind: "route-no-caller" as const, repo: "api", file: "r.ts", line: 1, symbol: "h", detail: "GET /x has no UI caller" },
         { kind: "unmatched-call" as const, repo: "api", file: "c.ts", line: 2, symbol: "C.s", detail: 'could not resolve "res.json(...)"' },
@@ -341,7 +348,7 @@ describe("formatCheckText grouping", () => {
   it("groups a ui-no-route item by kind, whatever the linker's reason text says", () => {
     const report = {
       version: 1 as const,
-      summary: { chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 2, param: 0, guess: 0 } },
+      summary: S({ chains: 1, complete: 0, missingDb: 0, brokenUiApi: 1, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 2, param: 0, guess: 0 } }),
       items: [{ kind: "ui-no-route" as const, repo: "web", file: "lib/x.ts", line: 2, symbol: "postX", detail: "some other wording entirely" }],
     };
     const text = formatCheckText(report);
@@ -352,7 +359,7 @@ describe("formatCheckText grouping", () => {
   it("puts an unmatched-call worded like a missing route in the info group (kind decides, not text)", () => {
     const report = {
       version: 1 as const,
-      summary: { chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } },
+      summary: S({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } }),
       items: [{ kind: "unmatched-call" as const, repo: "api", file: "c.ts", line: 2, symbol: "C.s", detail: "no matching route for GET /x" }],
     };
     const text = formatCheckText(report);
@@ -363,10 +370,16 @@ describe("formatCheckText grouping", () => {
 
 describe("formatCheckJson", () => {
   it("round-trips through JSON.parse", () => {
-    const report = { version: 1 as const, summary: { chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }, items: [] };
+    const report = { version: 1 as const, summary: S({ chains: 0, complete: 0, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } }), items: [] };
     expect(JSON.parse(formatCheckJson(report))).toEqual(report);
   });
 });
+
+const ARCHIVE_PAGE = `"use client";
+export default function ArchiveInvoicePage() {
+  return <button onClick={() => void fetch("/api/invoices/archive", { method: "POST" })}>Archive</button>;
+}
+`;
 
 function demoShopWorkspace() {
   const root = materializeFixture("demo-shop");
@@ -408,20 +421,25 @@ describe("runCheck", () => {
       "POST /billing/invoices/:id/pay has no UI caller",
       "GET /health has no UI caller",
     ]);
-    // The two incomplete chains are /health and the inline invoice.created consumer: neither reaches a
-    // store. Framework calls (res.json, amqp.connect, ...) are listed but never counted as broken.
-    expect(output.split("\n")[0]).toBe("7 journeys: 5 complete UI → API → DB, 2 missing the DB step");
-    expect(report.summary).toMatchObject({ complete: 5, missingDb: 2, brokenUiApi: 0 });
+    // H3: the three page chains are complete; the pay route and the emails consumer reach a store but no
+    // UI calls them (API → DB only — before H3 they counted as complete, 5 in all). /health and the inline
+    // invoice.created consumer reach no store. Framework calls (res.json, amqp.connect, ...) are listed but
+    // never counted as broken.
+    const lines = output.split("\n");
+    expect(lines[0]).toBe("7 journeys: 3 complete UI → API → DB, 2 API → DB only (no UI caller), 2 missing the DB step");
+    expect(lines).toContain("routes with a UI caller: 3/5");
+    expect(lines).toContain("complete: 100% of journeys that start in the UI (3/3)");
+    expect(report.summary).toMatchObject({ complete: 3, apiOnly: 2, missingDb: 2, brokenUiApi: 0, uiChains: 3, routes: 5, routesWithUiCaller: 3 });
   });
 
   it("splits every demo-shop chain into exactly one bucket (the buckets add up to the chains)", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
     const { report } = await runCheck(root, {});
-    const { chains, complete, missingDb, brokenUiApi } = report.summary;
+    const { chains, complete, apiOnly, missingDb, brokenUiApi } = report.summary;
     expect(chains).toBeGreaterThan(0);
-    expect(complete + missingDb + brokenUiApi).toBe(chains);
-    expect([complete, missingDb, brokenUiApi].every((n) => n >= 0)).toBe(true);
+    expect(complete + apiOnly + missingDb + brokenUiApi).toBe(chains);
+    expect([complete, apiOnly, missingDb, brokenUiApi].every((n) => n >= 0)).toBe(true);
     expect(report.summary.unresolvedCalls).toBe(report.items.filter((i) => i.kind === "unresolved-url").length);
   });
 
@@ -433,12 +451,22 @@ describe("runCheck", () => {
     expect(CheckReportSchema.safeParse(JSON.parse(output)).success).toBe(true);
   });
 
-  it("exits 1 when complete% is below --fail-under", async () => {
+  it("exits 1 when complete% is below --fail-under (complete / journeys with a UI stop)", async () => {
+    const root = demoShopWorkspace();
+    // H3: demo-shop's UI journeys are all complete (3/3), so add a page whose call matches no route:
+    // 3 of 4 UI journeys complete = 75%. Route-only and consumer chains are not in the ratio.
+    mkdirSync(join(root, "web/app/invoices/archive"), { recursive: true });
+    writeFileSync(join(root, "web/app/invoices/archive/page.tsx"), ARCHIVE_PAGE);
+    commitAll(join(root, "web"));
+    await runIndex(root);
+    expect((await runCheck(root, { failUnder: "76" })).exitCode).toBe(1);
+    expect((await runCheck(root, { failUnder: "75" })).exitCode).toBe(0);
+  });
+
+  it("passes --fail-under 100 on demo-shop: every journey that starts in the UI is complete", async () => {
     const root = demoShopWorkspace();
     await runIndex(root);
-    const { exitCode } = await runCheck(root, { failUnder: "100" });
-    expect(exitCode).toBe(1);
-    expect((await runCheck(root, { failUnder: "71" })).exitCode).toBe(0); // 5/7 = 71%
+    expect((await runCheck(root, { failUnder: "100" })).exitCode).toBe(0);
   });
 
   it("rejects an out-of-range --fail-under with a data error (exit 2)", async () => {
@@ -534,7 +562,7 @@ describe("buildCheckReport — ui-unreached from reach facts (H3/H3b)", () => {
 });
 
 describe("check exit codes (final review item 2)", () => {
-  const summary = { chains: 1000, complete: 946, missingDb: 54, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } };
+  const summary = S({ chains: 1000, complete: 946, missingDb: 54, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 0, param: 0, guess: 0 } });
 
   it("--fail-under compares the unrounded ratio: 94.6% fails --fail-under 95 though it prints as 95%", () => {
     const r = { version: 1 as const, summary, items: [] };
@@ -554,5 +582,45 @@ describe("check exit codes (final review item 2)", () => {
       expect((err as CodeloomError).message).toMatch(/No codeloom workspace or git repo/);
       expect((err as CodeloomError).exitCode).toBe(2);
     }
+  });
+});
+
+describe("honest completeness (H3): complete needs a UI stop", () => {
+  const exact = { confidence: "exact" as const };
+  const page = { lane: "ui" as const, kind: "page" as const, repo: "web", file: "app/customers/page.tsx", line: 1, symbol: "CustomersPage", hop: exact };
+  const route = (path: string, line: number) => ({ lane: "api" as const, kind: "route" as const, repo: "api", file: "start/routes.ts", line, symbol: "CustomersController.store", op: "POST", label: `POST ${path}`, hop: exact });
+  const handler = { lane: "code" as const, kind: "handler" as const, repo: "api", file: "app/customers.ts", line: 2, symbol: "CustomersController.store", hop: exact };
+  const db = { lane: "db" as const, kind: "db" as const, repo: "api", file: "app/customers.ts", line: 3, symbol: "CustomersController.store", op: "insert", label: "customers", hop: exact };
+  const apiRoute = (path: string, line: number) => ({ method: "POST" as const, path, handler: "CustomersController.store", inline: false, framework: "adonis" as const, at: { file: "start/routes.ts", line, symbol: "<module>" } });
+  const ws = () => fakeWorkspace([fakeRepoData({ id: "api", path: "api" }, fakeEndpoints("api", { routes: [apiRoute("/api/customers", 1), apiRoute("/api/invoices", 2)] }))]);
+
+  it("a route-only chain that reaches a table is API → DB only, never complete (whatever its stored flag says)", () => {
+    const routeOnly = fakeChain({ entry: "route:api:POST /api/invoices", routeKey: "api:POST /api/invoices", complete: true, stops: [route("/api/invoices", 2), handler, db] });
+    const report = buildCheckReport([routeOnly], ws());
+    expect(report.summary).toMatchObject({ chains: 1, complete: 0, apiOnly: 1, missingDb: 0, brokenUiApi: 0, uiChains: 0 });
+    const lines = formatCheckText(report).split("\n");
+    expect(lines[0]).toBe("1 journey: 0 complete UI → API → DB, 1 API → DB only (no UI caller)");
+    expect(lines).toContain("complete: n/a — no journey starts in the UI");
+    expect(CheckReportSchema.parse(report)).toEqual(report);
+  });
+
+  it("counts routes with a UI caller and the complete ratio over journeys that start in the UI", () => {
+    const ui = fakeChain({ id: "ch_00000000000a", entry: "page:web:/customers", routeKey: "api:POST /api/customers", stops: [page, route("/api/customers", 1), handler, db] });
+    const uiNoDb = fakeChain({ id: "ch_00000000000b", entry: "page:web:/customers/edit", routeKey: "api:POST /api/customers", stops: [page, route("/api/customers", 1), handler] });
+    const routeOnly = fakeChain({ id: "ch_00000000000c", entry: "route:api:POST /api/invoices", routeKey: "api:POST /api/invoices", stops: [route("/api/invoices", 2), handler, db] });
+    const report = buildCheckReport([ui, uiNoDb, routeOnly], ws());
+    expect(report.summary).toMatchObject({ chains: 3, complete: 1, apiOnly: 1, missingDb: 1, brokenUiApi: 0, uiChains: 2, routes: 2, routesWithUiCaller: 1, uncalledRoutes: 1 });
+    expect(completePercent(report)).toBe(50);
+    expect(belowFailUnder(report, 51)).toBe(true);
+    expect(belowFailUnder(report, 50)).toBe(false);
+    const lines = formatCheckText(report).split("\n");
+    expect(lines[0]).toBe("3 journeys: 1 complete UI → API → DB, 1 API → DB only (no UI caller), 1 missing the DB step");
+    expect(lines[1]).toBe("routes with a UI caller: 1/2");
+    expect(lines).toContain("complete: 50% of journeys that start in the UI (1/2)");
+  });
+
+  it("with no journey that starts in the UI, --fail-under has nothing to fail on", () => {
+    const routeOnly = fakeChain({ entry: "route:api:POST /api/invoices", routeKey: "api:POST /api/invoices", stops: [route("/api/invoices", 2), handler, db] });
+    expect(belowFailUnder(buildCheckReport([routeOnly], ws()), 100)).toBe(false);
   });
 });

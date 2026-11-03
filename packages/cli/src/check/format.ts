@@ -32,13 +32,28 @@ function itemLine(item: CheckItem): string {
 }
 
 function summaryLine(r: CheckReport): string {
-  const { chains, complete, missingDb, brokenUiApi } = r.summary;
+  const { chains, complete, apiOnly, missingDb, brokenUiApi } = r.summary;
   if (chains === 0) return "0 journeys: nothing indexed yet.";
   const parts = [`${complete} complete UI → API → DB`];
+  if (apiOnly > 0) parts.push(`${apiOnly} API → DB only (no UI caller)`);
   if (missingDb > 0) parts.push(`${missingDb} missing the DB step`);
   if (brokenUiApi > 0) parts.push(`${brokenUiApi} broken at UI → API`);
   // The buckets add up to `chains` by construction (report.ts bucketOf), so there is no "other".
   return `${chains} journey${chains === 1 ? "" : "s"}: ${parts.join(", ")}`;
+}
+
+/** "routes with a UI caller: x/y" — only when the workspace has routes. */
+function routesLine(r: CheckReport): string | undefined {
+  const { routes, routesWithUiCaller } = r.summary;
+  return routes > 0 ? `routes with a UI caller: ${routesWithUiCaller}/${routes}` : undefined;
+}
+
+/** The ratio `--fail-under` uses: complete over the journeys that start in the UI. */
+function completeLine(r: CheckReport): string {
+  const { chains, uiChains, complete } = r.summary;
+  if (chains === 0) return `complete: ${completePercent(r)}%`;
+  if (uiChains === 0) return "complete: n/a — no journey starts in the UI";
+  return `complete: ${completePercent(r)}% of journeys that start in the UI (${complete}/${uiChains})`;
 }
 
 /** Unreadable URLs are per call, not per journey: a separate line, never added into the summary. */
@@ -74,8 +89,8 @@ function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
 }
 
 export function formatCheckText(r: CheckReport): string {
-  const trailer = unreadableUrlLine(r);
-  const lines = [summaryLine(r), ...(trailer ? [trailer] : []), `complete: ${completePercent(r)}%`, ""];
+  const extra = [routesLine(r), unreadableUrlLine(r)].filter((l): l is string => l !== undefined);
+  const lines = [summaryLine(r), ...extra, completeLine(r), ""];
   for (const { label, match } of GROUPS) {
     const group = r.items.filter(match);
     if (group.length === 0) continue;
