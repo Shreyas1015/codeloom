@@ -68,3 +68,48 @@ jobs:
           node "$BIN" init "$ROOT"
           (cd "$ROOT" && node "$BIN" index)
           (cd "$ROOT" && node "$BIN" check)
+
+  # The dashboard's unit tests and the Playwright smoke (Chromium) against the real dashboard server on demo-shop.
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (cli + dashboard)
+        run: pnpm -r build
+
+      - name: Typecheck the e2e specs
+        run: pnpm typecheck:e2e
+
+      - name: Dashboard unit tests
+        run: pnpm --filter @codeloom/dashboard test
+
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright smoke
+        run: pnpm e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
