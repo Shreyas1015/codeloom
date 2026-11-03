@@ -56,10 +56,8 @@ cpSync(dashboardSrc, dashboard, { recursive: true });
 
 step("LICENSE, NOTICE, CHANGELOG.md → packages/cli");
 for (const f of ["LICENSE", "NOTICE"]) cpSync(join(repoRoot, f), join(cliDir, f));
-// The root CHANGELOG.md comes with the v0.1 docs (release Task 4). Until that branch merges a missing
-// changelog is only a warning; after it, make this fail() like the dashboard check above.
-if (existsSync(join(repoRoot, "CHANGELOG.md"))) cpSync(join(repoRoot, "CHANGELOG.md"), join(cliDir, "CHANGELOG.md"));
-else process.stderr.write("release build: warning: CHANGELOG.md is missing at the repo root; the package ships without it\n");
+if (!existsSync(join(repoRoot, "CHANGELOG.md"))) fail("CHANGELOG.md is missing at the repo root");
+cpSync(join(repoRoot, "CHANGELOG.md"), join(cliDir, "CHANGELOG.md"));
 
 process.stdout.write(
   `\nrelease build done:\n` +
