@@ -16,6 +16,7 @@ import {
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
+import { chainLookup, type ChainLookup } from "../mcp/state.js";
 import { compare } from "../util.js";
 
 /** Memo (g): `ch_` + sha256(`entry|routeKey`)[:12]. */
@@ -318,10 +319,26 @@ export function defaultChainName(c: Pick<Chain, "entry" | "stops">): string {
   return route?.label ?? c.entry;
 }
 
+/** H11: the ids this flow has under other entries, so a journey saved against one of them still finds
+ * it after the chain gains (or loses) a UI step: for a chain with a routeKey, its route-only id; for a
+ * page chain, also the call-entry id of each of its call stops. Sorted; never the chain's own id. */
+export function chainAliases(entry: string, rKey: string, stops: ChainStop[]): string[] {
+  if (rKey === "") return [];
+  const own = chainId(entry, rKey);
+  const out = new Set<string>([chainId(`route:${rKey}`, rKey)]);
+  if (entry.startsWith("page:")) {
+    for (const s of stops) if (s.kind === "call") out.add(chainId(`call:${s.repo}:${s.file}#${s.symbol}`, rKey));
+  }
+  out.delete(own);
+  return [...out].sort(compare);
+}
+
 function makeChain(entry: string, rKey: string, stops: ChainStop[], unresolved: Unresolved[]): Chain {
+  const aliases = chainAliases(entry, rKey, stops);
   return {
     id: chainId(entry, rKey), entry, routeKey: rKey, name: defaultChainName({ entry, stops }), stops,
     unresolved: sortUnresolved(unresolved), confidence: worstConfidence(stops), complete: isComplete(stops),
+    ...(aliases.length > 0 ? { aliases } : {}),
   };
 }
 
@@ -656,18 +673,22 @@ export function writeChains(wsRoot: string, chains: Chain[], uiReach?: UiReachFa
   return writeJsonIfChanged(join(wsRoot, CODELOOM_DIR, FILES.chains), file);
 }
 
-/** Orphaned only when the code behind a journey is entirely gone: it names chains and none of them is in
- * `ids`. A journey that lost some (not all) of its chains stays "ok" — one sub-chain changing must not
- * flip it. An empty chainIds list is never orphaned. */
-function isOrphaned(j: Journey, ids: Set<string>): boolean {
-  return j.chainIds.length > 0 && j.chainIds.every((id) => !ids.has(id));
+/** Orphaned only when the code behind a journey is entirely gone: it names chains and none of them
+ * resolves, as an id or through an alias (H11). A journey that lost some (not all) of its chains stays
+ * "ok" — one sub-chain changing must not flip it. An empty chainIds list is never orphaned. */
+function isOrphaned(j: Journey, lookup: ChainLookup<unknown>): boolean {
+  return j.chainIds.length > 0 && lookup.resolve(j.chainIds).missing.length === new Set(j.chainIds).size;
 }
 
-/** Create journeys.json if missing; otherwise set each journey's status to "orphaned" when all of its
- * chainIds are gone and back to "ok" when any returns, writing only if some status actually changed. Never
- * touches order or any other field. A malformed existing file throws (via readJson, telling the user to
- * fix it by hand) and is left untouched. */
-export function syncJourneys(wsRoot: string, ids: Set<string>): { created: boolean; orphaned: number; changed: boolean } {
+/** Create journeys.json if missing; otherwise set each journey's status to "orphaned" when none of its
+ * chainIds resolves (directly or through a chain's alias) and back to "ok" when any does, writing only if
+ * some status actually changed. Never touches order or any other field. A malformed existing file throws
+ * (via readJson, telling the user to fix it by hand) and is left untouched. `chains`: the current chains
+ * (a plain id set means no aliases). */
+export function syncJourneys(
+  wsRoot: string, chains: ReadonlyArray<Pick<Chain, "id" | "aliases">> | ReadonlySet<string>,
+): { created: boolean; orphaned: number; changed: boolean } {
+  const lookup = chainLookup(chains instanceof Set ? [...chains].map((id) => ({ id })) : [...(chains as ReadonlyArray<Pick<Chain, "id" | "aliases">>)]);
   const path = join(wsRoot, CODELOOM_DIR, FILES.journeys);
   const existing = readJson(path, JourneysFileSchema, { handWritten: true });
   if (!existing) {
@@ -681,7 +702,7 @@ export function syncJourneys(wsRoot: string, ids: Set<string>): { created: boole
   let changed = false;
   let orphaned = 0;
   existing.journeys.forEach((j: Journey, i) => {
-    const status: Journey["status"] = isOrphaned(j, ids) ? "orphaned" : "ok";
+    const status: Journey["status"] = isOrphaned(j, lookup) ? "orphaned" : "ok";
     if (status === "orphaned") orphaned++;
     if (status !== j.status) {
       changed = true;

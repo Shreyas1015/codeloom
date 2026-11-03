@@ -283,6 +283,10 @@ export const ChainSchema = z.object({
   unresolved: z.array(UnresolvedSchema),
   confidence: ConfidenceSchema,
   complete: z.boolean(),
+  /** H11: ids the same flow has under other entries (sorted, never the chain's own id; absent when none):
+   * the route-only id for a chain with a routeKey, and each call stop's call-entry id for a page chain.
+   * Readers resolve a journey's chain ids through ids first, then aliases (mcp/state.ts chainLookup). */
+  aliases: z.array(z.string()).optional(),
 });
 export type Chain = z.infer<typeof ChainSchema>;
 

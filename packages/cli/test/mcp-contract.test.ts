@@ -220,6 +220,7 @@ const RawSchemas: Record<string, z.ZodObject> = {
       queues: z.array(str),
       unresolved: z.array(UnresolvedSchema.extend({ chainId: str }).strict()),
       missingChainIds: z.array(str),
+      movedChainIds: z.array(z.object({ from: str, to: z.array(str) }).strict()),
     })
     .strict(),
   trace_route: z

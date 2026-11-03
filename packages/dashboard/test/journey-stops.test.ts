@@ -28,7 +28,7 @@ const journey: JourneyResult = {
   // chain 2 shares the page and the handler (cross-lane twin of `write`) with chain 1
   chains: [chain("ch_a", [page, call, route, handler, write]), chain("ch_b", [page, route, handler, read])],
   lanes: { ui: [], api: [], code: [], db: [], queue: [] },
-  files: [], tables: [], queues: [], unresolved: [], missingChainIds: [],
+  files: [], tables: [], queues: [], unresolved: [], missingChainIds: [], movedChainIds: [],
 };
 
 describe("journey stop numbering (shared by Journey and Map)", () => {

@@ -38,7 +38,7 @@ export function runLinker(
   const built = buildChainsAndLinks(wsData, links, symbolLine);
   const chains = sortChains(built.chains);
   const wrote = writeChains(ws.root, chains, links.uiReach, built.manualLinks);
-  const sync = syncJourneys(ws.root, new Set(chains.map((c) => c.id)));
+  const sync = syncJourneys(ws.root, chains);
   return {
     chains: chains.length,
     complete: chains.filter((c) => c.complete).length,

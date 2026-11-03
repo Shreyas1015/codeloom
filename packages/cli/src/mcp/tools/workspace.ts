@@ -12,7 +12,7 @@ import { git, gitAsync } from "../../workspace/git.js";
 import { gitHead, gitHeadAsync, loadWorkspace } from "../../workspace/repos.js";
 import { withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
-import { loadMapState } from "../state.js";
+import { journeysByChain, loadMapState } from "../state.js";
 
 const distinct = (xs: string[]) => new Set(xs).size;
 
@@ -35,7 +35,7 @@ export function workspaceOverview(start: string): Record<string, unknown> {
   repos.sort((a, b) => compare(a.id, b.id));
   const byConfidence = { exact: 0, param: 0, guess: 0 };
   for (const c of state.chains) byConfidence[c.confidence]++;
-  const named = new Set(state.journeys.flatMap((j) => j.chainIds));
+  const named = journeysByChain(state);
   return {
     name: state.ws.name,
     repos,

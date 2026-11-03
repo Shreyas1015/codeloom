@@ -170,7 +170,10 @@ export interface JourneyResult {
   tables: string[];
   queues: string[];
   unresolved: Array<UnresolvedItem & { chainId: string }>;
+  /** Saved chain ids that match no chain, by id or by alias. */
   missingChainIds: string[];
+  /** H11: saved chain ids found only as another chain's alias (the flow gained a UI step), with the current ids. */
+  movedChainIds: Array<{ from: string; to: string[] }>;
 }
 
 // ---- /api/graph (dashboard-only) ----------------------------------------------------------------
