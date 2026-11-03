@@ -5,6 +5,7 @@ import {
 import type { ParsedFile } from "../adapters/types.js";
 import { httpCallShape, superagentReceivers } from "../adapters/http-calls.js";
 import { pathPattern } from "../adapters/ast.js";
+import { type ConfigArg, configArgsOf, configWrapperCandidate } from "./config-wrappers.js";
 import type { HttpMethod } from "../store/schemas.js";
 
 export interface CodeSymbol {
@@ -69,6 +70,8 @@ export interface CallSite {
   /** Arguments with literal URL text (`'/user'`, `` `/articles/${slug}` ``), as route patterns, so a call to an
    * HTTP wrapper (resolved later by the linker) can become an HTTP call. Absent when none. */
   urlArgs?: UrlArg[];
+  /** `{ method, url }` config arguments, for a call to a config-object wrapper (config-wrappers.ts). Absent when none. */
+  configArgs?: ConfigArg[];
 }
 
 export interface UrlArg {
@@ -94,6 +97,10 @@ export interface HttpWrapper {
   base?: string;
   /** The base's value when it is a top-level `const X = "<string>"` in the same file. */
   baseLiteral?: string;
+  /** Config-object wrapper (config-wrappers.ts): `param` carries a `{ method, url }` config. */
+  config?: true;
+  methodFixed?: true;
+  line?: number;
 }
 
 export interface FileCodeIndex {
@@ -660,8 +667,10 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       if (refArgs.length > 0) site.refArgs = refArgs;
       const urlArgs = urlArgsOf(node);
       if (urlArgs.length > 0) site.urlArgs = urlArgs;
+      const configArgs = configArgsOf(node);
+      if (configArgs.length > 0) site.configArgs = configArgs;
       idx.calls.push(site);
-      const w = wrapperCandidate(node, superagent, consts);
+      const w = wrapperCandidate(node, superagent, consts) ?? configWrapperCandidate(node);
       if (w) wrappers.set(w.symbol, wrappers.has(w.symbol) ? null : w);
     }
   });

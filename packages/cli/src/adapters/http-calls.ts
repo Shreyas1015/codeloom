@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
 import { absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
-import type { ParsedFile } from "./types.js";
+import type { HttpCallDraft, HttpClientDraft, ParsedFile } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
@@ -90,15 +90,111 @@ export interface HttpCallShape {
 
 /** Method from a config object's `method` property: its literal value, `fallback` when absent, undefined
  * when present but not a literal (a variable method), or when absent but a spread may supply it. */
-function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
+export function configMethod(obj: ts.ObjectLiteralExpression | undefined, fallback: HttpMethod): HttpMethod | undefined {
   const m = obj && prop(obj, "method");
   if (!m) return obj?.properties.some(ts.isSpreadAssignment) ? undefined : fallback;
   const v = stringValue(m);
   return v === undefined ? undefined : methodOf(v) ?? fallback;
 }
 
+/** `process.env.X` / `import.meta.env.X`: an env var access. */
+export function isEnvAccess(e: ts.Expression): e is ts.PropertyAccessExpression {
+  if (!ts.isPropertyAccessExpression(e)) return false;
+  const host = e.expression.getText();
+  return host === "process.env" || host === "import.meta.env";
+}
+
+/** Top-level `const X = <env access>` (optionally `|| "<fallback>"` / `?? "<fallback>"`): X -> the env
+ * access text, e.g. "import.meta.env.VITE_API_URL". */
+export function envConsts(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !(stmt.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      let init = d.initializer;
+      while (init && ts.isParenthesizedExpression(init)) init = init.expression;
+      if (
+        init && ts.isBinaryExpression(init) && stringValue(init.right) !== undefined &&
+        (init.operatorToken.kind === ts.SyntaxKind.BarBarToken || init.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+      ) init = init.left;
+      if (ts.isIdentifier(d.name) && init && isEnvAccess(init)) out.set(d.name.text, init.getText());
+    }
+  }
+  return out;
+}
+
+/** What a file knows about its own HTTP clients: names bound to `axios.create(...)` & co, and module
+ * consts initialised from an env var (so a `${API_URL}` base reads as the env var). */
+export interface ClientScope {
+  clients: Set<string>;
+  envConsts: Map<string, string>;
+}
+
+export function clientScope(file: ParsedFile): ClientScope {
+  if (!file.sf) return { clients: new Set(), envConsts: new Map() };
+  return { clients: new Set(detectHttpClients(file).map((c) => c.name)), envConsts: envConsts(file.sf) };
+}
+
+/** True when `node` sits directly in `fn` (not inside a nested function). */
+function directlyIn(node: ts.Node, fn: ts.Node): boolean {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (cur === fn) return true;
+    if (ts.isFunctionLike(cur)) return false;
+  }
+  return false;
+}
+
+/** A config argument as an object literal: the literal itself, or a `const <name> = { … }` declared
+ * earlier in the same function (one level, never through a nested function). Undefined otherwise. */
+export function configObject(arg: ts.Expression, call: ts.Node): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(arg)) return arg;
+  if (!ts.isIdentifier(arg)) return undefined;
+  let fn: ts.Node | undefined = call.parent;
+  while (fn && !ts.isFunctionLike(fn) && !ts.isSourceFile(fn)) fn = fn.parent;
+  if (!fn) return undefined;
+  const scope = fn;
+  // Every same-named declaration in the function counts (a second one makes it ambiguous).
+  const found: Array<ts.Expression | undefined> = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === arg.text && directlyIn(n, scope)) {
+      const isConst = ts.isVariableDeclarationList(n.parent) && (n.parent.flags & ts.NodeFlags.Const) !== 0;
+      found.push(isConst && n.getStart() < call.getStart() ? n.initializer : undefined);
+    }
+    if (!ts.isFunctionLike(n)) ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(scope, visit);
+  const [only] = found;
+  return found.length === 1 && only && ts.isObjectLiteralExpression(only) ? only : undefined;
+}
+
+/** `client(config)` on a known client (axios itself or a local instance), or `client.request(<config const>)`:
+ * `{ urlExpr }` when the config's url can be read, `{}` (unknown URL) when it cannot. Never guesses. */
+function configCall(
+  node: ts.CallExpression, scope: ClientScope,
+): { method: HttpMethod | undefined; urlExpr?: ts.Expression; client: string } | undefined {
+  const callee = node.expression;
+  const [first] = node.arguments;
+  if (!first) return undefined;
+  let client: string;
+  if (ts.isIdentifier(callee) && (callee.text === "axios" || scope.clients.has(callee.text))) client = callee.text;
+  else if (
+    ts.isPropertyAccessExpression(callee) && callee.name.text === "request" && ts.isIdentifier(first) &&
+    ts.isIdentifier(callee.expression) && (scope.clients.has(callee.expression.text) || isClientReceiver(callee.expression.text, node))
+  ) client = callee.expression.text;
+  else return undefined;
+  return { ...readConfig(first, node), client };
+}
+
+/** Method and url of a config argument; no `urlExpr` when the url cannot be read. */
+function readConfig(arg: ts.Expression, call: ts.Node): { method: HttpMethod | undefined; urlExpr?: ts.Expression } {
+  const obj = configObject(arg, call);
+  const url = obj && prop(obj, "url");
+  if (!url) return { method: "GET" };
+  return { method: configMethod(obj, "GET"), urlExpr: url };
+}
+
 /** Recognise an HTTP client call (fetch, axios(config), client.request(config), client.get(url), superagent). */
-export function httpCallShape(node: ts.CallExpression, superagent: Set<string>): HttpCallShape | undefined {
+export function httpCallShape(node: ts.CallExpression, superagent: Set<string>, scope?: ClientScope): HttpCallShape | undefined {
   const callee = node.expression;
   const [first, second] = node.arguments;
   if (!first) return undefined;
@@ -122,33 +218,122 @@ export function httpCallShape(node: ts.CallExpression, superagent: Set<string>):
   const isSuperagent = ts.isIdentifier(callee.expression) && superagent.has(receiver) && !isRouterName(node, receiver);
   const method = isSuperagent ? SUPERAGENT_METHODS[name] : METHODS[name];
   if (!method) return undefined;
-  if (!isSuperagent && !isClientReceiver(receiver, node)) return undefined;
+  const localClient = ts.isIdentifier(callee.expression) && !!scope?.clients.has(receiver) && !isRouterName(node, receiver);
+  if (!isSuperagent && !localClient && !isClientReceiver(receiver, node)) return undefined;
   return { method, urlExpr: first, client: receiver, methodStyle: true };
+}
+
+/** A route pattern for a URL expression whose leading base is a module const read from an env var reads
+ * that env var as its base (`${API_URL}/x` with `const API_URL = import.meta.env.VITE_API_URL`). */
+export function urlPattern(urlExpr: ts.Expression, env: Map<string, string>): ReturnType<typeof pathPattern> {
+  const pattern = pathPattern(urlExpr);
+  const envBase = pattern?.base !== undefined ? env.get(pattern.base) : undefined;
+  return pattern && envBase !== undefined ? { ...pattern, base: envBase } : pattern;
+}
+
+type AnyShape = { method: HttpMethod | undefined; urlExpr?: ts.Expression; client: string; methodStyle?: boolean };
+
+/** The HttpCall for a recognised shape, or undefined when a method-style URL does not look like one. */
+function callOf(file: ParsedFile, node: ts.CallExpression, shape: AnyShape, env: Map<string, string>): HttpCall | undefined {
+  const { urlExpr } = shape;
+  if (shape.methodStyle && !(urlExpr && pathPattern(urlExpr) && looksLikeUrl(literalText(urlExpr)))) return undefined;
+  // A variable method keeps the adapter's historical default (GET); wrapper inference treats it apart.
+  const method = shape.method ?? "GET";
+  const pattern = urlExpr && urlPattern(urlExpr, env);
+  return {
+    method,
+    path: pattern?.path ?? "",
+    raw: urlExpr?.getText() ?? node.arguments[0]!.getText(),
+    resolved: pattern?.resolved ?? false,
+    client: shape.client,
+    at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
+    kind: pattern?.kind ?? "unknown",
+    ...(pattern?.base !== undefined ? { base: pattern.base } : {}),
+  };
 }
 
 export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   if (!file.sf) return [];
   const superagent = superagentReceivers(file.sf);
+  const scope = clientScope(file);
   const out: HttpCall[] = [];
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node)) return;
-    const shape = httpCallShape(node, superagent);
-    if (!shape) return;
-    const { urlExpr } = shape;
-    if (shape.methodStyle && !(pathPattern(urlExpr) && looksLikeUrl(literalText(urlExpr)))) return;
-    // A variable method keeps the adapter's historical default (GET); wrapper inference treats it apart.
-    const method = shape.method ?? "GET";
-    const pattern = pathPattern(urlExpr);
-    out.push({
-      method,
-      path: pattern?.path ?? "",
-      raw: urlExpr.getText(),
-      resolved: pattern?.resolved ?? false,
-      client: shape.client,
-      at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
-      kind: pattern?.kind ?? "unknown",
-      ...(pattern?.base !== undefined ? { base: pattern.base } : {}),
-    });
+    const shape = configCall(node, scope) ?? httpCallShape(node, superagent, scope);
+    const call = shape && callOf(file, node, shape, scope.envConsts);
+    if (call) out.push(call);
+  });
+  return out;
+}
+
+/** Import bindings (default and named, aliases kept) of repo modules that may export an HTTP client:
+ * local name -> { from, imported name ("default" for a default import) }. Known HTTP libraries and
+ * type-only imports are skipped. */
+export function importedBindings(sf: ts.SourceFile): Map<string, { from: string; name: string }> {
+  const out = new Map<string, { from: string; name: string }>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const from = stmt.moduleSpecifier.text;
+    const clause = stmt.importClause;
+    if (!clause || clause.isTypeOnly || KNOWN_HTTP_LIB_PACKAGES.has(from)) continue;
+    if (clause.name) out.set(clause.name.text, { from, name: "default" });
+    if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        if (!el.isTypeOnly) out.set(el.name.text, { from, name: (el.propertyName ?? el.name).text });
+      }
+    }
+  }
+  return out;
+}
+
+/** True when `name` is re-declared (a parameter, a variable, a function) in a function or block around `node`. */
+function shadowed(node: ts.Node, name: string): boolean {
+  const declares = (n: ts.BindingName): boolean =>
+    ts.isIdentifier(n) ? n.text === name : n.elements.some((e) => !ts.isOmittedExpression(e) && declares(e.name));
+  for (let cur = node.parent; cur && !ts.isSourceFile(cur); cur = cur.parent) {
+    if (ts.isFunctionLike(cur) && cur.parameters.some((p) => declares(p.name))) return true;
+    if (ts.isBlock(cur)) {
+      for (const s of cur.statements) {
+        if (ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => declares(d.name))) return true;
+        if ((ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s)) && s.name?.text === name) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Calls on an imported binding that would be HTTP calls if the binding is an HTTP client instance:
+ * `svc.get(url)` (and post/put/patch/delete), `svc.request(config)` and `svc(config)`. Each carries a
+ * `clientImport` for `finalizeEndpoints` to check against the exporting file's clients. Calls that
+ * `detectHttpCalls` already finds (e.g. a receiver named like a client) are not repeated.
+ */
+export function detectImportedClientCalls(file: ParsedFile): HttpCallDraft[] {
+  if (!file.sf) return [];
+  const imports = importedBindings(file.sf);
+  if (imports.size === 0) return [];
+  const superagent = superagentReceivers(file.sf);
+  const scope = clientScope(file);
+  const env = scope.envConsts;
+  const out: HttpCallDraft[] = [];
+  walk(file.sf, (node) => {
+    if (!ts.isCallExpression(node) || !node.arguments[0]) return;
+    const callee = node.expression;
+    const local = ts.isIdentifier(callee) ? callee.text
+      : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? callee.expression.text : undefined;
+    const imp = local !== undefined ? imports.get(local) : undefined;
+    if (!imp || local === undefined || shadowed(node, local)) return;
+    if (configCall(node, scope) ?? httpCallShape(node, superagent, scope)) return;
+    const first = node.arguments[0];
+    let shape: AnyShape | undefined;
+    const configLike = ts.isObjectLiteralExpression(first) || ts.isIdentifier(first);
+    if (configLike && (ts.isIdentifier(callee) || (ts.isPropertyAccessExpression(callee) && callee.name.text === "request"))) {
+      shape = { ...readConfig(first, node), client: local };
+    } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text]) {
+      shape = { method: METHODS[callee.name.text], urlExpr: first, client: local, methodStyle: true };
+    }
+    const call = shape && callOf(file, node, shape, env);
+    if (call) out.push({ ...call, clientImport: imp });
   });
   return out;
 }
@@ -230,6 +415,7 @@ function resolveClientReceiver(
 export function detectHttpClients(file: ParsedFile): HttpClient[] {
   if (!file.sf) return [];
   const aliases = collectKnownLibAliases(file.sf);
+  const env = envConsts(file.sf);
   const out: HttpClient[] = [];
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
@@ -250,10 +436,38 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
       file: file.rel,
       line: lineOf(node),
       factory,
-      ...(baseNode && literal === undefined ? { baseExpr: baseNode.getText() } : {}),
+      ...(baseNode && literal === undefined ? { baseExpr: env.get(baseNode.getText()) ?? baseNode.getText() } : {}),
       ...(literal !== undefined ? { baseLiteral: normalizePath(literal) } : {}),
       ...(baseHost !== undefined ? { baseHost } : {}),
     });
   });
   return out;
+}
+
+/** Top-level names other files can import each local name under: `export const x`, `export { x as y }`,
+ * `export default x` ("default"). */
+function moduleExportNames(sf: ts.SourceFile): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const add = (local: string, exported: string) => out.set(local, [...(out.get(local) ?? []), exported]);
+  for (const stmt of sf.statements) {
+    if (ts.isVariableStatement(stmt) && stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      for (const d of stmt.declarationList.declarations) if (ts.isIdentifier(d.name)) add(d.name.text, d.name.text);
+    } else if (ts.isExportDeclaration(stmt) && !stmt.moduleSpecifier && !stmt.isTypeOnly && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+      for (const el of stmt.exportClause.elements) add((el.propertyName ?? el.name).text, el.name.text);
+    } else if (ts.isExportAssignment(stmt) && !stmt.isExportEquals && ts.isIdentifier(stmt.expression)) {
+      add(stmt.expression.text, "default");
+    }
+  }
+  return out;
+}
+
+/** detectHttpClients plus, for each top-level instance, the names it is exported under (for imported-call checks). */
+export function detectHttpClientDrafts(file: ParsedFile): HttpClientDraft[] {
+  const clients = detectHttpClients(file);
+  if (!file.sf || clients.length === 0) return clients;
+  const exports = moduleExportNames(file.sf);
+  return clients.map((c) => {
+    const names = exports.get(c.name);
+    return names ? { ...c, exportNames: names } : c;
+  });
 }

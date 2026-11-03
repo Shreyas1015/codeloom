@@ -19,6 +19,14 @@ export type MountDraft = Mount & {
  * from, resolved by `finalizeEndpoints` to that file's model class (so a local alias never becomes the model
  * name) and then dropped. */
 export type DbAccessDraft = DbAccess & { modelImport?: string };
+/** An HTTP call as an adapter sees it: `clientImport` marks a call on an imported binding (`svc.get(url)`,
+ * `client(config)`) that is only an HTTP call if that binding is an exported HTTP client instance;
+ * `finalizeEndpoints` checks it (keeping the call under the instance's own name) and drops the field. */
+export type HttpCallDraft = HttpCall & { clientImport?: { from: string; name: string } };
+
+/** An HTTP client as an adapter sees it: `exportNames` are the names other files can import it under
+ * ("default" for the default export); used by `finalizeEndpoints`, then dropped. */
+export type HttpClientDraft = HttpClient & { exportNames?: string[] };
 
 export interface ParsedFile {
   rel: string;
@@ -50,8 +58,8 @@ export function packageRelative(rel: string, ctx: AdapterContext): string | unde
 
 export interface EndpointsPart {
   pages: UiPage[];
-  httpCalls: HttpCall[];
-  httpClients: HttpClient[];
+  httpCalls: HttpCallDraft[];
+  httpClients: HttpClientDraft[];
   routes: RouteDraft[];
   mounts: MountDraft[];
   routers: RouterDef[];

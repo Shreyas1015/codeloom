@@ -276,3 +276,106 @@ describe("H2 fix — type-only superagent imports and fetch init", () => {
     `)).toEqual(["GET [/api/a] ok literal @a", "GET [/api/b] ok literal @b"]);
   });
 });
+
+describe("detectHttpCalls — axios instances and config calls (hardening H2)", () => {
+  const callsWithClient = (code: string) =>
+    detectHttpCalls(parsed("src/lib.ts", code)).map(
+      (c) => `${c.method} [${c.path}] ${c.kind}${c.base ? ` base=${c.base}` : ""} client=${c.client} @${c.at.symbol}`,
+    );
+
+  it("treats any local axios.create instance as a client, whatever its name", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      const backend = axios.create({ baseURL: "/v1" });
+      export const listInvoices = () => backend.get("/invoices");
+      export const removeInvoice = (id: string) => backend.delete(\`/invoices/\${id}\`);
+    `)).toEqual([
+      "GET [/invoices] literal client=backend @listInvoices",
+      "DELETE [/invoices/:id] template client=backend @removeInvoice",
+    ]);
+  });
+
+  it("finds client(config) with an object literal: method from config.method (default GET), url from config.url", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      const backend = axios.create({ baseURL: process.env.API_URL });
+      export const createInvoice = (data: unknown) => backend({ method: "post", url: "/invoices", data });
+      export const listInvoices = () => backend({ url: "/invoices" });
+    `)).toEqual([
+      "POST [/invoices] literal client=backend @createInvoice",
+      "GET [/invoices] literal client=backend @listInvoices",
+    ]);
+  });
+
+  it("follows a const config declared earlier in the same function (one level)", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      const backend = axios.create({});
+      export async function getCustomer(id: string) {
+        const config = { method: "GET", url: \`\${process.env.API_URL}/customers/\${id}\` };
+        const res = await backend(config);
+        return res.data;
+      }
+    `)).toEqual([
+      "GET [/customers/:id] template base=process.env.API_URL client=backend @getCustomer",
+    ]);
+  });
+
+  it("follows a config const for plain axios(config) too", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      export function saveCustomer(data: unknown) {
+        const config = { method: "put", url: "/customers", data };
+        return axios(config);
+      }
+    `)).toEqual(["PUT [/customers] literal client=axios @saveCustomer"]);
+  });
+
+  it("does not guess a config it cannot read: the call stays unknown", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      const backend = axios.create({});
+      export function send(config: any) { return backend(config); }
+      export function sendBuilt() { const config = buildConfig(); return backend(config); }
+      export function sendNoUrl() { return backend({ method: "get" }); }
+    `)).toEqual([
+      "GET [] unknown client=backend @send",
+      "GET [] unknown client=backend @sendBuilt",
+      "GET [] unknown client=backend @sendNoUrl",
+    ]);
+  });
+
+  it("ignores a call to a non-client function that takes a { url } object", () => {
+    expect(callsWithClient(`
+      function track(e: any) {}
+      export const go = () => track({ url: "/customers" });
+    `)).toEqual([]);
+  });
+
+  it("uses import.meta.env and process.env bases, and module consts initialised from them", () => {
+    expect(callsWithClient(`
+      import axios from "axios";
+      const backend = axios.create({});
+      const API_URL = import.meta.env.VITE_API_URL;
+      const BILLING = process.env.BILLING_URL || "http://localhost:4000";
+      export const a = () => backend.get(\`\${import.meta.env.VITE_API_URL}/customers\`);
+      export const b = () => backend({ url: \`\${API_URL}/customers\` });
+      export const c = () => backend.post(BILLING + "/invoices");
+    `)).toEqual([
+      "GET [/customers] literal base=import.meta.env.VITE_API_URL client=backend @a",
+      "GET [/customers] literal base=import.meta.env.VITE_API_URL client=backend @b",
+      "POST [/invoices] literal base=process.env.BILLING_URL client=backend @c",
+    ]);
+  });
+});
+
+describe("detectHttpClients — env-backed baseURL (hardening H2)", () => {
+  it("resolves a baseURL module const initialised from an env var to the env access", () => {
+    const clients = detectHttpClients(parsed("src/client.ts", `
+      import axios from "axios";
+      const API_URL = import.meta.env.VITE_API_URL ?? "";
+      export const backend = axios.create({ baseURL: API_URL });
+    `));
+    expect(clients).toMatchObject([{ name: "backend", baseExpr: "import.meta.env.VITE_API_URL" }]);
+  });
+});
