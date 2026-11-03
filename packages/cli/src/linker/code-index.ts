@@ -7,6 +7,7 @@ import { httpCallShape, superagentReceivers } from "../adapters/http-calls.js";
 import { pathPattern } from "../adapters/ast.js";
 import { type ConfigArg, configArgsOf, configWrapperCandidate } from "./config-wrappers.js";
 import type { HttpMethod } from "../store/schemas.js";
+import { compare } from "../util.js";
 
 export interface CodeSymbol {
   name: string;
@@ -40,10 +41,23 @@ export interface ClassField {
   typeName: string;
 }
 
+/** A name bound to one key of a hook's result (H10): in `const { handleSubmit, onDelete: remove } =
+ * useCustomerForm()`, `remove` is `{ hook: "useCustomerForm", key: "onDelete" }`. */
+export interface HookKey {
+  hook: string;
+  key: string;
+}
+
 export type Callee =
-  | { kind: "ident"; name: string }
+  | {
+    kind: "ident"; name: string;
+    /** Set when the nearest declaration of `name` in scope destructures it from a hook call (H10). */
+    hook?: HookKey;
+  }
   | {
     kind: "member"; object: string; prop: string;
+    /** Set when the nearest declaration of `object` in scope is `const object = useX()` (H10): the hook's name. */
+    hook?: string;
     /** What the receiver is known to be from its nearest declaration in scope (H4): a type name from a
      * parameter/variable annotation (`q: Queue` -> "Queue", `ids: number[]` -> "Array", `s: string` ->
      * "String") or from its initializer (`[]` -> "Array", `{}` -> "Object", `new Map()` -> "Map", a string
@@ -120,6 +134,20 @@ export interface FileCodeIndex {
    * `{ Labels: Tags }`. Lets `agent.Articles.all()` follow the default object to `Articles.all` (H3b).
    * Source order. Absent when none. */
   objectRefs?: Array<{ object: string; prop: string; local: string }>;
+  /** Handlers a hook (a function named `use[A-Z]…`) returns under a key, when every value it returns is an
+   * object literal (H10). Sorted by hook, then key. Absent when none. */
+  hookReturns?: HookReturn[];
+}
+
+/** What hook `hook` returns under `key`: a function named in the hook's file (`{ handleSubmit }` /
+ * `{ handleSubmit: submit }` where `submit` is a function declared in the hook, or not declared in the hook at
+ * all), or an inline function (`{ handleSubmit: async () => {…} }`, `{ reset() {…} }`, `useCallback(() => …)`,
+ * or a const the hook sets to `useCallback(…)`). An inline function has no symbol of its own (its calls belong
+ * to the hook), so it stands for the hook, with the function's lines. */
+export interface HookReturn {
+  hook: string;
+  key: string;
+  target: { kind: "name"; name: string } | { kind: "inline"; lines: [number, number] };
 }
 
 export type RepoCodeIndex = Map<string, FileCodeIndex>;
@@ -237,7 +265,10 @@ function receiverTypeOf(id: ts.Identifier): string | undefined {
 }
 
 function classify(expr: ts.Expression): Callee {
-  if (ts.isIdentifier(expr)) return { kind: "ident", name: expr.text };
+  if (ts.isIdentifier(expr)) {
+    const hook = hookKeyOf(expr);
+    return hook ? { kind: "ident", name: expr.text, hook } : { kind: "ident", name: expr.text };
+  }
   if (ts.isPropertyAccessExpression(expr)) {
     const prop = expr.name.text;
     const obj = expr.expression;
@@ -248,6 +279,8 @@ function classify(expr: ts.Expression): Callee {
     const newClass = newExpressionClass(obj);
     if (newClass) return { kind: "new-member", className: newClass, prop };
     if (ts.isIdentifier(obj)) {
+      const hook = wholeHookOf(obj);
+      if (hook !== undefined) return { kind: "member", object: obj.text, prop, hook };
       const recvType = receiverTypeOf(obj);
       return recvType !== undefined ? { kind: "member", object: obj.text, prop, recvType } : { kind: "member", object: obj.text, prop };
     }
@@ -515,6 +548,179 @@ function jsxRefOf(node: ts.Node): ts.Identifier | ts.PropertyAccessExpression | 
   return undefined;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Hook handlers (H10)
+// ---------------------------------------------------------------------------------------------------
+
+/** React's naming rule for hooks: `use` then an upper-case letter or digit. */
+const HOOK_NAME_RE = /^use[A-Z0-9]/;
+
+function unwrapExpr(e: ts.Expression): ts.Expression {
+  let cur = e;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur) || ts.isNonNullExpression(cur)) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+/** `useX(…)` (a plain-identifier hook call) -> "useX". */
+function hookCallName(e: ts.Expression | undefined): string | undefined {
+  if (!e) return undefined;
+  const call = unwrapExpr(e);
+  return ts.isCallExpression(call) && ts.isIdentifier(call.expression) && HOOK_NAME_RE.test(call.expression.text)
+    ? call.expression.text : undefined;
+}
+
+/** The identifier binding `name` inside a binding name (`x`, `{ a, b: x }`, `[x]`, nested patterns). */
+function bindingIdent(name: ts.BindingName, text: string): ts.Identifier | undefined {
+  if (ts.isIdentifier(name)) return name.text === text ? name : undefined;
+  for (const el of name.elements) {
+    if (ts.isOmittedExpression(el)) continue;
+    const hit = bindingIdent(el.name, text);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** The identifier that declares `name` directly in a statement list: a variable (also inside a binding
+ * pattern), a function or a class declaration. */
+function declaredInStatements(statements: ts.NodeArray<ts.Statement>, name: string): ts.Identifier | undefined {
+  for (const st of statements) {
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        const hit = bindingIdent(d.name, name);
+        if (hit) return hit;
+      }
+    } else if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name?.text === name) {
+      return st.name;
+    }
+  }
+  return undefined;
+}
+
+/** The identifier of the nearest declaration of `id`'s name in scope: a parameter of an enclosing function,
+ * a `for`/`catch` variable, or a declaration directly in an enclosing block / the file. The search stops after
+ * `stop` (inclusive). Undefined when there is none (a global, or declared outside `stop`). */
+function nearestDeclaration(id: ts.Identifier, stop?: ts.Node): ts.Identifier | undefined {
+  const name = id.text;
+  for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
+    let hit: ts.Identifier | undefined;
+    if (ts.isFunctionLike(cur)) {
+      for (const p of cur.parameters) hit ??= bindingIdent(p.name, name);
+    } else if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isModuleBlock(cur) || ts.isCaseClause(cur) || ts.isDefaultClause(cur)) {
+      hit = declaredInStatements(cur.statements, name);
+    } else if ((ts.isForStatement(cur) || ts.isForOfStatement(cur) || ts.isForInStatement(cur)) && cur.initializer && ts.isVariableDeclarationList(cur.initializer)) {
+      for (const d of cur.initializer.declarations) hit ??= bindingIdent(d.name, name);
+    } else if (ts.isCatchClause(cur) && cur.variableDeclaration) {
+      hit = bindingIdent(cur.variableDeclaration.name, name);
+    }
+    if (hit) return hit;
+    if (cur === stop) return undefined;
+  }
+  return undefined;
+}
+
+/** `name` destructured from a hook call by its nearest declaration (`const { handleSubmit, onDelete: remove }
+ * = useCustomerForm()`): the hook and the key. Rest elements (`...rest`), nested patterns and computed keys
+ * are not followed. */
+function hookKeyOf(id: ts.Identifier): HookKey | undefined {
+  const decl = nearestDeclaration(id);
+  const el = decl?.parent;
+  if (!el || !ts.isBindingElement(el) || el.dotDotDotToken || !ts.isObjectBindingPattern(el.parent)) return undefined;
+  const d = el.parent.parent;
+  if (!ts.isVariableDeclaration(d)) return undefined;
+  const hook = hookCallName(d.initializer);
+  if (hook === undefined) return undefined;
+  const prop = el.propertyName;
+  const key = !prop ? id.text : ts.isIdentifier(prop) || ts.isStringLiteral(prop) ? prop.text : undefined;
+  return key === undefined ? undefined : { hook, key };
+}
+
+/** `object` bound by its nearest declaration to a whole hook result (`const form = useCustomerForm()`). */
+function wholeHookOf(id: ts.Identifier): string | undefined {
+  const decl = nearestDeclaration(id);
+  const d = decl?.parent;
+  return d && ts.isVariableDeclaration(d) && d.name === decl ? hookCallName(d.initializer) : undefined;
+}
+
+/** `useCallback(<function>, …)` -> the function. */
+function useCallbackFn(e: ts.Expression): ts.FunctionLikeDeclaration | undefined {
+  const call = unwrapExpr(e);
+  if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression) || call.expression.text !== "useCallback") return undefined;
+  const fn = call.arguments[0] && unwrapExpr(call.arguments[0]);
+  return fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) ? fn : undefined;
+}
+
+function inlineTarget(node: ts.Node): HookReturn["target"] {
+  return { kind: "inline", lines: [lineOf(node), endLineOf(node)] };
+}
+
+/** What a returned property value stands for, or undefined when it is not a function we can name. */
+function hookValueTarget(value: ts.Expression, hookFn: ts.Node): HookReturn["target"] | undefined {
+  const v = unwrapExpr(value);
+  if (ts.isArrowFunction(v) || ts.isFunctionExpression(v)) return inlineTarget(v);
+  const cb = useCallbackFn(v);
+  if (cb) return inlineTarget(cb);
+  if (!ts.isIdentifier(v)) return undefined;
+  const decl = nearestDeclaration(v, hookFn);
+  // Not declared in the hook: a module-level function or an import (the resolver checks which).
+  if (!decl) return { kind: "name", name: v.text };
+  const p = decl.parent;
+  if (ts.isFunctionDeclaration(p)) return { kind: "name", name: v.text };
+  if (ts.isVariableDeclaration(p) && p.name === decl && p.initializer) {
+    const init = unwrapExpr(p.initializer);
+    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return { kind: "name", name: v.text };
+    const fn = useCallbackFn(init);
+    if (fn) return inlineTarget(fn);
+  }
+  // State, a parameter, a destructured value, another hook's result: not followed.
+  return undefined;
+}
+
+/** The expressions a function returns (an arrow's expression body, else every `return` not inside a nested
+ * function or class). Bare `return;` gives no expression. */
+function returnedExprs(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
+  const body = fn.body;
+  if (!body) return [];
+  if (!ts.isBlock(body)) return [body];
+  const out: ts.Expression[] = [];
+  body.forEachChild(function scan(n: ts.Node): void {
+    if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    n.forEachChild(scan);
+  });
+  return out;
+}
+
+/** Keys hook `hook` returns as handlers. Every returned value must be an object literal (or null / undefined);
+ * any other return makes every key unknown. A key given two different targets is dropped; so is one a later
+ * spread (`...base`) may override. */
+function hookReturnsOf(fn: ts.FunctionLikeDeclaration, hook: string): HookReturn[] {
+  const byKey = new Map<string, HookReturn["target"] | null>();
+  for (const raw of returnedExprs(fn)) {
+    const e = unwrapExpr(raw);
+    if (e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined")) continue;
+    if (!ts.isObjectLiteralExpression(e)) return [];
+    const props = e.properties;
+    for (let i = 0; i < props.length; i++) {
+      const p = props[i]!;
+      if (ts.isSpreadAssignment(p)) continue;
+      const key = ts.isShorthandPropertyAssignment(p) ? p.name.text : memberName(p.name);
+      if (key === undefined) continue;
+      const overridden = props.slice(i + 1).some((q) => ts.isSpreadAssignment(q));
+      const target = overridden ? undefined
+        : ts.isShorthandPropertyAssignment(p) ? hookValueTarget(p.name, fn)
+          : ts.isPropertyAssignment(p) ? hookValueTarget(p.initializer, fn)
+            : ts.isMethodDeclaration(p) ? inlineTarget(p) : undefined;
+      const prev = byKey.get(key);
+      if (prev === null) continue;
+      if (!target || (prev !== undefined && JSON.stringify(prev) !== JSON.stringify(target))) byKey.set(key, null);
+      else byKey.set(key, target);
+    }
+  }
+  return [...byKey].flatMap(([key, target]) => (target ? [{ hook, key, target }] : []));
+}
+
 export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const idx: FileCodeIndex = { symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] };
   if (!file.sf) return idx;
@@ -527,7 +733,13 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
-    if (fnName !== undefined) idx.symbols.push(functionSymbol(node, fnName));
+    if (fnName !== undefined) {
+      idx.symbols.push(functionSymbol(node, fnName));
+      if (HOOK_NAME_RE.test(fnName) && ts.isFunctionLike(node) && "body" in node) {
+        const returns = hookReturnsOf(node as ts.FunctionLikeDeclaration, fnName);
+        if (returns.length > 0) (idx.hookReturns ??= []).push(...returns);
+      }
+    }
 
     if (ts.isClassLike(node)) {
       const cls = className(node);
@@ -689,7 +901,9 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     else delete site.refArgs;
   }
   // A plain-name JSX reference (`value={title}`) counts only when the name can be a function.
-  idx.calls = idx.calls.filter((c) => c.kind !== "jsx-ref" || c.callee.kind !== "ident" || fnNames.has(c.callee.name));
+  // A name destructured from a hook's result can be a function too (H10).
+  idx.calls = idx.calls.filter((c) => c.kind !== "jsx-ref" || c.callee.kind !== "ident" || c.callee.hook !== undefined || fnNames.has(c.callee.name));
+  idx.hookReturns?.sort((a, b) => compare(a.hook, b.hook) || compare(a.key, b.key));
   // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
   const obj = defaultCandidate;
   if (obj !== undefined && idx.symbols.some((s) => s.kind === "object-method" && s.name.startsWith(`${obj}.`))) {
