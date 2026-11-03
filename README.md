@@ -62,7 +62,7 @@ Journeys need JS/TS.
 | UI pages | Next.js (`app/` and `pages/`), React Router |
 | HTTP calls | `fetch` (and `$fetch`, `ofetch`, `useFetch`), axios, ky, got, superagent, redaxios, wretch, clients made with `.create(...)`, and your own wrapper functions around them |
 | API routes | Express, Fastify, NestJS, Next.js API routes (`app/**/route.ts` and `pages/api`), AdonisJS |
-| Database | Prisma, Drizzle, TypeORM, Knex, AdonisJS Lucid, raw SQL (pg, mysql2, better-sqlite3, postgres, sqlite3), `.sql` files, `schema.prisma` |
+| Database | Prisma, Drizzle, TypeORM, Knex, AdonisJS Lucid, Mongoose (collections), raw SQL (pg, mysql2, better-sqlite3, postgres, sqlite3), `.sql` files, `schema.prisma` |
 | Queues | RabbitMQ through amqplib (`sendToQueue`, `publish`, `consume`, `bindQueue`) |
 
 ## Commands

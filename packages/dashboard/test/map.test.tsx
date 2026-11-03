@@ -120,6 +120,7 @@ const journey = {
   queues: [],
   unresolved: [],
   missingChainIds: [],
+  movedChainIds: [],
 } as unknown as JourneyResult;
 
 const journeys: JourneysResponse = {

@@ -1,9 +1,9 @@
 import { dataError } from "../errors.js";
 import { journeyId } from "../linker/chains.js";
-import type { MapState } from "../mcp/state.js";
+import { chainLookup, type MapState } from "../mcp/state.js";
 import { compare } from "../util.js";
 import { readJson, writeJsonIfChanged } from "./json.js";
-import { type Journey, type JourneysFile, JourneysFileSchema } from "./schemas.js";
+import { type Chain, type Journey, type JourneysFile, JourneysFileSchema } from "./schemas.js";
 
 export type JourneyOp =
   | { op: "create"; name: string; area?: string; note?: string; chainIds: string[] }
@@ -35,7 +35,10 @@ function uniqSorted(ids: string[]): string[] {
  * New journeys get id = journeyId(sorted chainIds), status "ok", area/note "" by default. Journey ids are
  * fixed at creation: update never changes one; merge and split create new journeys and delete the old.
  * Output sorted by id; created/updated/deleted compare the result with the input (sorted). */
-export function applyJourneyOps(journeys: Journey[], ops: JourneyOp[], knownChainIds: Set<string>): JourneyOpsResult {
+export function applyJourneyOps(
+  journeys: Journey[], ops: JourneyOp[], knownChains: Set<string> | ReadonlyArray<Pick<Chain, "id" | "aliases">>,
+): JourneyOpsResult {
+  const known = chainLookup(knownChains instanceof Set ? [...knownChains].map((id) => ({ id })) : knownChains);
   const byId = new Map<string, Journey>(journeys.map((j) => [j.id, { ...j, chainIds: [...j.chainIds] }]));
 
   const get = (id: string): Journey => {
@@ -56,9 +59,10 @@ export function applyJourneyOps(journeys: Journey[], ops: JourneyOp[], knownChai
         case "create": {
           const name = cleanName(op.name);
           if (op.chainIds.length === 0) throw new OpError("chainIds must name at least one chain");
-          const unknown = op.chainIds.filter((c) => !knownChainIds.has(c));
-          if (unknown.length > 0) throw new OpError(`unknown chain id(s): ${uniqSorted(unknown).join(", ")}`);
-          add(name, op.chainIds, op.area, op.note);
+          // H11: an id that now exists only as a chain's alias is stored as that chain's current id.
+          const resolved = known.resolve(op.chainIds);
+          if (resolved.missing.length > 0) throw new OpError(`unknown chain id(s): ${resolved.missing.join(", ")}`);
+          add(name, resolved.chains.map((c) => c.id), op.area, op.note);
           break;
         }
         case "update": {
@@ -136,7 +140,7 @@ export function saveJourneys(state: MapState, ops: JourneyOp[]): JourneyOpsResul
     if (seenIds.has(j.id)) throw dataError(`duplicate journey id ${j.id} in journeys.json — fix it by hand`);
     seenIds.add(j.id);
   }
-  const result = applyJourneyOps(journeys, ops, new Set(state.chains.map((c) => c.id)));
+  const result = applyJourneyOps(journeys, ops, state.chains);
   const file: JourneysFile = JourneysFileSchema.parse({ version: 1, journeys: result.journeys });
   writeJsonIfChanged(state.journeysPath, file);
   return result;

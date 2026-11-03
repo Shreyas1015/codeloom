@@ -5,7 +5,7 @@ import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
 import { chainReach } from "../linker/completeness.js";
-import { formatNodeRef, loadMapState, type MapState } from "../mcp/state.js";
+import { chainLookup, formatNodeRef, journeysByChain, loadMapState, type MapState } from "../mcp/state.js";
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
 import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/workspace.js";
@@ -138,10 +138,12 @@ function chainRow(c: Chain): ChainRow {
 /** Home's lists: every journey summarised over its chains (stops deduped the way get_journey does),
  * sorted by name then id; and the chains no journey names, sorted by id. */
 export function journeyRows(state: Pick<MapState, "chains" | "journeys">): JourneysResponse {
-  const byId = new Map(state.chains.map((c) => [c.id, c]));
+  const lookup = chainLookup(state.chains);
   const journeys = state.journeys.map((j): JourneyRow => {
     const chainIds = sortedSet(j.chainIds);
-    const chains = chainIds.flatMap((id) => byId.get(id) ?? []);
+    // H11: ids first, then aliases — a chain that gained a UI step still counts as present.
+    const resolved = lookup.resolve(chainIds);
+    const chains = resolved.chains;
     const stops: Record<Lane, number> = { ui: 0, api: 0, code: 0, db: 0, queue: 0 };
     const seen = new Set<string>();
     const repos = new Set<string>();
@@ -158,7 +160,7 @@ export function journeyRows(state: Pick<MapState, "chains" | "journeys">): Journ
         stops[s.lane]++;
       }
     }
-    const allPresent = chains.length > 0 && chains.length === chainIds.length;
+    const allPresent = chains.length > 0 && resolved.missing.length === 0;
     const complete = allPresent && chains.every((c) => c.complete);
     return {
       id: j.id, name: j.name, area: j.area, note: j.note, status: j.status, chainIds,
@@ -168,7 +170,7 @@ export function journeyRows(state: Pick<MapState, "chains" | "journeys">): Journ
     };
   });
   journeys.sort((a, b) => compare(a.name, b.name) || compare(a.id, b.id));
-  const named = new Set(state.journeys.flatMap((j) => j.chainIds));
+  const named = journeysByChain(state);
   const unnamedChains = state.chains.filter((c) => !named.has(c.id)).sort((a, b) => compare(a.id, b.id)).map(chainRow);
   return { journeys, unnamedChains };
 }
@@ -208,8 +210,7 @@ export function graphLevel(
   };
 
   // journeys per file in this repo
-  const journeysOfChain = new Map<string, string[]>();
-  for (const j of state.journeys) for (const c of j.chainIds) journeysOfChain.set(c, [...(journeysOfChain.get(c) ?? []), j.id]);
+  const journeysOfChain = journeysByChain(state);
   const journeysOfFile = new Map<string, Set<string>>();
   for (const c of state.chains) {
     const js = journeysOfChain.get(c.id);

@@ -97,6 +97,7 @@ export const journeyResult: JourneyResult = {
   queues: [],
   unresolved: chainB.unresolved.map((u) => ({ chainId: "ch_bbbb", ...u })),
   missingChainIds: [],
+  movedChainIds: [],
 };
 
 export const chainResult: JourneyResult = {
@@ -108,6 +109,7 @@ export const chainResult: JourneyResult = {
   queues: [],
   unresolved: [],
   missingChainIds: [],
+  movedChainIds: [],
 };
 
 export const orphanedResult: JourneyResult = {
@@ -119,4 +121,5 @@ export const orphanedResult: JourneyResult = {
   queues: [],
   unresolved: [],
   missingChainIds: ["ch_aaaa", "ch_bbbb"],
+  movedChainIds: [],
 };

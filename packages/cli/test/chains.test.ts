@@ -236,6 +236,17 @@ describe("buildChains — db access with no table or model (final review item 4)
     }]);
     expect(hopsFromChains(chains).filter((f) => f.hop.type === "handler-store" && f.hop.table === "")).toEqual([]);
   });
+
+  it("H9: a mongoose model whose collection is unknown is not a store either (never the model name as a table)", () => {
+    const { ws, links } = scenario();
+    const hit = links.backend[0]!.hits[0]!;
+    if (hit.kind !== "db") throw new Error("scenario changed");
+    hit.access = { model: "Customer", op: "read", via: "mongoose", at: hit.access.at };
+    const page = buildChains(ws, links).find((c) => c.entry === "page:web:/items/new")!;
+    expect(page.stops.some((s) => s.kind === "db")).toBe(false);
+    expect(page.complete).toBe(false);
+    expect(page.unresolved.map((u) => u.reason)).toEqual(['mongoose model "Customer" (read): collection unknown']);
+  });
 });
 
 describe("buildChains — wrapper-derived UI calls (H2)", () => {

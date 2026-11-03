@@ -127,7 +127,7 @@ export const DbAccessSchema = z.object({
   table: z.string().optional(),
   model: z.string().optional(),
   op: DbOpSchema,
-  via: z.enum(["lucid", "prisma", "typeorm", "drizzle", "query-builder", "sql"]),
+  via: z.enum(["lucid", "prisma", "typeorm", "drizzle", "mongoose", "query-builder", "sql"]),
   at: LocSchema,
 });
 export type DbAccess = z.infer<typeof DbAccessSchema>;
@@ -144,7 +144,7 @@ export const ModelDefSchema = z.object({
   model: z.string(),
   table: z.string(),
   file: z.string(),
-  source: z.enum(["lucid", "typeorm", "prisma", "drizzle"]),
+  source: z.enum(["lucid", "typeorm", "prisma", "drizzle", "mongoose"]),
 });
 export type ModelDef = z.infer<typeof ModelDefSchema>;
 
@@ -283,6 +283,10 @@ export const ChainSchema = z.object({
   unresolved: z.array(UnresolvedSchema),
   confidence: ConfidenceSchema,
   complete: z.boolean(),
+  /** H11: ids the same flow has under other entries (sorted, never the chain's own id; absent when none):
+   * the route-only id for a chain with a routeKey, and each call stop's call-entry id for a page chain.
+   * Readers resolve a journey's chain ids through ids first, then aliases (mcp/state.ts chainLookup). */
+  aliases: z.array(z.string()).optional(),
 });
 export type Chain = z.infer<typeof ChainSchema>;
 

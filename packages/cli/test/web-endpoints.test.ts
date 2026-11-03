@@ -62,6 +62,7 @@ const JourneyResult = z.strictObject({
   lanes: z.strictObject({ ui: z.array(StopView), api: z.array(StopView), code: z.array(StopView), db: z.array(StopView), queue: z.array(StopView) }),
   files: z.array(z.string()), tables: z.array(z.string()), queues: z.array(z.string()),
   unresolved: z.array(Unresolved.extend({ chainId: z.string() })), missingChainIds: z.array(z.string()),
+  movedChainIds: z.array(z.strictObject({ from: z.string(), to: z.array(z.string()) })),
 });
 
 const GraphLevel = z.strictObject({

@@ -7,7 +7,9 @@ import { type Chain, type ChainStop, type HttpMethod, HttpMethodSchema, type Lan
 import { compare } from "../../util.js";
 import { withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
-import { chainsTouchingNode, findNode, formatNodeRef, loadMapState, type MapState, parseNodeRef } from "../state.js";
+import {
+  chainLookup, chainsTouchingNode, findNode, formatNodeRef, journeysByChain, loadMapState, type MapState, parseNodeRef,
+} from "../state.js";
 
 // ---- shared views ------------------------------------------------------------------------------
 
@@ -27,17 +29,9 @@ function stopView(s: ChainStop, withFrom = true): Record<string, unknown> {
   };
 }
 
-/** chain id → ids of the journeys naming it (sorted). */
+/** chain id → ids of the journeys naming it, directly or through an alias (sorted). */
 function journeyIndex(state: MapState): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const j of [...state.journeys].sort((a, b) => compare(a.id, b.id))) {
-    for (const c of j.chainIds) {
-      const list = out.get(c) ?? [];
-      if (!list.includes(j.id)) list.push(j.id);
-      out.set(c, list);
-    }
-  }
-  return out;
+  return journeysByChain(state);
 }
 
 /** A chain as list_chains shows it by default: who it is, its stop count per lane and the tables it
@@ -107,16 +101,26 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
   let journey = null;
   let chains: Chain[];
   let missingChainIds: string[] = [];
+  let movedChainIds: Array<{ from: string; to: string[] }> = [];
   if (id.startsWith("j_")) {
     journey = state.journeys.find((j) => j.id === id) ?? null;
     if (!journey) throw dataError(`Unknown journey "${id}". list_chains shows chains and the journeys naming them.`);
-    const chainIds = [...new Set(journey.chainIds)].sort(compare);
-    chains = chainIds.flatMap((c) => byId.get(c) ?? []);
-    missingChainIds = chainIds.filter((c) => !byId.has(c));
+    // H11: ids first, then aliases — a chain that gained a UI step is found under its new id.
+    const resolved = chainLookup(state.chains).resolve(journey.chainIds);
+    chains = resolved.chains;
+    missingChainIds = resolved.missing;
+    movedChainIds = resolved.moved;
   } else if (id.startsWith("ch_")) {
     const chain = byId.get(id);
-    if (!chain) throw dataError(`Unknown chain "${id}". list_chains shows every chain.`);
-    chains = [chain];
+    if (chain) {
+      chains = [chain];
+    } else {
+      // An older id of a chain that has since gained a UI step resolves through its alias (H11).
+      const resolved = chainLookup(state.chains).resolve([id]);
+      if (resolved.chains.length === 0) throw dataError(`Unknown chain "${id}". list_chains shows every chain.`);
+      chains = resolved.chains;
+      movedChainIds = resolved.moved;
+    }
   } else {
     throw dataError(`Unknown id "${id}": pass a journey id (j_…) or a chain id (ch_…).`);
   }
@@ -147,6 +151,7 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
     queues: [...queues].sort(compare),
     unresolved: chains.flatMap((c) => c.unresolved.map((u) => ({ chainId: c.id, ...u }))),
     missingChainIds,
+    movedChainIds,
   };
 }
 
@@ -345,7 +350,9 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
       title: "Get journey",
       description:
         "One user journey (id j_…) or one chain (id ch_…) laid out by lane: its chains, the ui / api / code / db / " +
-        "queue stops (shared stops shown once), the files, tables and queues it touches, and what the linker could not resolve.",
+        "queue stops (shared stops shown once), the files, tables and queues it touches, and what the linker could not resolve. " +
+        "A saved chain id that now belongs to a longer chain (the flow gained a UI step) is followed to it and listed in " +
+        "movedChainIds ({from, to}); missingChainIds lists only ids that match no chain at all.",
       inputSchema: { id: z.string().min(1).describe("A journey id (j_…) or a chain id (ch_…).") },
     },
     withErrors(
