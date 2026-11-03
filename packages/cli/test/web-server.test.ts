@@ -439,7 +439,7 @@ describe("/api/overview", () => {
   it("does not block the server: a static request answers while an overview waits on a slow git", async () => {
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const bin = mkdtempSync(join(tmpdir(), "codeloom-slowgit-"));
-    writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 0.4\nexec "${realGit}" "$@"\n`);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 1\nexec "${realGit}" "$@"\n`);
     chmodSync(join(bin, "git"), 0o755);
     const fast = JSON.parse((await get(server.port, "/api/overview", cookie())).body);
     const savedPath = process.env.PATH;
@@ -454,9 +454,10 @@ describe("/api/overview", () => {
       const overviewAt = Date.now() - t0;
       expect(page.status).toBe(200);
       expect(slow.status).toBe(200);
-      // The overview runs several git calls of 0.4 s each; the page must not wait for them.
-      expect(overviewAt).toBeGreaterThan(1000);
-      expect(pageAt).toBeLessThan(overviewAt - 500);
+      // Every git call takes ≥ 1 s (they may run in parallel), so the overview takes ≥ ~1 s; the page
+      // must answer while it is still waiting, not after.
+      expect(overviewAt).toBeGreaterThan(900);
+      expect(pageAt).toBeLessThan(overviewAt - 600);
       expect(JSON.parse(slow.body).indexStatus).toEqual(fast.indexStatus);
     } finally {
       process.env.PATH = savedPath;
