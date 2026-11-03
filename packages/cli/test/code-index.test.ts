@@ -160,7 +160,7 @@ export function bootstrap() {
       { caller: "CustomersController.store", line: 10, callee: { kind: "this", prop: "notify" } },
       { caller: "CustomersController.show", line: 15, callee: { kind: "new-member", className: "CustomerService", prop: "find" } },
       { caller: "CustomersController.notify", line: 19, callee: { kind: "member", object: "invoiceService", prop: "markPaid" } },
-      { caller: "createViaLocal", line: 25, callee: { kind: "member", object: "svc", prop: "create" } },
+      { caller: "createViaLocal", line: 25, callee: { kind: "member", object: "svc", prop: "create", recvType: "CustomerService" } },
       { caller: "dispatch", line: 29, callee: { kind: "other", prop: "create" } },
       { caller: "bootstrap", line: 33, callee: { kind: "ident", name: "createViaLocal" } },
     ]);

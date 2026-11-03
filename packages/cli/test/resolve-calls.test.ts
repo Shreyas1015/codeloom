@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildFileCodeIndex } from "../src/linker/code-index.js";
 import type { RepoCodeIndex } from "../src/linker/code-index.js";
-import { createCallResolver, MAX_DEPTH, walkCalls, walkCallers } from "../src/linker/resolve-calls.js";
+import { BUILTIN_METHOD_NAMES, createCallResolver, isTestFile, MAX_DEPTH, walkCalls, walkCallers } from "../src/linker/resolve-calls.js";
 import type { CallResolver, SymbolRef } from "../src/linker/resolve-calls.js";
 import { parsed } from "./adapter-helpers.js";
 
@@ -238,19 +238,19 @@ describe("unique-method guess fallback and object-literal services", () => {
 
   it("does not guess for a chained receiver (a.b.c()), only for a simple identifier receiver", () => {
     const resolver = resolverOf({
-      "services/invoice-service.ts": `export const invoiceService = { create(data: unknown) { return data; } };`,
+      "services/invoice-service.ts": `export const invoiceService = { issue(data: unknown) { return data; } };`,
       "workers/notify.ts": `
-        export async function handleEmail(prisma: any) { return prisma.emailLog.create({}); }
-        export async function viaCall(make: any) { return make().create({}); }
-        export async function viaElement(o: any) { return o["x"].create({}); }
-        export async function simple(svc: any) { return svc.create({}); }
+        export async function handleEmail(prisma: any) { return prisma.emailLog.issue({}); }
+        export async function viaCall(make: any) { return make().issue({}); }
+        export async function viaElement(o: any) { return o["x"].issue({}); }
+        export async function simple(svc: any) { return svc.issue({}); }
       `,
     });
     expect(siteAt(resolver, "workers/notify.ts", "handleEmail")).toBeNull();
     expect(resolver.callsFrom({ repo: "api", file: "workers/notify.ts", symbol: "viaCall" }).map((c) => c.target.symbol)).toEqual([]);
     expect(resolver.callsFrom({ repo: "api", file: "workers/notify.ts", symbol: "viaElement" }).map((c) => c.target.symbol)).toEqual([]);
     expect(siteAt(resolver, "workers/notify.ts", "simple")).toMatchObject({
-      target: { file: "services/invoice-service.ts", symbol: "invoiceService.create" }, confidence: "guess", via: "unique-method",
+      target: { file: "services/invoice-service.ts", symbol: "invoiceService.issue" }, confidence: "guess", via: "unique-method",
     });
   });
 
@@ -686,7 +686,7 @@ describe("createCallResolver — only real bindings resolve bare identifiers", (
 });
 
 describe("no unique-method guess onto an external type (Task 12 review fix 5)", () => {
-  const USERS_REPO = `export class UsersRepo { findOne(id: number) { return id; } }`;
+  const USERS_REPO = `export class UsersRepo { findActiveUser(id: number) { return id; } }`;
 
   it("this.field.m() on a field typed with a library class (Repository<User>) stays unresolved", () => {
     const resolver = resolverOf({
@@ -695,7 +695,7 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
         import { Repository } from "typeorm";
         export class UserService {
           constructor(private repo: Repository<User>) {}
-          get(id: number) { return this.repo.findOne(id); }
+          get(id: number) { return this.repo.findActiveUser(id); }
         }
       `,
     });
@@ -709,7 +709,7 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
         import type { Repository } from "typeorm";
         export class UserService {
           constructor(private repo: Repository<User>) {}
-          get(id: number) { return this.repo.findOne(id); }
+          get(id: number) { return this.repo.findActiveUser(id); }
         }
       `,
     });
@@ -719,7 +719,7 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
   it("this.field.m() on a field typed with a global class stays unresolved", () => {
     const resolver = resolverOf({
       "repos/users.ts": USERS_REPO,
-      "svc.ts": `export class C { private m: Map<string, number> = new Map(); run() { return this.m.findOne("x"); } }`,
+      "svc.ts": `export class C { private m: Map<string, number> = new Map(); run() { return this.m.findActiveUser("x"); } }`,
     });
     expect(siteAt(resolver, "svc.ts", "C.run")).toBeNull();
   });
@@ -727,9 +727,9 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
   it("still guesses when the field has no usable type", () => {
     const resolver = resolverOf({
       "repos/users.ts": USERS_REPO,
-      "svc.ts": `export class C { constructor(private repo) {} run() { return this.repo.findOne(1); } }`,
+      "svc.ts": `export class C { constructor(private repo) {} run() { return this.repo.findActiveUser(1); } }`,
     });
-    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findOne" }, confidence: "guess" });
+    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findActiveUser" }, confidence: "guess" });
   });
 
   it("still guesses when the field's type is a repo class without that method (it may be inherited)", () => {
@@ -738,17 +738,17 @@ describe("no unique-method guess onto an external type (Task 12 review fix 5)", 
       "repos/base.ts": `export class BaseRepo {}`,
       "svc.ts": `
         import { BaseRepo } from "./repos/base.js";
-        export class C { constructor(private repo: BaseRepo) {} run() { return this.repo.findOne(1); } }
+        export class C { constructor(private repo: BaseRepo) {} run() { return this.repo.findActiveUser(1); } }
       `,
     });
-    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findOne" }, confidence: "guess" });
+    expect(siteAt(resolver, "svc.ts", "C.run")).toMatchObject({ target: { symbol: "UsersRepo.findActiveUser" }, confidence: "guess" });
   });
 
   it("new X().m() on an imported library class or a global class stays unresolved", () => {
     const resolver = resolverOf({
       "repos/users.ts": USERS_REPO,
-      "a.ts": `import { Client } from "some-lib"; export function run() { return new Client().findOne(1); }`,
-      "b.ts": `export function run() { return new Map().findOne(1); }`,
+      "a.ts": `import { Client } from "some-lib"; export function run() { return new Client().findActiveUser(1); }`,
+      "b.ts": `export function run() { return new Map().findActiveUser(1); }`,
     });
     expect(siteAt(resolver, "a.ts", "run")).toBeNull();
     expect(siteAt(resolver, "b.ts", "run")).toBeNull();
@@ -902,5 +902,99 @@ export function load() { return agent.Articles.all(); }
 `,
     });
     expect(siteAt(resolver, "src/agent.js", "load")).toMatchObject({ target: { file: "src/agent.js", symbol: "Articles.all" } });
+  });
+});
+
+describe("H4: no guesses from built-in method names or test files", () => {
+  it("keeps the built-in / ORM method names in one exported list", () => {
+    for (const name of ["map", "filter", "forEach", "reduce", "find", "includes", "push", "get", "set", "has", "add", "delete",
+      "then", "catch", "finally", "toString", "trim", "split", "replace", "startsWith", "endsWith",
+      "load", "preload", "merge", "fill", "save", "create", "update", "first", "query", "where", "exec", "findOrFail", "findBy"]) {
+      expect(BUILTIN_METHOD_NAMES.has(name), name).toBe(true);
+    }
+    expect(BUILTIN_METHOD_NAMES.has("issueInvoice")).toBe(false);
+  });
+
+  it("arr.map() with a unique repo `map` method stays unresolved (no guess)", () => {
+    const resolver = resolverOf({
+      "src/mappers/customer-mapper.ts": `export class CustomerMapper { map(row: unknown) { return row; } save() { return 1; } }`,
+      "src/controllers/customers.ts": `
+        export function list(rows: any) { return rows.map((r: any) => r.id); }
+        export function store(customer: any) { return customer.save(); }
+        export class C { run() { return this.repo.map(1); } other() { return this.save(); } }
+      `,
+    });
+    expect(siteAt(resolver, "src/controllers/customers.ts", "list")).toBeNull();
+    expect(siteAt(resolver, "src/controllers/customers.ts", "store")).toBeNull();
+    expect(siteAt(resolver, "src/controllers/customers.ts", "C.run")).toBeNull();
+    expect(siteAt(resolver, "src/controllers/customers.ts", "C.other")).toBeNull();
+  });
+
+  it("no guess when the receiver is a local array/object literal, a new of a non-repo class, or a param typed as a non-repo type", () => {
+    const resolver = resolverOf({
+      "src/services/invoice-service.ts": `export class InvoiceService { issueInvoice(id: number) { return id; } }`,
+      "src/controllers/invoices.ts": `
+        import { Queue } from "some-queue-lib";
+        export function fromArray() { const ids = [1, 2]; return ids.issueInvoice(1); }
+        export function fromObject() { const opts = { a: 1 }; return opts.issueInvoice(1); }
+        export function fromNew() { const q = new Queue(); return q.issueInvoice(1); }
+        export function fromGlobalNew() { const m = new Map(); return m.issueInvoice(1); }
+        export function fromParam(q: Queue) { return q.issueInvoice(1); }
+        export function fromArrayParam(ids: number[]) { return ids.issueInvoice(1); }
+        export function fromStringParam(s: string) { return s.issueInvoice(1); }
+        export function stillGuesses(svc: any) { return svc.issueInvoice(1); }
+      `,
+    });
+    const at = (s: string) => siteAt(resolver, "src/controllers/invoices.ts", s);
+    for (const s of ["fromArray", "fromObject", "fromNew", "fromGlobalNew", "fromParam", "fromArrayParam", "fromStringParam"]) {
+      expect(at(s), s).toBeNull();
+    }
+    expect(at("stillGuesses")).toMatchObject({ target: { symbol: "InvoiceService.issueInvoice" }, confidence: "guess" });
+  });
+
+  it("a param typed as a repo class keeps the guess (the method may be inherited)", () => {
+    const resolver = resolverOf({
+      "src/services/invoice-service.ts": `export class InvoiceService { issueInvoice(id: number) { return id; } }`,
+      "src/services/base.ts": `export class BaseService {}`,
+      "src/controllers/invoices.ts": `
+        import { BaseService } from "../services/base.js";
+        export function run(svc: BaseService) { return svc.issueInvoice(1); }
+      `,
+    });
+    expect(siteAt(resolver, "src/controllers/invoices.ts", "run")).toMatchObject({ confidence: "guess" });
+  });
+
+  it("recognises test and fixture files", () => {
+    for (const f of ["test/a.ts", "src/tests/a.ts", "src/__tests__/a.ts", "fixtures/a.ts", "src/__mocks__/a.ts", "src/a.test.ts", "src/a.spec.tsx", "test/fixtures/x.js"]) {
+      expect(isTestFile(f), f).toBe(true);
+    }
+    for (const f of ["src/a.ts", "src/testing-utils.ts", "src/contest/a.ts", "src/latest.ts"]) expect(isTestFile(f), f).toBe(false);
+  });
+
+  it("a production call that would only match a fixture's method stays unresolved", () => {
+    const resolver = resolverOf({
+      "test/fixtures/fake-invoices.ts": `export class FakeInvoices { issueInvoice(id: number) { return id; } }`,
+      "src/controllers/invoices.ts": `export function run(svc: any) { return svc.issueInvoice(1); }`,
+    });
+    expect(siteAt(resolver, "src/controllers/invoices.ts", "run")).toBeNull();
+  });
+
+  it("a fixture's method does not make the production method ambiguous", () => {
+    const resolver = resolverOf({
+      "src/services/invoice-service.ts": `export class InvoiceService { issueInvoice(id: number) { return id; } }`,
+      "src/__mocks__/invoice-service.ts": `export class InvoiceService { issueInvoice(id: number) { return 0; } }`,
+      "src/controllers/invoices.ts": `export function run(svc: any) { return svc.issueInvoice(1); }`,
+    });
+    expect(siteAt(resolver, "src/controllers/invoices.ts", "run")).toMatchObject({ target: { file: "src/services/invoice-service.ts" } });
+  });
+
+  it("production code never resolves into a test file, even through an import", () => {
+    const resolver = resolverOf({
+      "src/__tests__/helpers.ts": `export function makeCustomer() { return 1; }`,
+      "src/seed.ts": `import { makeCustomer } from "./__tests__/helpers.js"; export function seed() { return makeCustomer(); }`,
+      "src/__tests__/a.test.ts": `import { makeCustomer } from "./helpers.js"; export function t() { return makeCustomer(); }`,
+    });
+    expect(siteAt(resolver, "src/seed.ts", "seed")).toBeNull();
+    expect(siteAt(resolver, "src/__tests__/a.test.ts", "t")).toMatchObject({ target: { symbol: "makeCustomer" }, confidence: "exact" });
   });
 });

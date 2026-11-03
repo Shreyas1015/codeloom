@@ -210,6 +210,7 @@ function resolveObjectLiteral(ctx: Ctx, file: string, objectLocal: string, prop:
 function buildMethodMap(index: RepoCodeIndex): Map<string, { file: string; symbol: string } | null> {
   const map = new Map<string, { file: string; symbol: string } | null>();
   for (const [file, fi] of index) {
+    if (isTestFile(file)) continue;
     for (const s of fi.symbols) {
       if (s.kind !== "method" && s.kind !== "object-method") continue;
       for (let i = s.name.indexOf("."); i >= 0; i = s.name.indexOf(".", i + 1)) {
@@ -221,9 +222,43 @@ function buildMethodMap(index: RepoCodeIndex): Map<string, { file: string; symbo
   return map;
 }
 
+/** Well-known built-in (Array/Map/Set/String/Promise/Object) and ORM/query-builder method names. A call
+ * to one of these on an unknown receiver is almost always the library's method, so the unique-method
+ * guess never fires for them (H4). */
+export const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
+  // Array / iterable
+  "map", "filter", "forEach", "reduce", "reduceRight", "find", "findIndex", "findLast", "findLastIndex", "some", "every",
+  "includes", "indexOf", "lastIndexOf", "push", "pop", "shift", "unshift", "slice", "splice", "sort", "reverse", "join",
+  "concat", "flat", "flatMap", "fill", "at", "keys", "values", "entries",
+  // Map / Set / WeakMap
+  "get", "set", "has", "add", "delete", "clear",
+  // Promise
+  "then", "catch", "finally",
+  // Object / Function
+  "toString", "toJSON", "valueOf", "toLocaleString", "hasOwnProperty", "bind", "call", "apply",
+  // String
+  "trim", "trimStart", "trimEnd", "split", "replace", "replaceAll", "startsWith", "endsWith", "toLowerCase", "toUpperCase",
+  "padStart", "padEnd", "match", "matchAll", "charAt", "substring", "repeat", "normalize", "localeCompare",
+  // ORM / query builder (Lucid, knex, TypeORM, Prisma, Mongoose, Sequelize)
+  "load", "loadCount", "preload", "related", "merge", "fill", "save", "create", "createMany", "update", "updateOrCreate",
+  "firstOrCreate", "first", "firstOrFail", "query", "where", "whereIn", "andWhere", "orWhere", "orderBy", "limit", "offset",
+  "select", "insert", "del", "exec", "findOrFail", "findBy", "findByOrFail", "findMany", "findOne", "findAll", "findById",
+  "paginate", "count", "refresh", "serialize", "destroy", "remove", "upsert", "populate", "lean", "all", "transaction",
+]);
+
+const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|fixtures|__mocks__)\//;
+const TEST_FILE_RE = /\.(test|spec)\.[^/]+$/;
+
+/** Test, fixture and mock files: never a resolution target for production code (H4). */
+export function isTestFile(file: string): boolean {
+  return TEST_DIR_RE.test(file) || TEST_FILE_RE.test(file);
+}
+
 /** Repo-wide fallback for member calls: a method/object-method named exactly `method` on exactly one
- * class/object anywhere in the repo. More than one candidate (or zero) means no guess is made. */
+ * class/object anywhere in the repo (test files excluded). More than one candidate (or zero), or a
+ * built-in method name, means no guess is made. */
 function guessUniqueMethod(ctx: Ctx, site: CallSite, method: string): ResolvedCall | null {
+  if (BUILTIN_METHOD_NAMES.has(method)) return null;
   const hit = ctx.methods.get(method);
   if (!hit) return null;
   return { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: "guess", via: "unique-method" };
@@ -283,6 +318,8 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
     return exact(ctx, site, obj, "object");
   }
 
+  // A receiver known to be a literal, a built-in, or a library type: its method is not a repo method.
+  if (callee.recvType !== undefined && isExternalType(ctx, file, callee.recvType)) return null;
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
@@ -291,7 +328,7 @@ const GLOBAL_CLASSES = new Set([
   "Array", "ArrayBuffer", "Blob", "Buffer", "DataView", "Date", "Error", "EventEmitter", "EventTarget", "FormData",
   "Headers", "Intl", "Map", "Object", "Promise", "Proxy", "ReadableStream", "RegExp", "Request", "Response", "Set",
   "String", "Number", "TextDecoder", "TextEncoder", "URL", "URLSearchParams", "WeakMap", "WeakRef", "WeakSet",
-  "WritableStream", "AbortController", "BroadcastChannel", "MessageChannel", "Worker", "WebSocket",
+  "WritableStream", "Boolean", "AbortController", "BroadcastChannel", "MessageChannel", "Worker", "WebSocket",
 ]);
 
 /** Is the type `name` (as written in `file`) known to live outside the repo? An import from a module that
@@ -391,6 +428,8 @@ function resolveOther(ctx: Ctx, file: string, site: CallSite, callee: Extract<Ca
  * `className={styles.button}` must never land on some `x.button` method). */
 function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {
   const rc = resolveCallee(ctx, file, site);
+  // Production code never resolves into a test/fixture/mock file.
+  if (rc && isTestFile(rc.target.file) && !isTestFile(file)) return null;
   if (!rc || site.kind !== "jsx-ref") return rc;
   return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: "jsx-ref" };
 }

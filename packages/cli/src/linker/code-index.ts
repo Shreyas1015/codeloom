@@ -41,7 +41,14 @@ export interface ClassField {
 
 export type Callee =
   | { kind: "ident"; name: string }
-  | { kind: "member"; object: string; prop: string }
+  | {
+    kind: "member"; object: string; prop: string;
+    /** What the receiver is known to be from its nearest declaration in scope (H4): a type name from a
+     * parameter/variable annotation (`q: Queue` -> "Queue", `ids: number[]` -> "Array", `s: string` ->
+     * "String") or from its initializer (`[]` -> "Array", `{}` -> "Object", `new Map()` -> "Map", a string
+     * literal -> "String"). Absent when unknown. The resolver never guesses onto a non-repo type. */
+    recvType?: string;
+  }
   | { kind: "new-member"; className: string; prop: string }
   | { kind: "this"; prop: string }
   | { kind: "this-field"; field: string; prop: string }
@@ -156,6 +163,72 @@ function identifierChain(expr: ts.Expression): string[] | undefined {
   return [cur.text, ...names];
 }
 
+/** A type annotation as a type name: `T[]` / `Array<T>` / tuples -> "Array", keyword and literal types ->
+ * "String" / "Number" / "Boolean", `Foo<…>` -> "Foo". Undefined for anything else (unions, qualified names). */
+function typeNodeName(type: ts.TypeNode | undefined): string | undefined {
+  if (!type) return undefined;
+  if (ts.isArrayTypeNode(type) || ts.isTupleTypeNode(type)) return "Array";
+  if (ts.isTypeOperatorNode(type) && type.operator === ts.SyntaxKind.ReadonlyKeyword) return typeNodeName(type.type);
+  if (ts.isParenthesizedTypeNode(type)) return typeNodeName(type.type);
+  if (type.kind === ts.SyntaxKind.StringKeyword) return "String";
+  if (type.kind === ts.SyntaxKind.NumberKeyword) return "Number";
+  if (type.kind === ts.SyntaxKind.BooleanKeyword) return "Boolean";
+  if (ts.isLiteralTypeNode(type)) {
+    const lit = type.literal;
+    if (ts.isStringLiteral(lit) || ts.isNoSubstitutionTemplateLiteral(lit)) return "String";
+    if (ts.isNumericLiteral(lit)) return "Number";
+    if (lit.kind === ts.SyntaxKind.TrueKeyword || lit.kind === ts.SyntaxKind.FalseKeyword) return "Boolean";
+    return undefined;
+  }
+  if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+    const name = type.typeName.text;
+    return name === "ReadonlyArray" ? "Array" : name;
+  }
+  return undefined;
+}
+
+/** A variable initializer as a type name: array / object / string / number / boolean literals and `new X()`. */
+function initializerTypeName(init: ts.Expression | undefined): string | undefined {
+  let e = init;
+  while (e && (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e))) {
+    if (ts.isAsExpression(e)) return typeNodeName(e.type) ?? initializerTypeName(e.expression);
+    e = e.expression;
+  }
+  if (!e) return undefined;
+  if (ts.isArrayLiteralExpression(e)) return "Array";
+  if (ts.isObjectLiteralExpression(e)) return "Object";
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isTemplateExpression(e)) return "String";
+  if (ts.isNumericLiteral(e)) return "Number";
+  if (e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) return "Boolean";
+  return newExpressionClass(e);
+}
+
+function declaredIn(statements: ts.NodeArray<ts.Statement>, name: string): ts.VariableDeclaration | undefined {
+  for (const st of statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && d.name.text === name) return d;
+  }
+  return undefined;
+}
+
+/** The receiver type of identifier `id` from its nearest declaration in scope: a parameter of an enclosing
+ * function, or a variable declared directly in an enclosing block / the file. The nearest declaration wins
+ * (shadowing), and one without a usable type gives undefined. */
+function receiverTypeOf(id: ts.Identifier): string | undefined {
+  const name = id.text;
+  for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
+    if (ts.isFunctionLike(cur)) {
+      const p = cur.parameters.find((x) => ts.isIdentifier(x.name) && x.name.text === name);
+      if (p) return typeNodeName(p.type) ?? initializerTypeName(p.initializer);
+    }
+    if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isModuleBlock(cur) || ts.isCaseClause(cur) || ts.isDefaultClause(cur)) {
+      const d = declaredIn(cur.statements, name);
+      if (d) return typeNodeName(d.type) ?? initializerTypeName(d.initializer);
+    }
+  }
+  return undefined;
+}
+
 function classify(expr: ts.Expression): Callee {
   if (ts.isIdentifier(expr)) return { kind: "ident", name: expr.text };
   if (ts.isPropertyAccessExpression(expr)) {
@@ -167,7 +240,10 @@ function classify(expr: ts.Expression): Callee {
     }
     const newClass = newExpressionClass(obj);
     if (newClass) return { kind: "new-member", className: newClass, prop };
-    if (ts.isIdentifier(obj)) return { kind: "member", object: obj.text, prop };
+    if (ts.isIdentifier(obj)) {
+      const recvType = receiverTypeOf(obj);
+      return recvType !== undefined ? { kind: "member", object: obj.text, prop, recvType } : { kind: "member", object: obj.text, prop };
+    }
     const receiver = identifierChain(obj);
     return receiver ? { kind: "other", prop, receiver } : { kind: "other", prop };
   }
