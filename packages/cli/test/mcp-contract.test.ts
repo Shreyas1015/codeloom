@@ -16,6 +16,8 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { runInit } from "../src/commands/init.js";
 import { createServer } from "../src/mcp/server.js";
 import {
+  CheckItemKindSchema,
+  CheckItemSchema,
   CheckReportSchema,
   ConfidenceSchema,
   EndpointsFileSchema,
@@ -51,7 +53,10 @@ const StopView = z
   })
   .strict();
 
-const ChainView = z
+const LaneCounts = z.object({ ui: int, api: int, code: int, db: int, queue: int }).strict();
+
+/** list_chains' default compact row. */
+const ChainRow = z
   .object({
     id: str.regex(/^ch_[0-9a-f]{12}$/),
     name: str,
@@ -60,10 +65,14 @@ const ChainView = z
     confidence: ConfidenceSchema,
     complete: z.boolean(),
     journeys: z.array(str),
-    stops: z.array(StopView),
-    unresolved: z.array(UnresolvedSchema.strict()),
+    stopCount: int.nonnegative(),
+    lanes: LaneCounts,
+    tables: z.array(str),
   })
   .strict();
+
+/** The full row: list_chains `detail: true`, get_journey's chains. */
+const ChainView = ChainRow.extend({ stops: z.array(StopView), unresolved: z.array(UnresolvedSchema.strict()) }).strict();
 
 const JourneyRef = z.object({ id: str.regex(/^j_[0-9a-f]{12}$/), name: str }).strict();
 const NodeView = z
@@ -79,7 +88,16 @@ const Neighbor = z
   })
   .strict();
 
-const Schemas: Record<string, z.ZodType> = {
+/** Any tool result may be cut to fit 1 MB (mcp/result.ts fitResponse): it then carries `truncated: true`
+ * and a `truncatedNote`. */
+function cuttable(schema: z.ZodType): z.ZodType {
+  if (!(schema instanceof z.ZodObject)) return schema;
+  const extra: Record<string, z.ZodType> = { truncatedNote: str.optional() };
+  if (!("truncated" in schema.shape)) extra.truncated = z.literal(true).optional();
+  return schema.extend(extra).strict();
+}
+
+const RawSchemas: Record<string, z.ZodObject> = {
   workspace_overview: z
     .object({
       name: str,
@@ -190,7 +208,8 @@ const Schemas: Record<string, z.ZodType> = {
     })
     .strict(),
   save_summary: z.object({ ref: str, saved: z.boolean(), removed: z.boolean() }).strict(),
-  list_chains: z.object({ total: int, chains: z.array(ChainView), truncated: z.boolean() }).strict(),
+  // compact rows by default, full rows with `detail: true` (never a mix)
+  list_chains: z.object({ total: int, chains: z.union([z.array(ChainRow), z.array(ChainView)]), truncated: z.boolean() }).strict(),
   get_journey: z
     .object({
       journey: JourneySchema.strict().nullable(),
@@ -213,7 +232,22 @@ const Schemas: Record<string, z.ZodType> = {
   save_journeys: z
     .object({ journeys: z.array(JourneySchema.strict()), created: z.array(str), updated: z.array(str), deleted: z.array(str) })
     .strict(),
-  check_chains: CheckReportSchema.strict(),
+  check_chains: z
+    .object({
+      version: z.literal(1),
+      summary: CheckReportSchema.shape.summary,
+      itemTotals: z.partialRecord(CheckItemKindSchema, int.positive()),
+      itemsTotal: int.nonnegative(),
+      kinds: z.array(CheckItemKindSchema).nullable(),
+      perKind: int.positive().nullable(),
+      offset: int.nonnegative(),
+      limit: int.min(1).max(500).nullable(),
+      items: z.array(CheckItemSchema.strict()),
+      truncated: z.boolean(),
+      next: str.optional(),
+      traces: CheckReportSchema.shape.traces,
+    })
+    .strict(),
   impact_of_diff: z
     .object({
       range: str.nullable(),
@@ -239,6 +273,10 @@ const Schemas: Record<string, z.ZodType> = {
     })
     .strict(),
 };
+
+const Schemas: Record<string, z.ZodType> = Object.fromEntries(
+  Object.entries(RawSchemas).map(([name, schema]) => [name, cuttable(schema)]),
+);
 
 // ---- fixture helpers -----------------------------------------------------------------------------
 
@@ -333,7 +371,8 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     empty = mkdtempSync(join(tmpdir(), "codeloom-contract-empty-"));
     writeFileSync(join(empty, "README.md"), "not a workspace\n");
     emptyClient = await connect(empty);
-    const chains = (await valid(client, "list_chains", {})) as { chains: Array<{ id: string; stops: Array<{ ref?: string }> }> };
+    await valid(client, "list_chains", {});
+    const chains = (await valid(client, "list_chains", { detail: true })) as { chains: Array<{ id: string; stops: Array<{ ref?: string }> }> };
     const withRef = chains.chains.find((c) => c.stops.some((s) => s.ref?.includes("::function:")))!;
     chainId = withRef.id;
     fnRef = withRef.stops.find((s) => s.ref?.includes("::function:"))!.ref!;
@@ -375,6 +414,7 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await valid(client, "trace_route", { from: "GET /api/customers" });
     await valid(client, "check_chains");
     await valid(client, "check_chains", { traces: true }); // no trace source → { skipped }
+    await valid(client, "check_chains", { kinds: ["no-store", "route-no-caller"], limit: 1, offset: 1 });
     const impact = (await valid(client, "impact_of_diff")) as { chains: string[] };
     expect(impact.chains).toEqual([]);
     await valid(client, "impact_of_diff", { range: "HEAD" });
@@ -437,6 +477,8 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(client, shop, "trace_route", { from: "not a route" });
     await invalid(client, shop, "trace_route", { from: "table:" });
     await invalid(client, shop, "check_chains", { traces: "yes" });
+    await invalid(client, shop, "check_chains", { kinds: ["galaxy"] });
+    await invalid(client, shop, "check_chains", { limit: 501 });
     await invalid(client, shop, "impact_of_diff", { range: "no-such-ref..HEAD" });
     await invalid(client, shop, "impact_of_diff", { range: "--output=/tmp/x" });
     // the writers, against the shared shop too: nothing may be written on bad input
@@ -458,5 +500,96 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     const verify = PromptResult.parse(await client.getPrompt({ name: "verify-journey", arguments: { journey: chainId } }));
     expect(verify.messages[0]!.content.text).toContain(chainId);
     await expect(client.getPrompt({ name: "verify-journey", arguments: {} })).rejects.toThrow();
+  });
+});
+
+// ---- H5: bounded responses on a synthetic 5000-chain map ----------------------------------------------
+
+const MB = 1_000_000;
+const BIG_JOURNEY = "j_00000000b16b";
+
+describe("H5: every tool response stays under 1 MB on a 5000-chain map", { timeout: 180_000 }, () => {
+  let root: string;
+  let client: Client;
+  let fnRef: string;
+  /** Tool name + args → bytes of the whole tool result as JSON. */
+  const sizes: Record<string, number> = {};
+
+  async function bounded(name: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const r = (await client.callTool({ name, arguments: args })) as CallToolResult;
+    if (r.isError) throw new Error(`${name} failed: ${JSON.stringify(r.content)}`);
+    const bytes = Buffer.byteLength(JSON.stringify(r));
+    sizes[`${name} ${JSON.stringify(args)}`] = bytes;
+    expect(bytes, `${name} ${JSON.stringify(args)}`).toBeLessThan(MB);
+    return valid(client, name, args);
+  }
+
+  beforeAll(async () => {
+    root = await indexedShop();
+    const chainsPath = join(root, ".codeloom", "chains.json");
+    const file = JSON.parse(readFileSync(chainsPath, "utf8")) as { chains: Array<Record<string, unknown> & { stops: Array<Record<string, unknown>> }> };
+    const template = file.chains.find((c) => String(c.routeKey).endsWith(":POST /api/customers"))!;
+    const stops = [...template.stops, ...template.stops.slice(1)]; // a long chain: ~2x the real one
+    fnRef = `${(stops.find((s) => String(s.nodeId ?? "").startsWith("function:")) as { repo: string }).repo}::${
+      stops.find((s) => String(s.nodeId ?? "").startsWith("function:"))!.nodeId as string
+    }`;
+    const chains = Array.from({ length: 5000 }, (_, i) => ({
+      ...template,
+      id: `ch_${i.toString(16).padStart(12, "0")}`,
+      name: `${template.name as string} #${i}`,
+      // every other chain guessed at each hop: thousands of guess-link items for check_chains
+      stops: i % 2 ? stops.map((s) => ({ ...s, hop: { confidence: "guess", reason: `guessed hop ${i}` } })) : stops,
+      confidence: i % 2 ? "guess" : template.confidence,
+    }));
+    writeFileSync(chainsPath, JSON.stringify({ ...file, chains }));
+    writeFileSync(
+      join(root, ".codeloom", "journeys.json"),
+      JSON.stringify({
+        version: 1,
+        journeys: [{ id: BIG_JOURNEY, name: "Every customer chain", area: "Customers", note: "", chainIds: chains.map((c) => c.id), status: "ok" }],
+      }),
+    );
+    client = await connect(root);
+  }, 180_000);
+
+  it("list_chains: compact by default, detail pages are cut to fit", async () => {
+    const compact = (await bounded("list_chains", { limit: 500 })) as { chains: unknown[]; truncated: boolean };
+    expect(compact.chains).toHaveLength(500);
+    const detail = (await bounded("list_chains", { detail: true, limit: 500 })) as { chains: unknown[]; truncated: boolean; truncatedNote?: string };
+    expect(detail.truncated).toBe(true);
+    if (detail.chains.length < 500) expect(detail.truncatedNote).toMatch(/limit/);
+  });
+
+  it("get_journey of a 5000-chain journey is cut with a note on how to narrow it", async () => {
+    const j = (await bounded("get_journey", { id: BIG_JOURNEY })) as { chains: unknown[]; truncated?: boolean; truncatedNote?: string };
+    expect(j.truncated).toBe(true);
+    expect(j.chains.length).toBeLessThan(5000);
+    expect(j.truncatedNote).toMatch(/get_journey/);
+  });
+
+  it("check_chains: 20 items per kind by default; kinds + limit + offset page the rest", async () => {
+    const r = (await bounded("check_chains")) as { items: Array<{ kind: string }>; itemTotals: Record<string, number>; truncated: boolean; next?: string };
+    expect(r.itemTotals["guess-link"]).toBeGreaterThan(10_000);
+    expect(r.items.filter((i) => i.kind === "guess-link")).toHaveLength(20);
+    expect(r.truncated).toBe(true);
+    expect(r.next).toMatch(/kinds/);
+    const page = (await bounded("check_chains", { kinds: ["guess-link"], limit: 500, offset: 1000 })) as { items: unknown[]; itemsTotal: number };
+    expect(page.items).toHaveLength(500);
+    expect(page.itemsTotal).toBe(r.itemTotals["guess-link"]);
+  });
+
+  it("every other read tool stays under 1 MB", async () => {
+    await bounded("workspace_overview");
+    await bounded("index_status");
+    await bounded("get_layers");
+    await bounded("search", { query: "customer", limit: 100 });
+    await bounded("get_node", { node: fnRef });
+    await bounded("get_neighbors", { node: fnRef, depth: 3, limit: 500 });
+    await bounded("explain_context", { node: fnRef, maxChars: 60000 });
+    await bounded("trace_route", { from: "table:customers" });
+    await bounded("trace_route", { from: fnRef });
+    await bounded("impact_of_diff");
+    await bounded("list_chains", { unnamed: false, detail: true, limit: 500, offset: 4500 });
+    if (process.env.CODELOOM_SIZES) process.stderr.write(`${JSON.stringify(sizes, null, 2)}\n`);
   });
 });
