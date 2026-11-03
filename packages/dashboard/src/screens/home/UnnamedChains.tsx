@@ -31,7 +31,7 @@ export function UnnamedChains({ chains }: { chains: ChainRow[] }) {
                 <span className="truncate font-mono text-xs text-muted-foreground">{c.repos.join(", ")}</span>
                 <span className="flex flex-col items-start gap-0.5">
                   <ConfidenceMark confidence={c.confidence} />
-                  <CompleteMark complete={c.complete} />
+                  <CompleteMark complete={c.complete} apiOnly={c.apiOnly} />
                 </span>
               </Link>
             </li>

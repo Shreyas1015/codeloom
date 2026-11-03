@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { JourneyResult } from "@/api/types";
+import { API_ONLY_TITLE } from "@/lib/completeness";
 import { cn } from "@/lib/utils";
 import type { JourneyModel } from "./model";
 import { CONFIDENCE_WORD, plural } from "./words";
@@ -48,8 +49,11 @@ export function Nameplate({ result, model }: { result: JourneyResult; model: Jou
               {CONFIDENCE_WORD[model.confidence]}
             </span>
           ) : null}
-          <span className={cn(pill, model.complete ? "bg-success-soft text-foreground" : "bg-secondary text-foreground")}>
-            {model.complete ? "Complete" : "Incomplete"}
+          <span
+            className={cn(pill, model.complete ? "bg-success-soft text-foreground" : "bg-secondary text-foreground")}
+            title={!model.complete && model.apiOnly ? API_ONLY_TITLE : undefined}
+          >
+            {model.complete ? "Complete" : model.apiOnly ? "API → DB" : "Incomplete"}
           </span>
           {j?.status === "orphaned" ? <span className={cn(pill, "bg-destructive-soft text-destructive")}>Orphaned</span> : null}
         </div>

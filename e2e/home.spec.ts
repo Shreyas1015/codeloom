@@ -18,7 +18,7 @@ test("Home shows the six workspace counts and the unnamed chains hint", async ({
 
   const home = page.getByTestId("screen-home");
   await expect(home.getByRole("heading", { level: 1, name: "demo-shop" })).toBeVisible();
-  await expect(home.getByText("0 journeys · 7 chains, 5 complete")).toBeVisible();
+  await expect(home.getByText("0 journeys · 7 chains, 3 complete")).toBeVisible();
 
   const totals = home.getByRole("list", { name: "Totals" });
   const cells = totals.getByRole("listitem");

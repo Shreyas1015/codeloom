@@ -3,6 +3,7 @@ import type { Confidence, JourneyRow, Lane } from "@/api/types";
 import { CopyButton } from "@/components/gallery/CopyCommand";
 import { LANE_NAME } from "@/components/gallery/LaneColumn";
 import { Button } from "@/components/ui/button";
+import { API_ONLY_TITLE } from "@/lib/completeness";
 import { cn } from "@/lib/utils";
 import { LANES } from "./filter";
 
@@ -82,12 +83,18 @@ export function ConfidenceMark({ confidence }: { confidence: Confidence }) {
   );
 }
 
-export function CompleteMark({ complete }: { complete: boolean }) {
-  return complete ? (
-    <span className="text-[12.5px] text-foreground">Complete</span>
-  ) : (
-    <span className="text-[12.5px] text-muted-foreground">Incomplete</span>
-  );
+/** Complete = a UI stop and a database or queue stop. "API → DB" = reaches the database or a queue,
+ * but no UI code calls it (codeloom check's "API → DB only"). Anything else is incomplete. */
+export function CompleteMark({ complete, apiOnly }: { complete: boolean; apiOnly: boolean }) {
+  if (complete) return <span className="text-[12.5px] text-foreground">Complete</span>;
+  if (apiOnly) {
+    return (
+      <span className="text-[12.5px] text-foreground" title={API_ONLY_TITLE}>
+        API → DB
+      </span>
+    );
+  }
+  return <span className="text-[12.5px] text-muted-foreground">Incomplete</span>;
 }
 
 /** "Ask your agent: /mcp__codeloom__name-journeys" with a copy button. */

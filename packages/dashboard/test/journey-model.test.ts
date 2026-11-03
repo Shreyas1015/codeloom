@@ -80,3 +80,20 @@ describe("buildJourneyModel", () => {
     expect(m.confidence).toBeNull();
   });
 });
+
+describe("buildJourneyModel completeness (H3)", () => {
+  const routeOnly = (c: ChainView): ChainView => ({ ...c, complete: false, stops: c.stops.filter((s) => s.lane !== "ui").map((s) => ({ ...s, from: undefined })) });
+
+  it("a journey whose chains reach the DB with no UI stop is API → DB, not complete", () => {
+    const c = routeOnly(chainA);
+    const m = buildJourneyModel({ ...chainResult, chains: [c], lanes: lanesOf([c]) });
+    expect(m.complete).toBe(false);
+    expect(m.apiOnly).toBe(true);
+  });
+
+  it("a complete journey and an incomplete one are not API → DB", () => {
+    expect(buildJourneyModel(chainResult).apiOnly).toBe(false);
+    expect(buildJourneyModel(journeyResult).apiOnly).toBe(false);
+    expect(buildJourneyModel(orphanedResult).apiOnly).toBe(false);
+  });
+});
