@@ -4,7 +4,7 @@
 //   2. esbuild                    src/bin.ts + @codeloom/core source → dist/bin.js (+ .map), see bundle.mjs
 //   3. collect-grammars           every grammar .wasm + its licence → dist/grammars
 //   4. dashboard                  packages/dashboard/dist → dist/dashboard
-//   5. LICENSE, NOTICE            repo root → packages/cli (git-ignored copies)
+//   5. LICENSE, NOTICE, CHANGELOG.md   repo root → packages/cli (git-ignored copies)
 // The tsc per-file output stays in dist/ for the tests; package.json "files" ships only the bundle.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -54,8 +54,12 @@ const dashboard = join(dist, "dashboard");
 rmSync(dashboard, { recursive: true, force: true });
 cpSync(dashboardSrc, dashboard, { recursive: true });
 
-step("LICENSE, NOTICE → packages/cli");
+step("LICENSE, NOTICE, CHANGELOG.md → packages/cli");
 for (const f of ["LICENSE", "NOTICE"]) cpSync(join(repoRoot, f), join(cliDir, f));
+// The root CHANGELOG.md comes with the v0.1 docs (release Task 4). Until that branch merges a missing
+// changelog is only a warning; after it, make this fail() like the dashboard check above.
+if (existsSync(join(repoRoot, "CHANGELOG.md"))) cpSync(join(repoRoot, "CHANGELOG.md"), join(cliDir, "CHANGELOG.md"));
+else process.stderr.write("release build: warning: CHANGELOG.md is missing at the repo root; the package ships without it\n");
 
 process.stdout.write(
   `\nrelease build done:\n` +

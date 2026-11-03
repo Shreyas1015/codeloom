@@ -85,8 +85,14 @@ ok "dist/bin.js is the release bundle ($(sed -n 2p "$PKG/dist/bin.js" | sed 's#^
 if grep -q '"workspace:' "$PKG/package.json"; then die "packed package.json still has a workspace: specifier"; fi
 ok "packed package.json has no workspace: specifier"
 
-for f in README.md CHANGELOG.md; do
-  if ! grep -qx "$f" "$WORK/files.txt"; then WARNINGS+=("$f is not in the tarball yet (written by release Task 4)"); fi
+# README.md (packages/cli/README.md, generated from the root README) and CHANGELOG.md (root, copied by the
+# release build) must ship. Until the v0.1 docs (release Task 4) merge, a doc whose source is not in the
+# repo yet is only a warning; once the source exists, its absence from the tarball fails the test.
+for doc in "README.md:packages/cli/README.md" "CHANGELOG.md:CHANGELOG.md"; do
+  f="${doc%%:*}"; src="${doc#*:}"
+  if grep -qx "$f" "$WORK/files.txt"; then ok "$f is in the tarball"
+  elif [ -f "$REPO_ROOT/$src" ]; then die "$f is missing from the tarball although $src exists (rerun pnpm release:build)"
+  else WARNINGS+=("$f is not in the tarball: $src does not exist yet (release Task 4 docs)"); fi
 done
 
 VERSION=$(node -p "require('$PKG/package.json').version")
