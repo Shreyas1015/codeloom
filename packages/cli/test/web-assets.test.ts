@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodeloomError } from "../src/errors.js";
-import { locateDashboardAssets } from "../src/web/assets.js";
+import { cliRootFrom, locateDashboardAssets } from "../src/web/assets.js";
 
 /** A fake monorepo: <root>/packages/cli (the cli package) and maybe <root>/packages/dashboard/dist. */
 function fakeMonorepo(opts: { bundled?: boolean; dashboard?: boolean }): string {
@@ -50,5 +50,26 @@ describe("locateDashboardAssets", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CodeloomError);
     }
+  });
+});
+
+describe("cliRootFrom", () => {
+  /** <pkg>/package.json plus the given empty sub-folders. */
+  function fakePackage(...dirs: string[]): string {
+    const pkg = mkdtempSync(join(tmpdir(), "codeloom-root-"));
+    writeFileSync(join(pkg, "package.json"), "{}");
+    for (const d of dirs) mkdirSync(join(pkg, d), { recursive: true });
+    return pkg;
+  }
+
+  it("finds the package from src/web (tests) and dist/web (tsc output)", () => {
+    const pkg = fakePackage("src/web", "dist/web");
+    expect(cliRootFrom(join(pkg, "src", "web"))).toBe(pkg);
+    expect(cliRootFrom(join(pkg, "dist", "web"))).toBe(pkg);
+  });
+
+  it("finds the package from dist (the release bundle, all code in dist/bin.js)", () => {
+    const pkg = fakePackage("dist");
+    expect(cliRootFrom(join(pkg, "dist"))).toBe(pkg);
   });
 });
