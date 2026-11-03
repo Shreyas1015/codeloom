@@ -11,3 +11,4 @@ playwright-report/
 # Release build copies (scripts/release/build.mjs)
 packages/cli/LICENSE
 packages/cli/NOTICE
+packages/cli/CHANGELOG.md

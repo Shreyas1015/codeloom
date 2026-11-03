@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 // `prepack` guard for packages/cli: refuse to pack unless `pnpm release:build` produced the bundle.
 // A plain `tsc` build also writes dist/bin.js, but that file imports @codeloom/core, which is not published.
+// The release bundle carries a marker as its second line (see RELEASE_MARKER in bundle.mjs):
+//   #!/usr/bin/env node
+//   // codeloom-release-bundle <version>
+// Usage: node prepack-check.mjs [packageDir]   (default: packages/cli; tests pass a fake package folder)
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../packages/cli");
+const cliDir = process.argv[2]
+  ? resolve(process.argv[2])
+  : resolve(dirname(fileURLToPath(import.meta.url)), "../../packages/cli");
+const version = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")).version;
+const marker = `// codeloom-release-bundle ${version}`;
 const problems = [];
 const bin = join(cliDir, "dist/bin.js");
 
 if (!existsSync(bin)) problems.push("dist/bin.js is missing");
-else if (readFileSync(bin, "utf8").includes("@codeloom/core")) {
-  problems.push("dist/bin.js is the tsc output (it imports @codeloom/core), not the release bundle");
+else if (readFileSync(bin, "utf8").split("\n", 2)[1] !== marker) {
+  problems.push(`dist/bin.js is not the release bundle for ${version} (its second line is not "${marker}"); a tsc build overwrites it`);
 }
 if (!existsSync(join(cliDir, "dist/bin.js.map"))) problems.push("dist/bin.js.map is missing");
 const grammars = join(cliDir, "dist/grammars");
