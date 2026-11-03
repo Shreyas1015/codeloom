@@ -140,7 +140,8 @@ describe("buildChains", () => {
 
     const consumer = chains.find((c) => c.entry === "consumer:api2:jobs#src/worker.ts#handleJob")!;
     expect(consumer.routeKey).toBe("");
-    expect(consumer.complete).toBe(true);
+    // H3: reaches a store but has no UI stop, so it is API → DB only, not complete.
+    expect(consumer.complete).toBe(false);
     expect(consumer.name).toBe("consume jobs · handleJob");
     expect(consumer.stops[0]).toMatchObject({ lane: "queue", kind: "consume", label: "jobs" });
   });
