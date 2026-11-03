@@ -312,3 +312,36 @@ describe("H1 follow-up: FROM inside a SQL function call is not a table", () => {
     expect(tables(`SELECT EXTRACT(year FROM (SELECT max(issued_at) FROM invoices))`)).toEqual(["read invoices"]);
   });
 });
+
+describe("H9: table-valued functions and every CTE name are not tables", () => {
+  const tables = (sql: string) => sqlTables(sql).map((t) => `${t.op} ${t.table}`);
+
+  it("skips an identifier followed by ( after FROM / JOIN (a table-valued function)", () => {
+    expect(tables(`SELECT t.tag FROM invoices i, jsonb_array_elements_text(i.tags) t`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT tag FROM jsonb_array_elements_text($1::jsonb) AS tag`)).toEqual([]);
+    expect(tables(`SELECT n FROM generate_series(1, 3) n JOIN customers c ON c.id = n`)).toEqual(["read customers"]);
+    expect(tables(`SELECT * FROM unnest($1::int[]) AS ids(id) JOIN invoices i ON i.id = ids.id`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT * FROM customers c CROSS JOIN LATERAL jsonb_to_record(c.meta) AS m(a int)`)).toEqual(["read customers"]);
+    expect(tables(`SELECT * FROM public.invoice_totals (2024) t`)).toEqual([]);
+    expect(tables(`INSERT INTO customers (id, name) VALUES (1, 'a')`)).toEqual(["insert customers"]);
+  });
+
+  it("never reports any name in a WITH list, with or without RECURSIVE or column lists", () => {
+    expect(tables(`WITH a AS (SELECT * FROM customers), b AS (SELECT * FROM a), c AS (SELECT * FROM b JOIN invoices i ON i.customer_id = b.id)
+      SELECT * FROM c JOIN a ON a.id = c.id`)).toEqual(["read customers", "read invoices"]);
+    expect(tables(`WITH RECURSIVE a(id) AS (SELECT id FROM customers), b(x, y) AS (SELECT 1, 2), c (z) AS (SELECT z FROM b)
+      SELECT * FROM a JOIN b ON true JOIN c ON true`)).toEqual(["read customers"]);
+    expect(tables(`with totals as materialized (select customer_id, sum(total) s from invoices group by 1), "ranked" as (select * from totals)
+      select * from ranked`)).toEqual(["read invoices"]);
+    expect(tables(`WITH a AS (SELECT * FROM customers),
+      b AS (SELECT * FROM invoices WHERE customer_id IN (SELECT id FROM a)),
+      c AS (SELECT count(*) FROM b)
+      INSERT INTO invoice_lines SELECT * FROM c`)).toEqual(["insert invoice_lines", "read customers", "read invoices"]);
+    expect(tables(`WITH a AS (SELECT (x).f AS y, 'a, b as (' AS s FROM customers), b AS (SELECT * FROM a) SELECT * FROM b`))
+      .toEqual(["read customers"]);
+    expect(tables(`SELECT * FROM (WITH a AS (SELECT * FROM invoices), b AS (SELECT * FROM a) SELECT * FROM b) x JOIN customers c ON c.id = x.customer_id`))
+      .toEqual(["read invoices", "read customers"]);
+    expect(tables(`INSERT INTO invoice_lines (id) WITH src AS (SELECT id FROM invoices), more AS (SELECT id FROM src) SELECT id FROM more`))
+      .toEqual(["insert invoice_lines", "read invoices"]);
+  });
+});

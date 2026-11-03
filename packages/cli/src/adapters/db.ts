@@ -43,12 +43,46 @@ export function qbTable(arg: string): string | undefined {
   return /^[A-Za-z_][\w$]*(\.[A-Za-z_][\w$]*)?$/.test(name) ? name : undefined;
 }
 
-/** Names declared by a leading `WITH [RECURSIVE] name AS (` / `, name AS (` list: CTEs, not tables. */
+/** Index just past the ")" matching the "(" at `open` (quotes skipped); text.length when unbalanced. */
+function closeParen(text: string, open: number): number {
+  let depth = 0;
+  let quote: string | undefined;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+    } else if (ch === "(") {
+      depth++;
+    } else if (ch === ")" && --depth === 0) {
+      return i + 1;
+    }
+  }
+  return text.length;
+}
+
+/** One CTE head at `from`: `name [(cols)] AS [[NOT] MATERIALIZED] (`. */
+const CTE_HEAD = /\s*("[^"]+"|`[^`]+`|[A-Za-z_][\w$]*)\s*(?:\([^)]*\)\s*)?as\s*(?:(?:not\s+)?materialized\s*)?\(/iy;
+
+/** Every name declared by a `WITH [RECURSIVE] a AS (…), b(x, y) AS (…), …` list anywhere in the text
+ * (a leading one, or one inside a sub-select or after INSERT INTO): CTEs, not tables. Each body is
+ * skipped by matching its parentheses, so a comma inside a body never starts a new name. */
 function cteNames(text: string): Set<string> {
   const names = new Set<string>();
-  if (!/^\s*with\b/i.test(text)) return names;
-  for (const m of text.matchAll(/(?:\bwith(?:\s+recursive)?|,)\s*([\w"`]+)\s*(?:\([^)]*\)\s*)?as\s*(?:(?:not\s+)?materialized\s*)?\(/gi)) {
-    names.add(m[1]!.replace(/["`]/g, "").toLowerCase());
+  for (const w of text.matchAll(/\bwith(?:\s+recursive)?\b/gi)) {
+    let at = w.index + w[0].length;
+    for (;;) {
+      CTE_HEAD.lastIndex = at;
+      const m = CTE_HEAD.exec(text);
+      if (!m) break;
+      names.add(m[1]!.replace(/["`]/g, "").toLowerCase());
+      at = closeParen(text, CTE_HEAD.lastIndex - 1);
+      const comma = /\s*,/y;
+      comma.lastIndex = at;
+      if (!comma.exec(text)) break;
+      at = comma.lastIndex;
+    }
   }
   return names;
 }
@@ -69,7 +103,9 @@ export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
   for (const m of text.matchAll(new RegExp(`(?:^|;)\\s*update\\s+${ident}\\s+set`, "gi"))) add(m[1]!, "update");
   for (const m of text.matchAll(new RegExp(`delete\\s+from\\s+${ident}`, "gi"))) add(m[1]!, "delete");
   const inCall = functionCallMask(text);
-  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+)\\b(?:from|join)\\s+${ident}`, "gi"))) {
+  // An identifier followed by "(" after FROM / JOIN is a table-valued function (`FROM unnest(arr)`,
+  // `JOIN generate_series(1, 3)`), not a table.
+  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+)\\b(?:from|join)\\s+(?:lateral\\s+)?(?!lateral\\b)${ident}(?!\\s*\\(|[\\w."\`\\[\\]])`, "gi"))) {
     if (!inCall(m.index)) add(m[1]!, "read");
   }
   return out;
