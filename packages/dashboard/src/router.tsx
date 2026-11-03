@@ -44,7 +44,7 @@ function Shell() {
   });
   return (
     <div className="flex h-dvh min-h-0 bg-background">
-      <Rail overview={data} livePaused={paused} />
+      <Rail overview={data} failed={!!error} livePaused={paused} />
       <main className="flex min-w-0 flex-1 flex-col gap-5.5 overflow-y-auto px-9 py-7">
         {blocking ? (
           <MapStateScreen error={blocking} focusOnShow={focusState} />

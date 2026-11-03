@@ -46,7 +46,7 @@ function NavItem({ to, icon, label, count, countLabel, current }: { to: "/" | "/
 }
 
 /** The painted gallery wall: brand, workspace, nav with counts, repo list, live-updates and agent status. */
-export function Rail({ overview, livePaused = false }: { overview: Overview | undefined; livePaused?: boolean }) {
+export function Rail({ overview, failed = false, livePaused = false }: { overview: Overview | undefined; failed?: boolean; livePaused?: boolean }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const onMap = pathname === "/map" || pathname.startsWith("/map/");
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
@@ -60,18 +60,22 @@ export function Rail({ overview, livePaused = false }: { overview: Overview | un
         <span className="text-[21px] leading-none font-bold tracking-[-0.02em] text-rail-strong">codeloom</span>
       </div>
 
-      <div className="min-h-[54px] rounded-[9px] border border-rail-border px-3 py-2" aria-busy={!overview}>
-        {overview && (
-          <>
-            <div className="truncate font-semibold text-rail-strong" title={overview.name}>
-              {overview.name}
-            </div>
-            <div className="text-xs text-rail-muted">
-              workspace · {repoCount} {repoCount === 1 ? "repo" : "repos"}
-            </div>
-          </>
-        )}
-      </div>
+      {/* while loading the card holds its place; when the overview cannot load (not indexed) it is left out,
+          not drawn as an empty frame */}
+      {failed && !overview ? null : (
+        <div className="min-h-[54px] rounded-[9px] border border-rail-border px-3 py-2" aria-busy={!overview}>
+          {overview && (
+            <>
+              <div className="truncate font-semibold text-rail-strong" title={overview.name}>
+                {overview.name}
+              </div>
+              <div className="text-xs text-rail-muted">
+                workspace · {repoCount} {repoCount === 1 ? "repo" : "repos"}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <nav aria-label="Main" className="flex flex-col gap-0.5">
         <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap} />

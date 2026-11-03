@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { createAppRouter } from "@/router";
@@ -129,5 +129,7 @@ describe("shell", () => {
     const rail = await screen.findByRole("complementary", { name: "codeloom" });
     expect(within(rail).getByRole("link", { name: /Home/ })).toBeInTheDocument();
     expect(within(rail).queryByRole("list", { name: "Repos" })).not.toBeInTheDocument();
+    // no empty workspace frame once the overview has failed
+    await waitFor(() => expect(rail.querySelector("[aria-busy]")).toBeNull());
   });
 });
