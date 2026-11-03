@@ -68,8 +68,52 @@ export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
   for (const m of text.matchAll(new RegExp(`insert\\s+into\\s+${ident}`, "gi"))) add(m[1]!, "insert");
   for (const m of text.matchAll(new RegExp(`(?:^|;)\\s*update\\s+${ident}\\s+set`, "gi"))) add(m[1]!, "update");
   for (const m of text.matchAll(new RegExp(`delete\\s+from\\s+${ident}`, "gi"))) add(m[1]!, "delete");
-  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+)\\b(?:from|join)\\s+${ident}`, "gi"))) add(m[1]!, "read");
+  const inCall = functionCallMask(text);
+  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+)\\b(?:from|join)\\s+${ident}`, "gi"))) {
+    if (!inCall(m.index)) add(m[1]!, "read");
+  }
   return out;
+}
+
+/** Words that may stand right before a "(" that is not a function call: `IN (`, `EXISTS (`, `JOIN (`,
+ * `AS (` (a CTE), `VALUES (`, `AND (` … */
+const NON_CALL_WORDS = new Set([
+  "all", "and", "any", "as", "between", "by", "case", "else", "except", "exists", "from", "having", "in", "intersect",
+  "into", "is", "join", "lateral", "like", "materialized", "not", "on", "or", "recursive", "returning", "select", "set",
+  "some", "then", "union", "using", "values", "when", "where", "with",
+]);
+
+/** "call" when the "(" at `i` opens a function call's arguments (`EXTRACT(`, `trim (`): an identifier that
+ * is not a SQL keyword stands right before it and no sub-select starts inside it. Anything else (a
+ * sub-select, a grouping, an IN list) is "other". */
+function parenKind(text: string, i: number): "call" | "other" {
+  if (/^\s*(select|with)\b/i.test(text.slice(i + 1, i + 40))) return "other";
+  const word = text.slice(Math.max(0, i - 64), i).match(/([A-Za-z_][\w$]*)\s*$/);
+  return word && !NON_CALL_WORDS.has(word[1]!.toLowerCase()) ? "call" : "other";
+}
+
+/** A test for "the text at this index sits directly inside a function call's parentheses", where
+ * `FROM` is an argument keyword (`EXTRACT(year FROM d)`, `TRIM(BOTH ' ' FROM s)`), not a table
+ * reference. A sub-select's own top level is not inside a call, even when the sub-select is an argument
+ * (`COALESCE((SELECT … FROM t), 0)`). Parentheses inside quotes are ignored. */
+function functionCallMask(text: string): (index: number) => boolean {
+  const inCall = new Uint8Array(text.length);
+  const stack: Array<"call" | "other"> = [];
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+    } else if (ch === "(") {
+      stack.push(parenKind(text, i));
+    } else if (ch === ")") {
+      stack.pop();
+    }
+    inCall[i] = stack[stack.length - 1] === "call" ? 1 : 0;
+  }
+  return (index) => inCall[index] === 1;
 }
 
 function opFromChain(call: ts.CallExpression): DbOp {

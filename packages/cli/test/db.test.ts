@@ -285,3 +285,30 @@ describe("H1: aliases and CTEs never become table names", () => {
     `, "@adonisjs/lucid")).toEqual(["read model:Customer via lucid @f"]);
   });
 });
+
+describe("H1 follow-up: FROM inside a SQL function call is not a table", () => {
+  const tables = (sql: string) => sqlTables(sql).map((t) => `${t.op} ${t.table}`);
+
+  it("skips FROM in EXTRACT, SUBSTRING, TRIM, OVERLAY and leaves POSITION alone", () => {
+    expect(tables(`SELECT EXTRACT(year FROM created_at) AS y FROM invoices`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT SUBSTRING(code FROM 2 FOR 3) FROM customers`)).toEqual(["read customers"]);
+    expect(tables(`SELECT TRIM(BOTH ' ' FROM name) FROM customers`)).toEqual(["read customers"]);
+    expect(tables(`SELECT TRIM(LEADING '(' FROM name) FROM customers`)).toEqual(["read customers"]);
+    expect(tables(`SELECT POSITION('a' IN email) FROM customers`)).toEqual(["read customers"]);
+    expect(tables(`SELECT OVERLAY(code PLACING 'x' FROM 2 FOR 1) FROM invoices`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT date_part('day', due_at), extract (month from issued_at) FROM invoices i JOIN customers c ON c.id = i.customer_id`))
+      .toEqual(["read invoices", "read customers"]);
+    expect(tables(`UPDATE invoices SET year = EXTRACT(YEAR FROM issued_at)`)).toEqual(["update invoices"]);
+  });
+
+  it("still finds tables in sub-selects, including ones inside a function call", () => {
+    expect(tables(`SELECT id FROM customers WHERE id IN (SELECT customer_id FROM invoices)`)).toEqual(["read customers", "read invoices"]);
+    expect(tables(`SELECT COALESCE((SELECT max(total) FROM invoices i WHERE i.customer_id = c.id), 0) FROM customers c`))
+      .toEqual(["read invoices", "read customers"]);
+    expect(tables(`SELECT * FROM customers c WHERE EXISTS ( select 1 from invoice_lines l WHERE l.customer_id = c.id )`))
+      .toEqual(["read customers", "read invoice_lines"]);
+    expect(tables(`SELECT * FROM customers c WHERE (c.active AND (c.id IN (SELECT customer_id FROM invoices)))`))
+      .toEqual(["read customers", "read invoices"]);
+    expect(tables(`SELECT EXTRACT(year FROM (SELECT max(issued_at) FROM invoices))`)).toEqual(["read invoices"]);
+  });
+});
