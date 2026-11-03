@@ -12,7 +12,8 @@
     "typecheck": "pnpm -r typecheck",
     "e2e": "playwright test",
     "typecheck:e2e": "tsc -p e2e/tsconfig.json",
-    "release:build": "node scripts/release/build.mjs"
+    "release:build": "node scripts/release/build.mjs",
+    "release:pack-test": "bash scripts/release/pack-test.sh"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

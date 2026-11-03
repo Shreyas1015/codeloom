@@ -69,6 +69,52 @@ jobs:
           (cd "$ROOT" && node "$BIN" index)
           (cd "$ROOT" && node "$BIN" check)
 
+  # The published package: release build, pnpm pack, then install the tarball with plain npm in an empty
+  # folder and drive the installed cli end to end (scripts/release/pack-test.sh). No unit tests run here:
+  # outside CI they would rebuild dist/bin.js with tsc over the bundle.
+  package:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      # pnpm 11 needs Node >= 22.13: build and pack on Node 22, then install and run on the matrix Node.
+      - name: Set up Node 22 for pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Release build
+        run: pnpm release:build
+
+      - name: Pack (runs the prepack guard)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          pnpm --dir packages/cli pack --pack-destination "$RUNNER_TEMP/pack"
+
+      - name: Switch to Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Tarball install test on Node ${{ matrix.node }}
+        shell: bash
+        run: scripts/release/pack-test.sh --tarball "$(ls "$RUNNER_TEMP"/pack/codeloom-*.tgz)"
+
   # The dashboard's unit tests and the Playwright smoke (Chromium) against the real dashboard server on demo-shop.
   dashboard:
     runs-on: ubuntu-latest
