@@ -2,6 +2,7 @@
 // One ESM file for Node 20. @codeloom/core is bundled from its TypeScript source; every other bare
 // import stays external and must be listed in packages/cli/package.json "dependencies"
 // (packages/cli/test/release-manifest.test.ts checks this with the metafile).
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -10,8 +11,15 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../.."
 export const cliDir = join(repoRoot, "packages/cli");
 const coreSrc = join(repoRoot, "packages/core/src");
 
+const cliVersion = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")).version;
+
+/** The release bundle's marker: the first line after the shebang. A tsc build also writes dist/bin.js;
+ * scripts/release/prepack-check.mjs refuses to pack unless dist/bin.js carries this exact line. */
+export const RELEASE_MARKER = `// codeloom-release-bundle ${cliVersion}`;
+
 // ESM output has no `require`; CJS dependencies (yaml, ...) and core's grammar-path need one.
 const BANNER = [
+  RELEASE_MARKER,
   'import { createRequire as __codeloomCreateRequire } from "node:module";',
   "const require = __codeloomCreateRequire(import.meta.url);",
 ].join("\n");
