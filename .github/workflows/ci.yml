@@ -98,6 +98,9 @@ jobs:
       - name: Dashboard unit tests
         run: pnpm --filter @codeloom/dashboard test
 
+      - name: No external load targets in the dashboard build
+        run: pnpm --filter @codeloom/dashboard check:dist
+
       - name: Install Chromium for Playwright
         run: pnpm exec playwright install --with-deps chromium
 
