@@ -1,0 +1,687 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-03T05:43:22.183Z",
+  "title": "Design System: codeloom dashboard",
+  "extensions": {
+    "colorMeta": {
+      "gallery-white": {
+        "role": "neutral",
+        "displayName": "Gallery White",
+        "canonical": "#F3F4F1",
+        "tonalRamp": [
+          "oklch(18% 0.001 121.6)",
+          "oklch(28% 0.002 121.6)",
+          "oklch(38% 0.003 121.6)",
+          "oklch(50% 0.004 121.6)",
+          "oklch(62% 0.004 121.6)",
+          "oklch(74% 0.003 121.6)",
+          "oklch(85% 0.002 121.6)",
+          "oklch(95% 0.001 121.6)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1A1D1C",
+        "tonalRamp": [
+          "oklch(18% 0.001 173.9)",
+          "oklch(28% 0.002 173.9)",
+          "oklch(38% 0.003 173.9)",
+          "oklch(50% 0.005 173.9)",
+          "oklch(62% 0.005 173.9)",
+          "oklch(74% 0.003 173.9)",
+          "oklch(85% 0.002 173.9)",
+          "oklch(95% 0.001 173.9)"
+        ]
+      },
+      "card-white": {
+        "role": "neutral",
+        "displayName": "Card White",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "oklch(18% 0 89.9)",
+          "oklch(28% 0 89.9)",
+          "oklch(38% 0 89.9)",
+          "oklch(50% 0 89.9)",
+          "oklch(62% 0 89.9)",
+          "oklch(74% 0 89.9)",
+          "oklch(85% 0 89.9)",
+          "oklch(95% 0 89.9)"
+        ]
+      },
+      "viridian-wall": {
+        "role": "primary",
+        "displayName": "Viridian Wall",
+        "canonical": "#1F4D45",
+        "tonalRamp": [
+          "oklch(18% 0.01 180.4)",
+          "oklch(28% 0.024 180.4)",
+          "oklch(38% 0.037 180.4)",
+          "oklch(50% 0.052 180.4)",
+          "oklch(62% 0.05 180.4)",
+          "oklch(74% 0.034 180.4)",
+          "oklch(85% 0.02 180.4)",
+          "oklch(95% 0.008 180.4)"
+        ]
+      },
+      "viridian-wall-active": {
+        "role": "primary",
+        "displayName": "Viridian Wall, Lit",
+        "canonical": "#2A5F55",
+        "tonalRamp": [
+          "oklch(18% 0.012 179.4)",
+          "oklch(28% 0.027 179.4)",
+          "oklch(38% 0.041 179.4)",
+          "oklch(50% 0.059 179.4)",
+          "oklch(62% 0.056 179.4)",
+          "oklch(74% 0.038 179.4)",
+          "oklch(85% 0.022 179.4)",
+          "oklch(95% 0.009 179.4)"
+        ]
+      },
+      "viridian-wall-border": {
+        "role": "primary",
+        "displayName": "Viridian Wall Seam",
+        "canonical": "#3A6E63",
+        "tonalRamp": [
+          "oklch(18% 0.012 178.4)",
+          "oklch(28% 0.027 178.4)",
+          "oklch(38% 0.041 178.4)",
+          "oklch(50% 0.059 178.4)",
+          "oklch(62% 0.056 178.4)",
+          "oklch(74% 0.038 178.4)",
+          "oklch(85% 0.022 178.4)",
+          "oklch(95% 0.009 178.4)"
+        ]
+      },
+      "wall-text": {
+        "role": "neutral",
+        "displayName": "Wall Text",
+        "canonical": "#D5E5DF",
+        "tonalRamp": [
+          "oklch(18% 0.004 171.5)",
+          "oklch(28% 0.008 171.5)",
+          "oklch(38% 0.013 171.5)",
+          "oklch(50% 0.019 171.5)",
+          "oklch(62% 0.018 171.5)",
+          "oklch(74% 0.012 171.5)",
+          "oklch(85% 0.007 171.5)",
+          "oklch(95% 0.003 171.5)"
+        ]
+      },
+      "wall-text-muted": {
+        "role": "neutral",
+        "displayName": "Wall Text, Quiet",
+        "canonical": "#BCD5CC",
+        "tonalRamp": [
+          "oklch(18% 0.006 171.9)",
+          "oklch(28% 0.013 171.9)",
+          "oklch(38% 0.021 171.9)",
+          "oklch(50% 0.029 171.9)",
+          "oklch(62% 0.028 171.9)",
+          "oklch(74% 0.019 171.9)",
+          "oklch(85% 0.011 171.9)",
+          "oklch(95% 0.004 171.9)"
+        ]
+      },
+      "ochre-stop": {
+        "role": "secondary",
+        "displayName": "Ochre Stop",
+        "canonical": "#E3A72F",
+        "tonalRamp": [
+          "oklch(18% 0.029 79.8)",
+          "oklch(28% 0.065 79.8)",
+          "oklch(38% 0.101 79.8)",
+          "oklch(50% 0.145 79.8)",
+          "oklch(62% 0.138 79.8)",
+          "oklch(74% 0.094 79.8)",
+          "oklch(85% 0.054 79.8)",
+          "oklch(95% 0.022 79.8)"
+        ]
+      },
+      "ochre-ink": {
+        "role": "secondary",
+        "displayName": "Ochre Ink",
+        "canonical": "#3A2A06",
+        "tonalRamp": [
+          "oklch(18% 0.011 83.4)",
+          "oklch(28% 0.025 83.4)",
+          "oklch(38% 0.039 83.4)",
+          "oklch(50% 0.055 83.4)",
+          "oklch(62% 0.052 83.4)",
+          "oklch(74% 0.036 83.4)",
+          "oklch(85% 0.021 83.4)",
+          "oklch(95% 0.008 83.4)"
+        ]
+      },
+      "ochre-wash": {
+        "role": "secondary",
+        "displayName": "Ochre Wash",
+        "canonical": "#FBF0D6",
+        "tonalRamp": [
+          "oklch(18% 0.007 87.8)",
+          "oklch(28% 0.016 87.8)",
+          "oklch(38% 0.025 87.8)",
+          "oklch(50% 0.036 87.8)",
+          "oklch(62% 0.034 87.8)",
+          "oklch(74% 0.023 87.8)",
+          "oklch(85% 0.014 87.8)",
+          "oklch(95% 0.005 87.8)"
+        ]
+      },
+      "deep-ochre-ring": {
+        "role": "secondary",
+        "displayName": "Deep Ochre Ring",
+        "canonical": "#8F6410",
+        "tonalRamp": [
+          "oklch(18% 0.021 77.5)",
+          "oklch(28% 0.048 77.5)",
+          "oklch(38% 0.074 77.5)",
+          "oklch(50% 0.106 77.5)",
+          "oklch(62% 0.101 77.5)",
+          "oklch(74% 0.069 77.5)",
+          "oklch(85% 0.04 77.5)",
+          "oklch(95% 0.016 77.5)"
+        ]
+      },
+      "oxblood": {
+        "role": "tertiary",
+        "displayName": "Oxblood",
+        "canonical": "#B5483D",
+        "tonalRamp": [
+          "oklch(18% 0.029 28.5)",
+          "oklch(28% 0.065 28.5)",
+          "oklch(38% 0.101 28.5)",
+          "oklch(50% 0.144 28.5)",
+          "oklch(62% 0.137 28.5)",
+          "oklch(74% 0.094 28.5)",
+          "oklch(85% 0.054 28.5)",
+          "oklch(95% 0.022 28.5)"
+        ]
+      },
+      "oxblood-wash": {
+        "role": "tertiary",
+        "displayName": "Oxblood Wash",
+        "canonical": "#F7E3E0",
+        "tonalRamp": [
+          "oklch(18% 0.004 27.8)",
+          "oklch(28% 0.01 27.8)",
+          "oklch(38% 0.016 27.8)",
+          "oklch(50% 0.022 27.8)",
+          "oklch(62% 0.021 27.8)",
+          "oklch(74% 0.015 27.8)",
+          "oklch(85% 0.008 27.8)",
+          "oklch(95% 0.003 27.8)"
+        ]
+      },
+      "sage-mist": {
+        "role": "neutral",
+        "displayName": "Sage Mist",
+        "canonical": "#E8EBE6",
+        "tonalRamp": [
+          "oklch(18% 0.001 132.4)",
+          "oklch(28% 0.003 132.4)",
+          "oklch(38% 0.005 132.4)",
+          "oklch(50% 0.007 132.4)",
+          "oklch(62% 0.007 132.4)",
+          "oklch(74% 0.005 132.4)",
+          "oklch(85% 0.003 132.4)",
+          "oklch(95% 0.001 132.4)"
+        ]
+      },
+      "slate-caption": {
+        "role": "neutral",
+        "displayName": "Slate Caption",
+        "canonical": "#5C6661",
+        "tonalRamp": [
+          "oklch(18% 0.003 164.4)",
+          "oklch(28% 0.007 164.4)",
+          "oklch(38% 0.01 164.4)",
+          "oklch(50% 0.015 164.4)",
+          "oklch(62% 0.014 164.4)",
+          "oklch(74% 0.009 164.4)",
+          "oklch(85% 0.005 164.4)",
+          "oklch(95% 0.002 164.4)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#D9DDD8",
+        "tonalRamp": [
+          "oklch(18% 0.002 139.4)",
+          "oklch(28% 0.004 139.4)",
+          "oklch(38% 0.006 139.4)",
+          "oklch(50% 0.008 139.4)",
+          "oklch(62% 0.008 139.4)",
+          "oklch(74% 0.005 139.4)",
+          "oklch(85% 0.003 139.4)",
+          "oklch(95% 0.001 139.4)"
+        ]
+      },
+      "connector-tan": {
+        "role": "neutral",
+        "displayName": "Connector Tan",
+        "canonical": "#94804E",
+        "tonalRamp": [
+          "oklch(18% 0.014 88.4)",
+          "oklch(28% 0.033 88.4)",
+          "oklch(38% 0.051 88.4)",
+          "oklch(50% 0.072 88.4)",
+          "oklch(62% 0.069 88.4)",
+          "oklch(74% 0.047 88.4)",
+          "oklch(85% 0.027 88.4)",
+          "oklch(95% 0.011 88.4)"
+        ]
+      },
+      "success-green": {
+        "role": "tertiary",
+        "displayName": "Verdigris",
+        "canonical": "#3E8A6E",
+        "tonalRamp": [
+          "oklch(18% 0.018 166.6)",
+          "oklch(28% 0.04 166.6)",
+          "oklch(38% 0.061 166.6)",
+          "oklch(50% 0.088 166.6)",
+          "oklch(62% 0.083 166.6)",
+          "oklch(74% 0.057 166.6)",
+          "oklch(85% 0.033 166.6)",
+          "oklch(95% 0.013 166.6)"
+        ]
+      },
+      "success-wash": {
+        "role": "tertiary",
+        "displayName": "Verdigris Wash",
+        "canonical": "#DDEEE6",
+        "tonalRamp": [
+          "oklch(18% 0.004 166.1)",
+          "oklch(28% 0.009 166.1)",
+          "oklch(38% 0.015 166.1)",
+          "oklch(50% 0.021 166.1)",
+          "oklch(62% 0.02 166.1)",
+          "oklch(74% 0.014 166.1)",
+          "oklch(85% 0.008 166.1)",
+          "oklch(95% 0.003 166.1)"
+        ]
+      },
+      "lane-ui-blue": {
+        "role": "tertiary",
+        "displayName": "Lane Blue (UI)",
+        "canonical": "#2F5E9E",
+        "tonalRamp": [
+          "oklch(18% 0.023 256.8)",
+          "oklch(28% 0.052 256.8)",
+          "oklch(38% 0.081 256.8)",
+          "oklch(50% 0.116 256.8)",
+          "oklch(62% 0.11 256.8)",
+          "oklch(74% 0.075 256.8)",
+          "oklch(85% 0.043 256.8)",
+          "oklch(95% 0.017 256.8)"
+        ]
+      },
+      "lane-ui-wash": {
+        "role": "tertiary",
+        "displayName": "Lane Blue Wash",
+        "canonical": "#E3ECF8",
+        "tonalRamp": [
+          "oklch(18% 0.004 255.5)",
+          "oklch(28% 0.008 255.5)",
+          "oklch(38% 0.013 255.5)",
+          "oklch(50% 0.019 255.5)",
+          "oklch(62% 0.018 255.5)",
+          "oklch(74% 0.012 255.5)",
+          "oklch(85% 0.007 255.5)",
+          "oklch(95% 0.003 255.5)"
+        ]
+      },
+      "lane-api-viridian": {
+        "role": "tertiary",
+        "displayName": "Lane Viridian (API)",
+        "canonical": "#1F4D45",
+        "tonalRamp": [
+          "oklch(18% 0.01 180.4)",
+          "oklch(28% 0.024 180.4)",
+          "oklch(38% 0.037 180.4)",
+          "oklch(50% 0.052 180.4)",
+          "oklch(62% 0.05 180.4)",
+          "oklch(74% 0.034 180.4)",
+          "oklch(85% 0.02 180.4)",
+          "oklch(95% 0.008 180.4)"
+        ]
+      },
+      "lane-api-wash": {
+        "role": "tertiary",
+        "displayName": "Lane Viridian Wash",
+        "canonical": "#E0ECE8",
+        "tonalRamp": [
+          "oklch(18% 0.003 174.1)",
+          "oklch(28% 0.006 174.1)",
+          "oklch(38% 0.01 174.1)",
+          "oklch(50% 0.014 174.1)",
+          "oklch(62% 0.013 174.1)",
+          "oklch(74% 0.009 174.1)",
+          "oklch(85% 0.005 174.1)",
+          "oklch(95% 0.002 174.1)"
+        ]
+      },
+      "lane-code-stone": {
+        "role": "tertiary",
+        "displayName": "Lane Stone (Code)",
+        "canonical": "#5E5950",
+        "tonalRamp": [
+          "oklch(18% 0.003 82.4)",
+          "oklch(28% 0.007 82.4)",
+          "oklch(38% 0.011 82.4)",
+          "oklch(50% 0.016 82.4)",
+          "oklch(62% 0.015 82.4)",
+          "oklch(74% 0.01 82.4)",
+          "oklch(85% 0.006 82.4)",
+          "oklch(95% 0.002 82.4)"
+        ]
+      },
+      "lane-code-wash": {
+        "role": "tertiary",
+        "displayName": "Lane Stone Wash",
+        "canonical": "#E9E6E0",
+        "tonalRamp": [
+          "oklch(18% 0.002 84.6)",
+          "oklch(28% 0.004 84.6)",
+          "oklch(38% 0.006 84.6)",
+          "oklch(50% 0.009 84.6)",
+          "oklch(62% 0.008 84.6)",
+          "oklch(74% 0.006 84.6)",
+          "oklch(85% 0.003 84.6)",
+          "oklch(95% 0.001 84.6)"
+        ]
+      },
+      "lane-db-umber": {
+        "role": "tertiary",
+        "displayName": "Lane Umber (DB)",
+        "canonical": "#8A5A2B",
+        "tonalRamp": [
+          "oklch(18% 0.018 62.8)",
+          "oklch(28% 0.04 62.8)",
+          "oklch(38% 0.062 62.8)",
+          "oklch(50% 0.089 62.8)",
+          "oklch(62% 0.084 62.8)",
+          "oklch(74% 0.058 62.8)",
+          "oklch(85% 0.033 62.8)",
+          "oklch(95% 0.013 62.8)"
+        ]
+      },
+      "lane-db-wash": {
+        "role": "tertiary",
+        "displayName": "Lane Umber Wash",
+        "canonical": "#F3E9DE",
+        "tonalRamp": [
+          "oklch(18% 0.004 70.2)",
+          "oklch(28% 0.008 70.2)",
+          "oklch(38% 0.013 70.2)",
+          "oklch(50% 0.018 70.2)",
+          "oklch(62% 0.017 70.2)",
+          "oklch(74% 0.012 70.2)",
+          "oklch(85% 0.007 70.2)",
+          "oklch(95% 0.003 70.2)"
+        ]
+      },
+      "lane-queue-umber": {
+        "role": "tertiary",
+        "displayName": "Lane Light Umber (Queue)",
+        "canonical": "#B07E4A",
+        "tonalRamp": [
+          "oklch(18% 0.019 65.9)",
+          "oklch(28% 0.042 65.9)",
+          "oklch(38% 0.065 65.9)",
+          "oklch(50% 0.093 65.9)",
+          "oklch(62% 0.088 65.9)",
+          "oklch(74% 0.06 65.9)",
+          "oklch(85% 0.035 65.9)",
+          "oklch(95% 0.014 65.9)"
+        ]
+      },
+      "lane-queue-wash": {
+        "role": "tertiary",
+        "displayName": "Lane Light Umber Wash",
+        "canonical": "#F8F0E6",
+        "tonalRamp": [
+          "oklch(18% 0.003 73.7)",
+          "oklch(28% 0.007 73.7)",
+          "oklch(38% 0.011 73.7)",
+          "oklch(50% 0.016 73.7)",
+          "oklch(62% 0.015 73.7)",
+          "oklch(74% 0.01 73.7)",
+          "oklch(85% 0.006 73.7)",
+          "oklch(95% 0.002 73.7)"
+        ]
+      },
+      "map-canvas": {
+        "role": "neutral",
+        "displayName": "Map Canvas",
+        "canonical": "#EEF0EC",
+        "tonalRamp": [
+          "oklch(18% 0.001 128.5)",
+          "oklch(28% 0.003 128.5)",
+          "oklch(38% 0.004 128.5)",
+          "oklch(50% 0.006 128.5)",
+          "oklch(62% 0.005 128.5)",
+          "oklch(74% 0.004 128.5)",
+          "oklch(85% 0.002 128.5)",
+          "oklch(95% 0.001 128.5)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Nameplate",
+        "purpose": "One per screen: the workspace or journey name."
+      },
+      "headline": {
+        "displayName": "Section",
+        "purpose": "Section titles on Home and Map."
+      },
+      "title": {
+        "displayName": "Wall label",
+        "purpose": "Journey names in rows, inspector headings."
+      },
+      "count": {
+        "displayName": "Count",
+        "purpose": "The six totals in the count strip; tabular figures."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Base UI text, 14px."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Notes, facts and empty-state lines under a name."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Filter labels, inspector section labels, lane headers."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Code blocks, paths, file:line, routes, SQL, repo ids. Never UI words."
+      }
+    },
+    "shadows": [
+      {
+        "name": "stop-lift",
+        "value": "0 1px 2px rgb(20 40 35 / 0.06)",
+        "purpose": "Lifts a stop card off its lane wash."
+      },
+      {
+        "name": "selection-halo",
+        "value": "0 0 0 3px rgb(227 167 47 / 0.4)",
+        "purpose": "Selected stop card or Map card: a state ring, not elevation."
+      },
+      {
+        "name": "roundel-selected",
+        "value": "0 0 0 4px rgb(227 167 47 / 0.35)",
+        "purpose": "The roundel of the stop you are standing at."
+      },
+      {
+        "name": "map-stop-card",
+        "value": "0 1px 2px rgb(26 29 28 / 0.08), 0 0 0 3px rgb(227 167 47 / 0.35)",
+        "purpose": "A Map card on the journey overlay."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fade",
+        "value": "150ms ease (colour, opacity, border, shadow)",
+        "purpose": "Hover and selection changes; off under prefers-reduced-motion."
+      },
+      {
+        "name": "map-pan",
+        "value": "200ms setCenter, 0ms under reduced motion",
+        "purpose": "Bringing a focused off-screen Map card into view."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "md",
+        "value": "768px",
+        "purpose": "Home rows switch from stacked to the five-column grid."
+      },
+      {
+        "name": "lg",
+        "value": "1024px",
+        "purpose": "Count strip 6 across; Journey inspector beside the lanes."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Stop Roundel",
+      "kind": "custom",
+      "refersTo": "stop-roundel",
+      "description": "The ochre audio-guide number of one journey stop; selected adds a halo.",
+      "html": "<span class=\"ds-roundel\">5</span> <span class=\"ds-roundel ds-roundel--selected\">6</span> <span class=\"ds-roundel ds-roundel--unresolved\">7</span>",
+      "css": ".ds-roundel{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:9999px;border:1.5px solid var(--accent,#E3A72F);background:var(--accent,#E3A72F);color:var(--accent-foreground,#3A2A06);font:600 11px/1 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}.ds-roundel--selected{border-color:var(--accent-foreground,#3A2A06);box-shadow:0 0 0 4px rgb(227 167 47 / .35)}.ds-roundel--unresolved{background:#fff;border-style:dashed;border-color:var(--destructive,#B5483D);color:var(--destructive,#B5483D)}"
+    },
+    {
+      "name": "Home Stop Row",
+      "kind": "custom",
+      "refersTo": "stop-roundel-hollow",
+      "description": "A journey's stops on Home: hollow roundels ringed in their lane hue, +N past eight.",
+      "html": "<span class=\"ds-row\"><span class=\"ds-h ds-ui\">1</span><i></i><span class=\"ds-h ds-ui\">2</span><i></i><span class=\"ds-h ds-api\">3</span><i></i><span class=\"ds-h ds-db\">4</span><i></i><span class=\"ds-h ds-more\">+3</span></span>",
+      "css": ".ds-row{display:inline-flex;align-items:center}.ds-row i{width:6px;height:1px;background:var(--connector,#94804E)}.ds-h{display:inline-grid;place-items:center;min-width:22px;height:22px;border-radius:9999px;border:1.5px solid;background:#fff;font:600 10px/1 'JetBrains Mono',monospace}.ds-ui{border-color:#2F5E9E;color:#2F5E9E}.ds-api{border-color:#1F4D45;color:#1F4D45}.ds-db{border-color:#8A5A2B;color:#8A5A2B}.ds-more{border-style:dashed;border-color:#5C6661;color:#5C6661;padding:0 4px}"
+    },
+    {
+      "name": "Stop Card in a Lane",
+      "kind": "card",
+      "refersTo": "stop-card",
+      "description": "One stop on the Journey lanes: roundel, two-line name, path that wraps at slashes.",
+      "html": "<div class=\"ds-lane\"><div class=\"ds-lane-h\"><b>API</b><code>api</code></div><button class=\"ds-stop\"><span class=\"ds-roundel\">4</span><span><b>POST /api/customers</b><code>start/routes.ts:7</code></span></button></div>",
+      "css": ".ds-lane{background:var(--lane-api-soft,#E0ECE8);border-radius:10px;padding:10px;width:184px}.ds-lane-h{display:flex;justify-content:space-between;color:var(--lane-api,#1F4D45);font:700 12.5px 'Schibsted Grotesk',sans-serif;margin-bottom:12px}.ds-lane-h code{font:400 12px 'JetBrains Mono',monospace}.ds-stop{display:flex;gap:8px;align-items:flex-start;width:100%;text-align:left;background:#fff;border:1px solid var(--border,#D9DDD8);border-radius:9px;padding:8px 10px;box-shadow:0 1px 2px rgb(20 40 35 / .06);cursor:pointer;transition:border-color .15s}.ds-stop:hover{border-color:#5C6661}.ds-stop:focus-visible{outline:2px solid var(--ring,#8F6410);outline-offset:2px}.ds-stop b{display:block;font:600 13px/1.3 'Schibsted Grotesk',sans-serif;color:#1A1D1C}.ds-stop code{display:block;font:400 11.5px/1.35 'JetBrains Mono',monospace;color:#5C6661}.ds-stop .ds-roundel{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:9999px;background:#E3A72F;color:#3A2A06;font:600 11px/1 'JetBrains Mono',monospace}"
+    },
+    {
+      "name": "Count Strip",
+      "kind": "custom",
+      "refersTo": "count",
+      "description": "Six workspace totals on a hairline grid under a 2px ink rule.",
+      "html": "<ul class=\"ds-strip\"><li><b>23</b><span>Files</span></li><li><b>3</b><span>UI pages</span></li><li><b>5</b><span>API routes</span></li></ul>",
+      "css": ".ds-strip{display:grid;grid-template-columns:repeat(3,1fr);list-style:none;margin:0;padding:0;border-top:2px solid var(--foreground,#1A1D1C);border-bottom:1px solid var(--border,#D9DDD8)}.ds-strip li{display:flex;flex-direction:column;gap:2px;padding:11px 16px;border-right:1px solid var(--border,#D9DDD8)}.ds-strip li:last-child{border-right:0}.ds-strip b{font:700 24px/1.25 'Schibsted Grotesk',sans-serif;letter-spacing:-.02em;font-variant-numeric:tabular-nums}.ds-strip span{font:400 12.5px 'Schibsted Grotesk',sans-serif;color:var(--muted-foreground,#5C6661)}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Viridian action, e.g. Open the map.",
+      "html": "<button class=\"ds-btn-primary\">Open the map</button>",
+      "css": ".ds-btn-primary{height:36px;padding:8px 16px;border:0;border-radius:6px;background:var(--primary,#1F4D45);color:#fff;font:600 14px 'Schibsted Grotesk',sans-serif;cursor:pointer;transition:background .15s}.ds-btn-primary:hover{background:rgb(31 77 69 / .9)}.ds-btn-primary:focus-visible{outline:none;box-shadow:0 0 0 2px var(--ring,#8F6410)}"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Quiet action on the ground, e.g. Show on map.",
+      "html": "<button class=\"ds-btn-outline\">Show on map</button>",
+      "css": ".ds-btn-outline{padding:8px 14px;border:1px solid var(--border,#D9DDD8);border-radius:8px;background:#fff;color:var(--foreground,#1A1D1C);font:600 13px 'Schibsted Grotesk',sans-serif;cursor:pointer;transition:border-color .15s}.ds-btn-outline:hover{border-color:#5C6661}.ds-btn-outline:focus-visible{outline:2px solid var(--ring,#8F6410);outline-offset:2px}"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "White field with a hairline; deep-ochre focus ring.",
+      "html": "<input class=\"ds-input\" type=\"search\" placeholder=\"Search names, areas, notes, tables\">",
+      "css": ".ds-input{height:36px;width:256px;padding:4px 12px;border:1px solid var(--input,#D9DDD8);border-radius:6px;background:#fff;color:#1A1D1C;font:400 14px 'Schibsted Grotesk',sans-serif}.ds-input::placeholder{color:#5C6661}.ds-input:focus-visible{outline:none;border-color:var(--ring,#8F6410);box-shadow:0 0 0 2px var(--ring,#8F6410)}"
+    },
+    {
+      "name": "Rail Navigation",
+      "kind": "nav",
+      "refersTo": "rail-nav-item-current",
+      "description": "Nav on the viridian wall, count in mono on the right.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-nav ds-nav--current\" href=\"#\">Home<span>2</span></a><a class=\"ds-nav\" href=\"#\">Map<span>23</span></a></nav>",
+      "css": ".ds-rail{display:flex;flex-direction:column;gap:2px;width:200px;padding:16px;background:var(--rail,#1F4D45)}.ds-nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--rail-foreground,#D5E5DF);font:400 14px 'Schibsted Grotesk',sans-serif;text-decoration:none;transition:background .15s}.ds-nav span{margin-left:auto;font:400 12px 'JetBrains Mono',monospace;color:var(--rail-muted,#BCD5CC)}.ds-nav:hover{background:rgb(42 95 85 / .6);color:#fff}.ds-nav:focus-visible{outline:2px solid var(--rail-ring,#E3A72F);outline-offset:2px}.ds-nav--current{background:var(--rail-active,#2A5F55);color:#fff;font-weight:600}.ds-nav--current span{color:#fff}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Gallery Guide",
+    "overview": "Learning a codebase is walking an exhibition. Every user journey is an exhibit with numbered stops, and the\ndashboard is the gallery: a painted viridian wall on the left (the rail), a gallery-white floor for the work,\nand ochre audio-guide roundels that number every stop. Names read like wall labels: short, bold, with a quiet\ncaption under them. Real paths, lines and SQL sit beside them in a monospace, because the product's promise is\n\"follow the data\", not abstractions.\n\nThis is an Operate surface: a developer spends 20 to 60 minutes in it next to a terminal. Character lives in\nprecise details (the roundels, the lane hues, the hairline count strip, the confidence of every connector), not\nin decoration. It is light-only, dense but calm, and every number lines up. It refuses the grey stat-card\ndeveloper dashboard with a folder tree.",
+    "keyCharacteristics": [
+      "Viridian rail as the painted wall; gallery-white ground; white panels with 1px hairlines.",
+      "Ochre numbered roundels are the one signature; nothing else uses ochre fill.",
+      "Four lane hues (UI blue, API viridian, Code stone, DB umber) tell where a stop lives, on every screen.",
+      "Connectors carry confidence: solid for exact, thin for a path-param match, dashed for a guess. A guess is never drawn as fact.",
+      "Oxblood is reserved for errors and hops codeloom could not follow.",
+      "Schibsted Grotesk for words, JetBrains Mono only for code, paths, lines, routes and SQL."
+    ],
+    "rules": [
+      {
+        "name": "The One Signature Rule",
+        "body": "Ochre fill means a numbered stop and nothing else. Never use it for a badge, a chart",
+        "section": "colors"
+      },
+      {
+        "name": "The Honest Roundel Rule",
+        "body": "On Home, roundels are hollow and ringed in their lane hue: Home names the stops, it",
+        "section": "colors"
+      },
+      {
+        "name": "The Oxblood Rule",
+        "body": "Oxblood appears only for errors and broken or unresolved hops, and always with a second",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono-Means-Data Rule",
+        "body": "Monospace only for code, paths, line numbers, routes, SQL, repo ids and counts in",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Numbers Rule",
+        "body": "Numbers that line up use tabular figures, but only on the number itself: never",
+        "section": "typography"
+      },
+      {
+        "name": "The Break-at-Slash Rule",
+        "body": "Paths and code names wrap after `/`, `_`, `-`, at a dot before a long part and at",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-By-Default Rule",
+        "body": "Panels carry a hairline, never a hairline plus a wide soft shadow. A shadow",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** number every stop with an ochre roundel on Journey and Map, and with a hollow lane-ringed roundel on Home.",
+      "**Do** keep lane hues consistent across Home roundels, Journey lanes, Map layer cards and the rail repo dots.",
+      "**Do** draw a hop's confidence in its line (solid, thin, dashed) and explain a guess in words.",
+      "**Do** wrap paths at `/` and names at humps; give the full text as a tooltip.",
+      "**Do** keep focus visible: when a class removes the outline, add `outline-solid` back on `focus-visible` (Tailwind v4's `outline-none` zeroes the outline style).",
+      "**Do** keep text at 4.5:1 or better; captions use Slate Caption, never a lighter grey.",
+      "**Do** respect reduced motion: transitions are 150ms colour/opacity changes and switch off under `prefers-reduced-motion`."
+    ],
+    "donts": [
+      "**Don't** use ochre fill for anything but a stop, and don't fill Home roundels until progress exists.",
+      "**Don't** show placeholders or \"coming soon\" chrome for Tour, Progress, Views, spec badges or understood %.",
+      "**Don't** use oxblood without a dashed edge or the word that says what failed.",
+      "**Don't** truncate a stop name to one line with an ellipsis, or break a path in the middle of a segment.",
+      "**Don't** set monospace on headings or UI words, or `tabular-nums` on whole sentences.",
+      "**Don't** add a dark theme, CDN fonts or remote assets: the dashboard is light-only and loads nothing beyond 127.0.0.1.",
+      "**Don't** add eyebrow labels, stat cards with icons, gradient text or border-left accent stripes."
+    ]
+  }
+}
