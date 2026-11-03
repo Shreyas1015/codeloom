@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { dirname, resolve, extname } from "node:path";
 import type {
   AnalyzerPlugin,
@@ -9,9 +8,7 @@ import type {
 import type { LanguageConfig } from "../languages/types.js";
 import type { LanguageExtractor } from "./extractors/types.js";
 import { builtinExtractors } from "./extractors/index.js";
-
-// web-tree-sitter uses CJS internally; we need createRequire for .wasm resolution
-const require = createRequire(import.meta.url);
+import { grammarPath } from "./grammar-path.js";
 
 type TreeSitterParser = import("web-tree-sitter").Parser;
 type TreeSitterLanguage = import("web-tree-sitter").Language;
@@ -140,8 +137,9 @@ export class TreeSitterPlugin implements AnalyzerPlugin {
 
         const loadGrammar = async () => {
           try {
-            const wasmPath = require.resolve(
-              `${config.treeSitter!.wasmPackage}/${config.treeSitter!.wasmFile}`,
+            const wasmPath = grammarPath(
+              config.treeSitter!.wasmPackage,
+              config.treeSitter!.wasmFile,
             );
             const lang = await LanguageCls.load(wasmPath);
             this._languages.set(config.id, lang);
@@ -149,8 +147,9 @@ export class TreeSitterPlugin implements AnalyzerPlugin {
             // Special handling for TypeScript: also load TSX grammar
             if (config.id === "typescript") {
               try {
-                const tsxWasm = require.resolve(
-                  `${config.treeSitter!.wasmPackage}/tree-sitter-tsx.wasm`,
+                const tsxWasm = grammarPath(
+                  config.treeSitter!.wasmPackage,
+                  "tree-sitter-tsx.wasm",
                 );
                 const tsxLang = await LanguageCls.load(tsxWasm);
                 this._languages.set("tsx", tsxLang);
@@ -172,15 +171,9 @@ export class TreeSitterPlugin implements AnalyzerPlugin {
       await Promise.all(loadPromises);
     } else {
       // Legacy fallback: load TS/JS grammars directly
-      const tsWasm = require.resolve(
-        "tree-sitter-typescript/tree-sitter-typescript.wasm",
-      );
-      const tsxWasm = require.resolve(
-        "tree-sitter-typescript/tree-sitter-tsx.wasm",
-      );
-      const jsWasm = require.resolve(
-        "tree-sitter-javascript/tree-sitter-javascript.wasm",
-      );
+      const tsWasm = grammarPath("tree-sitter-typescript", "tree-sitter-typescript.wasm");
+      const tsxWasm = grammarPath("tree-sitter-typescript", "tree-sitter-tsx.wasm");
+      const jsWasm = grammarPath("tree-sitter-javascript", "tree-sitter-javascript.wasm");
 
       const [tsLang, tsxLang, jsLang] = await Promise.all([
         LanguageCls.load(tsWasm),
