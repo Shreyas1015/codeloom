@@ -2,3 +2,8 @@
 .serena/
 node_modules/
 dist/
+
+# Playwright
+e2e/__screenshots__/
+test-results/
+playwright-report/
