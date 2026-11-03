@@ -62,7 +62,8 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
   }, [count, select]);
 
   const workspace = overview.data?.name;
-  const loadedId = data ? (data.journey?.id ?? data.chains[0]?.id) : undefined;
+  // a chain that belongs to a named journey is remembered as that journey, so Home's Continue band finds it
+  const loadedId = data ? (data.journey?.id ?? data.chains[0]?.journeys[0] ?? data.chains[0]?.id) : undefined;
   useEffect(() => {
     if (workspace && loadedId) rememberLastJourney(workspace, loadedId);
   }, [workspace, loadedId]);

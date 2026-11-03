@@ -386,6 +386,14 @@ describe("Journey screen", () => {
     await waitFor(() => expect(set).toHaveBeenCalledWith(lastJourneyKey("demo-shop"), "ch_aaaa"));
   });
 
+  it("remembers the named journey, not the chain, when a chain that belongs to one is opened", async () => {
+    stubApi({ ch_aaaa: { ...chainResult, chains: [{ ...chainResult.chains[0]!, journeys: ["j_invoice"] }] } });
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    renderAt("/journeys/ch_aaaa");
+    await waitFor(() => expect(set).toHaveBeenCalledWith(lastJourneyKey("demo-shop"), "j_invoice"));
+    expect(set).not.toHaveBeenCalledWith(lastJourneyKey("demo-shop"), "ch_aaaa");
+  });
+
   it("does not remember an unknown id", async () => {
     stubApi();
     const set = vi.spyOn(Storage.prototype, "setItem");
