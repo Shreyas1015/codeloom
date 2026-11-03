@@ -7,3 +7,7 @@ dist/
 e2e/__screenshots__/
 test-results/
 playwright-report/
+
+# Release build copies (scripts/release/build.mjs)
+packages/cli/LICENSE
+packages/cli/NOTICE
