@@ -52,7 +52,8 @@ const StopView = z.strictObject({
 const Unresolved = z.strictObject({ at: z.strictObject({ file: z.string(), line: z.number(), symbol: z.string(), repo: z.string() }), reason: z.string() });
 const ChainView = z.strictObject({
   id: z.string(), name: z.string(), entry: z.string(), routeKey: z.string(), confidence, complete: z.boolean(),
-  journeys: z.array(z.string()), stops: z.array(StopView), unresolved: z.array(Unresolved),
+  journeys: z.array(z.string()), stopCount: z.number().int(), lanes: laneCounts, tables: z.array(z.string()),
+  stops: z.array(StopView), unresolved: z.array(Unresolved),
 });
 const ChainsResult = z.strictObject({ total: z.number(), chains: z.array(ChainView), truncated: z.boolean() });
 const Journey = z.strictObject({ id: z.string(), name: z.string(), area: z.string(), note: z.string(), chainIds: z.array(z.string()), status: z.enum(["ok", "orphaned"]) });

@@ -135,6 +135,11 @@ export interface ChainView {
   confidence: Confidence;
   complete: boolean;
   journeys: string[];
+  stopCount: number;
+  /** Stops per lane. */
+  lanes: Record<Lane, number>;
+  /** Tables the chain's db stops reach, sorted. */
+  tables: string[];
   stops: StopView[];
   unresolved: UnresolvedItem[];
 }

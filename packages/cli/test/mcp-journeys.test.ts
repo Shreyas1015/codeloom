@@ -70,8 +70,23 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("list_chains", () => {
-  it("lists every chain sorted by id with flattened stops and journeys", async () => {
+  it("by default lists compact rows: lane counts and tables, no stops (H5)", async () => {
     const r = await sc("list_chains");
+    expect(r.total).toBe(chains.length);
+    expect(ids(r.chains)).toEqual(chains.map((c) => c.id).sort());
+    const create = r.chains.find((c: { id: string }) => c.id === createId);
+    expect(Object.keys(create)).toEqual(["id", "name", "entry", "routeKey", "confidence", "complete", "journeys", "stopCount", "lanes", "tables"]);
+    expect(create).toMatchObject({ routeKey: "api:POST /api/customers", confidence: "exact", complete: true, journeys: [SIGNUP] });
+    const full = (await sc("list_chains", { detail: true })).chains.find((c: { id: string }) => c.id === createId);
+    expect(create.stopCount).toBe(full.stops.length);
+    const lanes = { ui: 0, api: 0, code: 0, db: 0, queue: 0 } as Record<string, number>;
+    for (const s of full.stops) lanes[s.lane]!++;
+    expect(create.lanes).toEqual(lanes);
+    expect(create.tables).toEqual(["audit_logs", "customers"]);
+  });
+
+  it("detail: true lists every chain sorted by id with flattened stops and journeys", async () => {
+    const r = await sc("list_chains", { detail: true });
     expect(r.total).toBe(chains.length);
     expect(r.truncated).toBe(false);
     expect(ids(r.chains)).toEqual(chains.map((c) => c.id).sort());
@@ -86,14 +101,14 @@ describe("list_chains", () => {
     expect(create.stops.map((s: { kind: string; from?: number }) => s.from).slice(1).every((f: number | undefined, i: number) => f !== undefined && f <= i)).toBe(true);
     const viaDi = create.stops.find((s: { reason?: string }) => s.reason === "via di");
     expect(viaDi).toBeDefined();
-    expect(text(await call("list_chains"))).toBe(JSON.stringify(r, null, 2));
+    expect(text(await call("list_chains", { detail: true }))).toBe(JSON.stringify(r, null, 2));
   });
 
   it("filters by repo, complete, confidence and unnamed", async () => {
-    const web = await sc("list_chains", { repo: "web" });
+    const web = await sc("list_chains", { repo: "web", detail: true });
     expect(web.total).toBe(3);
     for (const c of web.chains) expect(c.stops.some((s: { repo: string }) => s.repo === "web")).toBe(true);
-    const incomplete = await sc("list_chains", { complete: false });
+    const incomplete = await sc("list_chains", { complete: false, detail: true });
     for (const c of incomplete.chains) expect(c.complete).toBe(false);
     expect(incomplete.total).toBeGreaterThan(0);
     const param = await sc("list_chains", { confidence: "param" });

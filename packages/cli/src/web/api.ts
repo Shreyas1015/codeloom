@@ -374,8 +374,9 @@ export function readCode(start: string, url: URL): CodeResponse {
 
 // ---- route table ----------------------------------------------------------------------------------
 
+/** The dashboard is local HTTP, not MCP: it always gets list_chains' full rows (stops included). */
 function listChainsArgs(url: URL): ListChainsArgs {
-  const args: ListChainsArgs = {};
+  const args: ListChainsArgs = { detail: true };
   const repo = strParam(url, "repo");
   const complete = boolParam(url, "complete");
   const confidence = enumParam(url, "confidence", ["exact", "param", "guess"] as const);

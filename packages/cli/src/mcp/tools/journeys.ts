@@ -40,11 +40,24 @@ function journeyIndex(state: MapState): Map<string, string[]> {
   return out;
 }
 
-function chainView(c: Chain, journeys: Map<string, string[]>): Record<string, unknown> {
+/** A chain as list_chains shows it by default: who it is, its stop count per lane and the tables it
+ * reaches (sorted), without the stops themselves. */
+function chainRow(c: Chain, journeys: Map<string, string[]>): Record<string, unknown> {
+  const lanes: Record<Lane, number> = { ui: 0, api: 0, code: 0, db: 0, queue: 0 };
+  const tables = new Set<string>();
+  for (const s of c.stops) {
+    lanes[s.lane]++;
+    if (s.lane === "db" && s.label) tables.add(s.label);
+  }
   return {
     id: c.id, name: c.name, entry: c.entry, routeKey: c.routeKey, confidence: c.confidence, complete: c.complete,
-    journeys: journeys.get(c.id) ?? [], stops: c.stops.map((s) => stopView(s)), unresolved: c.unresolved,
+    journeys: journeys.get(c.id) ?? [], stopCount: c.stops.length, lanes, tables: [...tables].sort(compare),
   };
+}
+
+/** chainRow plus the stops and what the linker could not resolve (list_chains `detail: true`, get_journey). */
+function chainView(c: Chain, journeys: Map<string, string[]>): Record<string, unknown> {
+  return { ...chainRow(c, journeys), stops: c.stops.map((s) => stopView(s)), unresolved: c.unresolved };
 }
 
 function sortedChains(state: MapState): Chain[] {
@@ -58,6 +71,8 @@ export interface ListChainsArgs {
   complete?: boolean;
   confidence?: "exact" | "param" | "guess";
   unnamed?: boolean;
+  /** Add each chain's stops and unresolved calls (compact rows otherwise). */
+  detail?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -78,7 +93,8 @@ export function listChains(start: string, args: ListChainsArgs): Record<string, 
   const limit = args.limit ?? 100;
   const offset = args.offset ?? 0;
   const page = hits.slice(offset, offset + limit);
-  return { total: hits.length, chains: page.map((c) => chainView(c, journeys)), truncated: offset + page.length < hits.length };
+  const view = args.detail ? chainView : chainRow;
+  return { total: hits.length, chains: page.map((c) => view(c, journeys)), truncated: offset + page.length < hits.length };
 }
 
 // ---- get_journey -------------------------------------------------------------------------------
@@ -304,17 +320,23 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
       description:
         "Request chains found in the code: each one runs from an entry (a UI page, an API route or a queue consumer) " +
         "through ui → api → code → db / queue stops. Filter by repo, completeness, confidence, or `unnamed: true` for " +
-        "chains no journey names yet. Sorted by id; page with limit/offset.",
+        "chains no journey names yet. Sorted by id; page with limit/offset. Each row is compact: id, name, entry, " +
+        "routeKey, confidence, complete, journeys, stopCount, stops per lane and the tables it reaches. " +
+        "`detail: true` adds each chain's stops and unresolved calls (or call get_journey on one chain).",
       inputSchema: {
         repo: z.string().optional(),
         complete: z.boolean().optional(),
         confidence: z.enum(["exact", "param", "guess"]).optional(),
         unnamed: z.boolean().optional(),
+        detail: z.boolean().default(false),
         limit: z.number().int().min(1).max(500).default(100),
         offset: z.number().int().min(0).default(0),
       },
     },
-    withErrors((args: ListChainsArgs) => listChains(opts.start, args)),
+    withErrors(
+      (args: ListChainsArgs) => listChains(opts.start, args),
+      "Use a smaller limit with offset to page, filter by repo/complete/confidence/unnamed, or leave detail off.",
+    ),
   );
 
   server.registerTool(
@@ -326,7 +348,10 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         "queue stops (shared stops shown once), the files, tables and queues it touches, and what the linker could not resolve.",
       inputSchema: { id: z.string().min(1).describe("A journey id (j_…) or a chain id (ch_…).") },
     },
-    withErrors((args: { id: string }) => getJourney(opts.start, args.id)),
+    withErrors(
+      (args: { id: string }) => getJourney(opts.start, args.id),
+      "Call get_journey with one of its chain ids (ch_…) to see that chain in full.",
+    ),
   );
 
   server.registerTool(
@@ -341,7 +366,10 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         'that repo only; "page:<repo>:<route>", also that repo only), or a node reference "<repo>::<nodeId>". At most 50 chains.',
       inputSchema: { from: z.string().min(1).max(500) },
     },
-    withErrors((args: { from: string }) => traceRoute(opts.start, args.from)),
+    withErrors(
+      (args: { from: string }) => traceRoute(opts.start, args.from),
+      'Pass a narrower `from` (add the METHOD, or use "table:<repo>:<name>" or a node reference), or call get_journey on one chain id.',
+    ),
   );
 
   server.registerTool(
