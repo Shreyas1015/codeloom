@@ -1,29 +1,64 @@
 {
   "name": "codeloom",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Map a codebase into user journeys, for you and your AI agent.",
-  "type": "module",
+  "keywords": [
+    "code map",
+    "user journeys",
+    "mcp",
+    "claude",
+    "codebase",
+    "onboarding"
+  ],
+  "homepage": "https://github.com/Shreyas1015/codeloom#readme",
+  "bugs": {
+    "url": "https://github.com/Shreyas1015/codeloom/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shreyas1015/codeloom.git",
+    "directory": "packages/cli"
+  },
+  "author": "Shreyas1015",
   "license": "MIT",
+  "type": "module",
   "bin": {
     "codeloom": "dist/bin.js"
   },
+  "files": [
+    "dist/bin.js",
+    "dist/bin.js.map",
+    "dist/grammars",
+    "dist/dashboard",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "node ../../scripts/release/prepack-check.mjs"
   },
   "dependencies": {
-    "@codeloom/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "commander": "^12.1.0",
+    "fuse.js": "^7.1.0",
     "ignore": "^7.0.5",
     "typescript": "^5.7.0",
+    "web-tree-sitter": "^0.26.6",
+    "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@codeloom/core": "workspace:*",
     "@types/node": "^22.0.0",
     "vitest": "^3.1.0"
   }
