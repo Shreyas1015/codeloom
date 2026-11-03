@@ -53,19 +53,46 @@ describe("journeyRows", () => {
       stops: { ui: 1, api: 1, code: 1, db: 2, queue: 1 },
       confidence: "param",
       complete: false,
+      apiOnly: false,
       tables: ["audit", "users"],
     });
     expect(out.journeys[1]).toMatchObject({ confidence: "exact", complete: true, tables: ["users"], repos: ["api", "web"] });
     expect(out.unnamedChains).toEqual([
-      { id: "ch_c", name: "chain ch_c", entry: "route:ch_c", confidence: "guess", complete: true, repos: ["billing"] },
-      { id: "ch_d", name: "chain ch_d", entry: "route:ch_d", confidence: "exact", complete: true, repos: [] },
+      { id: "ch_c", name: "chain ch_c", entry: "route:ch_c", confidence: "guess", complete: true, apiOnly: false, repos: ["billing"] },
+      { id: "ch_d", name: "chain ch_d", entry: "route:ch_d", confidence: "exact", complete: true, apiOnly: false, repos: [] },
+    ]);
+  });
+
+  // H3: a route-only chain that reaches a store is "API → DB", not complete and not plain incomplete.
+  it("marks route-only chains that reach a store as API → DB (apiOnly), and journeys made only of such chains", () => {
+    const page = stop({ lane: "ui", kind: "page", repo: "web", file: "app/customers/page.tsx" });
+    const route = stop({ lane: "api", kind: "route", repo: "api", file: "start/routes.ts" });
+    const db = stop({ lane: "db", kind: "db", repo: "api", file: "app/invoices.ts", label: "invoices", line: 5 });
+    const ui = chain("ch_ui", { entry: "page:web:/customers", stops: [page, route, db] });
+    const routeOnly = chain("ch_route", { complete: false, stops: [route, db] });
+    const noStore = chain("ch_nostore", { complete: false, stops: [route] });
+    const out = journeyRows({
+      chains: [ui, routeOnly, noStore],
+      journeys: [
+        journey("j_a", { name: "A", chainIds: ["ch_route"] }),
+        journey("j_b", { name: "B", chainIds: ["ch_route", "ch_ui"] }),
+        journey("j_c", { name: "C", chainIds: ["ch_route", "ch_nostore"] }),
+        journey("j_d", { name: "D", chainIds: ["ch_ui"] }),
+      ],
+    });
+    expect(out.journeys.map((j) => [j.id, j.complete, j.apiOnly])).toEqual([
+      ["j_a", false, true], ["j_b", false, true], ["j_c", false, false], ["j_d", true, false],
+    ]);
+    const empty = journeyRows({ chains: [routeOnly, noStore, ui], journeys: [] }).unnamedChains;
+    expect(empty.map((c) => [c.id, c.complete, c.apiOnly])).toEqual([
+      ["ch_nostore", false, false], ["ch_route", false, true], ["ch_ui", true, false],
     ]);
   });
 
   it("a journey whose chains are gone is not complete and has no stops", () => {
     const out = journeyRows({ chains: [], journeys: [journey("j_x", { chainIds: ["ch_gone"], status: "orphaned" })] });
     expect(out.journeys[0]).toMatchObject({
-      status: "orphaned", complete: false, confidence: "exact", repos: [], tables: [],
+      status: "orphaned", complete: false, apiOnly: false, confidence: "exact", repos: [], tables: [],
       stops: { ui: 0, api: 0, code: 0, db: 0, queue: 0 },
     });
   });

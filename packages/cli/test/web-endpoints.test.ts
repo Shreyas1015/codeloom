@@ -39,9 +39,9 @@ const OverviewResponse = z.strictObject({
 
 const JourneyRow = z.strictObject({
   id: z.string(), name: z.string(), area: z.string(), note: z.string(), status: z.enum(["ok", "orphaned"]),
-  chainIds: z.array(z.string()), repos: z.array(z.string()), stops: laneCounts, confidence, complete: z.boolean(), tables: z.array(z.string()),
+  chainIds: z.array(z.string()), repos: z.array(z.string()), stops: laneCounts, confidence, complete: z.boolean(), apiOnly: z.boolean(), tables: z.array(z.string()),
 });
-const ChainRow = z.strictObject({ id: z.string(), name: z.string(), entry: z.string(), confidence, complete: z.boolean(), repos: z.array(z.string()) });
+const ChainRow = z.strictObject({ id: z.string(), name: z.string(), entry: z.string(), confidence, complete: z.boolean(), apiOnly: z.boolean(), repos: z.array(z.string()) });
 const JourneysResponse = z.strictObject({ journeys: z.array(JourneyRow), unnamedChains: z.array(ChainRow) });
 
 const StopView = z.strictObject({

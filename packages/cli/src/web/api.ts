@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
+import { chainReach } from "../linker/completeness.js";
 import { formatNodeRef, loadMapState, type MapState } from "../mcp/state.js";
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
@@ -122,8 +123,16 @@ const RANK: Record<Confidence, number> = { exact: 0, param: 1, guess: 2 };
 const worst = (a: Confidence, b: Confidence): Confidence => (RANK[b] > RANK[a] ? b : a);
 const sortedSet = (xs: Iterable<string>) => [...new Set(xs)].sort(compare);
 
+/** H3: reaches a store but has no UI stop ("API → DB"). Never true for a complete chain. */
+function isApiOnly(c: Chain): boolean {
+  return !c.complete && chainReach(c.stops) === "api-only";
+}
+
 function chainRow(c: Chain): ChainRow {
-  return { id: c.id, name: c.name, entry: c.entry, confidence: c.confidence, complete: c.complete, repos: sortedSet(c.stops.map((s) => s.repo)) };
+  return {
+    id: c.id, name: c.name, entry: c.entry, confidence: c.confidence, complete: c.complete, apiOnly: isApiOnly(c),
+    repos: sortedSet(c.stops.map((s) => s.repo)),
+  };
 }
 
 /** Home's lists: every journey summarised over its chains (stops deduped the way get_journey does),
@@ -149,10 +158,12 @@ export function journeyRows(state: Pick<MapState, "chains" | "journeys">): Journ
         stops[s.lane]++;
       }
     }
+    const allPresent = chains.length > 0 && chains.length === chainIds.length;
+    const complete = allPresent && chains.every((c) => c.complete);
     return {
       id: j.id, name: j.name, area: j.area, note: j.note, status: j.status, chainIds,
-      repos: sortedSet(repos), stops, confidence,
-      complete: chains.length > 0 && chains.length === chainIds.length && chains.every((c) => c.complete),
+      repos: sortedSet(repos), stops, confidence, complete,
+      apiOnly: !complete && allPresent && chains.every((c) => c.complete || isApiOnly(c)),
       tables: sortedSet(tables),
     };
   });
