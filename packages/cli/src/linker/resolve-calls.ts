@@ -243,7 +243,7 @@ export const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
   "load", "loadCount", "preload", "related", "merge", "fill", "save", "create", "createMany", "update", "updateOrCreate",
   "firstOrCreate", "first", "firstOrFail", "query", "where", "whereIn", "andWhere", "orWhere", "orderBy", "limit", "offset",
   "select", "insert", "del", "exec", "findOrFail", "findBy", "findByOrFail", "findMany", "findOne", "findAll", "findById",
-  "paginate", "count", "refresh", "serialize", "destroy", "remove", "upsert", "populate", "lean", "all", "transaction",
+  "paginate", "count", "refresh", "serialize", "destroy", "remove", "upsert", "populate", "lean", "transaction",
 ]);
 
 const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|fixtures|__mocks__)\//;

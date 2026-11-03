@@ -344,15 +344,15 @@ describe("store sites are terminals (Task 12 fix)", () => {
     const files = {
       "src/notify.ts": [
         "export async function handleEmail(msg) {",
-        "  await db.create({ data: {} });",
+        "  await db.issue({ data: {} });",
         '  await channel.publish("billing", "x");',
         "}",
         "",
       ].join("\n"),
-      // `db.create(...)` / `channel.publish(...)` would otherwise be unique-method guesses onto these.
+      // `db.issue(...)` / `channel.publish(...)` would otherwise be unique-method guesses onto these.
       "src/invoice-service.ts": [
         "export const invoiceService = {",
-        "  async create(data) {",
+        "  async issue(data) {",
         "    return store.insertInvoice(data);",
         "  },",
         "  async publish(id) {",
@@ -369,13 +369,13 @@ describe("store sites are terminals (Task 12 fix)", () => {
       ],
       dbAccess: [
         { table: "email_logs", op: "insert", via: "prisma", at: { file: "src/notify.ts", line: 2, symbol: "handleEmail" } },
-        { table: "invoices", op: "insert", via: "prisma", at: { file: "src/invoice-service.ts", line: 3, symbol: "invoiceService.create" } },
+        { table: "invoices", op: "insert", via: "prisma", at: { file: "src/invoice-service.ts", line: 3, symbol: "invoiceService.issue" } },
         { table: "outbox", op: "insert", via: "prisma", at: { file: "src/invoice-service.ts", line: 6, symbol: "invoiceService.publish" } },
       ],
     });
     // Sanity: without the fix these sites do resolve (as guesses), so the walk would follow them.
     expect(resolver.callsFrom({ repo: "billing", file: "src/notify.ts", symbol: "handleEmail" }).map((c) => c.target.symbol))
-      .toEqual(["invoiceService.create", "invoiceService.publish"]);
+      .toEqual(["invoiceService.issue", "invoiceService.publish"]);
     const [link] = linkConsumers({ ws: ws([data]), resolvers: new Map([["billing", resolver]]) });
     expect(link!.hits.map((h) => (h.kind === "db" ? h.access.table : h.op.queue))).toEqual(["email_logs", "billing:x"]);
     expect(link!.hits.every((h) => h.viaPath.length === 1)).toBe(true);
