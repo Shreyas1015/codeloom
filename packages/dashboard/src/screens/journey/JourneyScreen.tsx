@@ -126,7 +126,7 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
                 <ChainsView chains={data.chains} model={m} selected={selected} onSelect={select} />
               </TabsContent>
             </div>
-            <StopInspector stop={current} journeyId={data.journey?.id ?? id} />
+            <StopInspector stop={current} journeyId={data.journey?.id ?? id} model={m} onSelect={select} />
           </div>
           <p role="status" aria-live="polite" aria-label="Selected stop" className="sr-only">
             {current ? stopLabel(current.n, stopTitle(current.view)) : ""}

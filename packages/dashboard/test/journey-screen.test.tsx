@@ -20,7 +20,7 @@ const overview: Overview = {
 };
 
 const storeNode: NodeResult = {
-  ref: "api::fn:app/controllers/invoices_controller.ts:InvoicesController.store",
+  ref: "api::function:app/controllers/invoices_controller.ts:InvoicesController.store",
   node: { type: "function", name: "InvoicesController.store", filePath: "app/controllers/invoices_controller.ts", lineRange: [41, 52] },
   summary: "Validates the invoice and saves it for the customer.",
   edges: { out: [], in: [], truncated: false },
@@ -33,8 +33,8 @@ const storeNode: NodeResult = {
 const storeNeighbors: NeighborsResult = {
   root: storeNode.ref,
   neighbors: [
-    { ref: "api::fn:start/routes.ts:routes", name: "routes", type: "function", depth: 1, via: { type: "calls", direction: "in" } },
-    { ref: "api::fn:app/services/invoice.ts:InvoiceService.create", name: "InvoiceService.create", type: "function", depth: 1, via: { type: "calls", direction: "out" } },
+    { ref: "api::function:start/routes.ts:routes", name: "routes", type: "function", depth: 1, via: { type: "calls", direction: "in" } },
+    { ref: "api::function:app/services/invoice.ts:InvoiceService.create", name: "InvoiceService.create", type: "function", depth: 1, via: { type: "calls", direction: "out" } },
     { ref: "api::file:app/models/invoice.ts", name: "invoice.ts", type: "file", depth: 1, via: { type: "imports", direction: "out" } },
   ],
   truncated: false,
@@ -198,6 +198,44 @@ describe("Journey screen", () => {
     const link = within(also).getByRole("link", { name: "Customer edits an invoice" });
     expect(link).toHaveAttribute("href", "/journeys/j_edit");
     expect(within(also).queryByText("Customer creates an invoice")).toBeNull();
+  });
+
+  it("lists the linker's hops to and from the stop, each with its confidence", async () => {
+    stubApi();
+    const router = renderAt("/journeys/j_invoice?stop=4");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    const from = await within(inspector).findByRole("list", { name: "Reached from" });
+    expect(from.textContent).toBe("3 · POST /api/invoices (exact)");
+    const to = within(inspector).getByRole("list", { name: "Leads to" });
+    expect(within(to).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["5 · invoices (exact)", "6 · invoice_lines (exact)"]);
+    await userEvent.click(within(to).getByRole("button", { name: "6 · invoice_lines" }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ stop: 6 }));
+  });
+
+  it("words a guessed hop as a guess, with its reason", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice?stop=8");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    const from = await within(inspector).findByRole("list", { name: "Reached from" });
+    expect(within(from).getByText("(guess)")).toHaveAttribute("data-confidence", "guess");
+    expect(within(from).getByText("URL built at runtime; matched by prefix")).toBeInTheDocument();
+  });
+
+  it("never states 'None found' for a stop whose ref fell back to its class", async () => {
+    const classRef = "api::class:app/controllers/invoices_controller.ts:InvoicesController";
+    const fallback = {
+      ...journeyResult,
+      chains: journeyResult.chains.map((c) => ({ ...c, stops: c.stops.map((s) => (s.ref === storeNode.ref ? { ...s, ref: classRef } : s)) })),
+    };
+    const fetch = stubApi({ j_invoice: fallback });
+    renderAt("/journeys/j_invoice?stop=4");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    expect(await within(inspector).findByText(/Call edges for methods aren't mapped yet/)).toBeInTheDocument();
+    expect(within(inspector).queryByText("None found")).toBeNull();
+    expect(within(inspector).queryByRole("heading", { name: "Called by" })).toBeNull();
+    expect(within(inspector).queryByRole("heading", { name: "Calls" })).toBeNull();
+    expect(within(inspector).getByRole("list", { name: "Leads to" })).toBeInTheDocument();
+    expect(urls(fetch).filter((u) => u.startsWith("/api/neighbors/"))).toEqual([]);
   });
 
   it("asks for no node or neighbours for a stop without a ref", async () => {

@@ -7,7 +7,7 @@ export type StopWithFrom = StopView & { from?: number };
  * `from` = index (in the same chain's stops) of the stop this one was reached from. */
 export const page: StopWithFrom = {
   lane: "ui", kind: "page", repo: "web", file: "app/invoices/new/page.tsx", line: 12, symbol: "NewInvoicePage",
-  label: "/invoices/new", confidence: "exact", ref: "web::fn:app/invoices/new/page.tsx:NewInvoicePage",
+  label: "/invoices/new", confidence: "exact", ref: "web::function:app/invoices/new/page.tsx:NewInvoicePage",
 };
 export const postCall: StopWithFrom = {
   lane: "ui", kind: "call", repo: "web", file: "lib/api.ts", line: 30, symbol: "createInvoice", label: "POST /api/invoices",
@@ -19,7 +19,7 @@ const postRoute: StopWithFrom = {
 };
 export const store: StopWithFrom = {
   lane: "code", kind: "handler", repo: "api", file: "app/controllers/invoices_controller.ts", line: 41, symbol: "InvoicesController.store",
-  confidence: "exact", ref: "api::fn:app/controllers/invoices_controller.ts:InvoicesController.store", from: 2,
+  confidence: "exact", ref: "api::function:app/controllers/invoices_controller.ts:InvoicesController.store", from: 2,
 };
 const insertInvoice: StopWithFrom = {
   lane: "db", kind: "db", repo: "api", file: "app/controllers/invoices_controller.ts", line: 44, symbol: "InvoicesController.store",
