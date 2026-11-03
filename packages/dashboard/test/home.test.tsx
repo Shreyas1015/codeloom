@@ -311,11 +311,11 @@ describe("Home", () => {
       expect(items[0]).toHaveTextContent("web/src/pages/customer.tsx");
       expect(items[1]).toHaveTextContent("Guess");
       expect(items[1]).toHaveTextContent("Incomplete");
-      expect(section).toHaveTextContent("Ask your agent: /codeloom:name-journeys");
+      expect(section).toHaveTextContent("Ask your agent: /mcp__codeloom__name-journeys");
       await act(async () => {
         fireEvent.click(within(section).getByRole("button", { name: /Copy/ }));
       });
-      expect(writeText).toHaveBeenCalledWith("/codeloom:name-journeys");
+      expect(writeText).toHaveBeenCalledWith("/mcp__codeloom__name-journeys");
       expect(await within(section).findByRole("button", { name: "Copied" })).toBeInTheDocument();
       expect(within(section).getByRole("status")).toHaveTextContent("Copied");
     });
@@ -331,7 +331,7 @@ describe("Home", () => {
         fireEvent.click(within(section).getByRole("button", { name: /Copy/ }));
       });
       expect(within(section).getByRole("status")).toHaveTextContent("Copy failed — select the text");
-      expect(within(section).getByText("/codeloom:name-journeys")).toHaveClass("select-all");
+      expect(within(section).getByText("/mcp__codeloom__name-journeys")).toHaveClass("select-all");
     });
 
     it("is hidden when every chain is named", async () => {
@@ -352,7 +352,7 @@ describe("Home", () => {
       const main = await screen.findByRole("main");
       expect(await within(main).findByText("No journeys found")).toBeInTheDocument();
       expect(within(main).getByRole("link", { name: /Open the map/ })).toHaveAttribute("href", "/map");
-      expect(main).toHaveTextContent("/codeloom:name-journeys");
+      expect(main).toHaveTextContent("/mcp__codeloom__name-journeys");
       expect(screen.queryByRole("list", { name: "User journeys" })).toBeNull();
     });
 

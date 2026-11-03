@@ -39,7 +39,7 @@ test("Home shows the six workspace counts and the unnamed chains hint", async ({
   await expect(home.getByText("No named journeys yet.")).toBeVisible();
   await expect(home.getByRole("heading", { name: /Unnamed chains/ })).toContainText("7");
   await expect(home.getByRole("list", { name: "Unnamed chains" }).getByRole("listitem")).toHaveCount(7);
-  await expect(home.getByText("/codeloom:name-journeys").first()).toBeVisible();
+  await expect(home.getByText("/mcp__codeloom__name-journeys").first()).toBeVisible();
 
   await page.screenshot({ path: join(SCREENSHOTS, "home-unnamed.png"), fullPage: true });
 });

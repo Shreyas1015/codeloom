@@ -9,7 +9,7 @@ import { LANES } from "./filter";
 /** Lists render this many rows, then "Show more" adds the next batch. */
 export const PAGE = 200;
 
-export const NAME_JOURNEYS = "/codeloom:name-journeys";
+export const NAME_JOURNEYS = "/mcp__codeloom__name-journeys";
 
 /** A roundel's ring and number in its lane's hue; the queue lane reads in the DB umber family. */
 const LANE_RING: Record<Lane, string> = {
@@ -90,7 +90,7 @@ export function CompleteMark({ complete }: { complete: boolean }) {
   );
 }
 
-/** "Ask your agent: /codeloom:name-journeys" with a copy button. */
+/** "Ask your agent: /mcp__codeloom__name-journeys" with a copy button. */
 export function AgentHint({ className, tone = "default" }: { className?: string; tone?: "default" | "quiet" }) {
   return (
     <p className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px]", tone === "quiet" && "text-muted-foreground", className)}>
