@@ -193,7 +193,11 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
         <div aria-hidden className={cn("hidden border-b border-border bg-muted/40 px-5 py-2 text-xs font-semibold text-muted-foreground", COLS)}>
           <span>Journey</span>
           <span>Area</span>
-          <span>Stops · UI · API · Code · DB · Queue</span>
+          {/* the lane words in their roundel hues: the header doubles as the legend */}
+          <span>
+            Stops · <span className="text-lane-ui">UI</span> · <span className="text-lane-api">API</span> · <span className="text-lane-code">Code</span> ·{" "}
+            <span className="text-lane-db">DB</span> · <span className="text-lane-db">Queue</span>
+          </span>
           <span>Repos</span>
           <span>Confidence</span>
         </div>

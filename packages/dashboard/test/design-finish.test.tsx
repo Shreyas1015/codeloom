@@ -31,18 +31,14 @@ describe("Map inspector with nothing selected", () => {
 });
 
 describe("breakPieces", () => {
-  it("breaks a path after each slash and dot, never inside a segment", () => {
-    expect(breakPieces("app/controllers/customers_controller.ts:9")).toEqual([
-      "app/",
-      "controllers/",
-      "customers_",
-      "controller.",
-      "ts:9",
-    ]);
+  it("breaks a path after each slash and underscore, keeping the extension and line with the name", () => {
+    expect(breakPieces("app/controllers/customers_controller.ts:9")).toEqual(["app/", "controllers/", "customers_", "controller.ts:9"]);
+    expect(breakPieces("app/customers/new/page.tsx:1")).toEqual(["app/", "customers/", "new/", "page.tsx:1"]);
   });
 
-  it("breaks a code name at its humps and dots", () => {
-    expect(breakPieces("CustomersController.store")).toEqual(["Customers", "Controller.", "store"]);
+  it("breaks a code name at its humps and at dots before a long part", () => {
+    expect(breakPieces("CustomersController.store")).toEqual(["Customers", "Controller.store"]);
+    expect(breakPieces("InvoiceService.markInvoicePaid")).toEqual(["Invoice", "Service.", "mark", "Invoice", "Paid"]);
     expect(breakPieces("POST /api/customers")).toEqual(["POST /", "api/", "customers"]);
   });
 

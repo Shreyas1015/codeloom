@@ -1,8 +1,8 @@
 import { Fragment, type ReactNode } from "react";
 
-/** Where a path or code name may wrap: after "/" (paths) and "." "_" "-" (names; a ":line" stays with its file), and at a
+/** Where a path or code name may wrap: after "/" (paths) and "." "_" "-" (names; a file extension and its ":line" stay with the name), and at a
  * lowercase→Uppercase hump ("Customers|Controller"). Never inside a word otherwise. */
-const BREAK = /(?<=[/._\-])(?=.)|(?<=[a-z0-9])(?=[A-Z])/;
+const BREAK = /(?<=[/_\-])(?=.)|(?<=\.)(?![a-z0-9]{1,5}(?::\d+)?$)(?=.)|(?<=[a-z0-9])(?=[A-Z])/;
 
 /** The pieces `text` splits into at its break points ("app/", "controllers/", "x.ts:9"). */
 export function breakPieces(text: string): string[] {

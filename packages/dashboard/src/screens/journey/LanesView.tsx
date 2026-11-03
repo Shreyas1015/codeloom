@@ -55,6 +55,9 @@ function wireHops(model: JourneyModel): JourneyHop[] {
 }
 
 /** UI / API / Code / DB (+ Queue) lanes, with SVG wires between stops in different lanes. */
+/** The narrowest a lane gets (px) before the board scrolls sideways: room for a stop name on two lines. */
+const LANE_MIN = 184;
+
 export function LanesView({ result, model, selected, onSelect }: LanesViewProps) {
   const lanes = LANE_ORDER.filter((l) => l !== "queue" || model.showQueue);
   const hops = useMemo(() => wireHops(model), [model]);
@@ -103,38 +106,41 @@ export function LanesView({ result, model, selected, onSelect }: LanesViewProps)
 
   return (
     <div className="flex flex-col gap-4">
-      <div ref={box} className="relative rounded-xl border border-border bg-card p-3">
-        <svg aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-visible" width={size.w} height={size.h}>
-          {wires.map(({ hop, d }) => {
-            const s = confidenceStroke(hop.confidence);
-            return (
-              <path
-                key={`${hop.from}>${hop.to}`}
-                data-slot="journey-wire"
-                data-from={hop.from}
-                data-to={hop.to}
-                data-confidence={hop.confidence}
-                d={d}
-                fill="none"
-                stroke={s.stroke}
-                strokeWidth={s.strokeWidth}
-                strokeDasharray={s.strokeDasharray}
-                strokeLinecap="round"
+      {/* lanes never squeeze below LANE_MIN: on a narrow window the board scrolls sideways instead */}
+      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <div ref={box} className="relative p-3" style={{ minWidth: lanes.length * LANE_MIN + (lanes.length - 1) * 10 + 24 }}>
+          <svg aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-visible" width={size.w} height={size.h}>
+            {wires.map(({ hop, d }) => {
+              const s = confidenceStroke(hop.confidence);
+              return (
+                <path
+                  key={`${hop.from}>${hop.to}`}
+                  data-slot="journey-wire"
+                  data-from={hop.from}
+                  data-to={hop.to}
+                  data-confidence={hop.confidence}
+                  d={d}
+                  fill="none"
+                  stroke={s.stroke}
+                  strokeWidth={s.strokeWidth}
+                  strokeDasharray={s.strokeDasharray}
+                  strokeLinecap="round"
+                />
+              );
+            })}
+          </svg>
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(0, 1fr))` }}>
+            {lanes.map((l) => (
+              <LaneColumn
+                key={l}
+                lane={l}
+                subtitle={subtitle(l)}
+                stops={laneStops(model.lanes[l], model.hops)}
+                selectedIndex={selected}
+                onSelect={onSelect}
               />
-            );
-          })}
-        </svg>
-        <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(0, 1fr))` }}>
-          {lanes.map((l) => (
-            <LaneColumn
-              key={l}
-              lane={l}
-              subtitle={subtitle(l)}
-              stops={laneStops(model.lanes[l], model.hops)}
-              selectedIndex={selected}
-              onSelect={onSelect}
-            />
-          ))}
+            ))}
+          </div>
         </div>
       </div>
       {/* the wires are drawn for the eye only; this is the same set of hops in words */}
