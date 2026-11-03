@@ -115,12 +115,14 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
               Chains
             </TabsTrigger>
           </TabsList>
-          <div className="grid min-h-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="grid min-h-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div ref={body} className="min-w-0">
               <TabsContent value="lanes">
+                <h2 className="sr-only">Stops by lane</h2>
                 <LanesView result={data} model={m} selected={selected} onSelect={select} />
               </TabsContent>
               <TabsContent value="chains">
+                <h2 className="sr-only">Stops by chain</h2>
                 <ChainsView chains={data.chains} model={m} selected={selected} onSelect={select} />
               </TabsContent>
             </div>

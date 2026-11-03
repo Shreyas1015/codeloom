@@ -5,9 +5,10 @@ import { MapCanvas, type MapCanvasProps } from "@/screens/map/MapCanvas";
 import { type MapStop, levelItems } from "@/screens/map/layout";
 
 const setCenter = vi.fn();
+const setViewport = vi.fn();
 vi.mock("@xyflow/react", async (importOriginal) => {
   const real = await importOriginal<typeof import("@xyflow/react")>();
-  return { ...real, useReactFlow: () => ({ ...real, setCenter, getViewport: () => ({ x: 0, y: 0, zoom: 0.8 }) }) };
+  return { ...real, useReactFlow: () => ({ ...real, setCenter, setViewport, getViewport: () => ({ x: 0, y: 0, zoom: 0.8 }) }) };
 });
 
 // React Flow reads the viewport transform through DOMMatrixReadOnly, which jsdom lacks.

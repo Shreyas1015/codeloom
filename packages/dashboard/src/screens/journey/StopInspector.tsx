@@ -4,6 +4,7 @@ import { useCode, useNeighbors, useNode } from "@/api/queries";
 import type { Neighbor } from "@/api/types";
 import { CodeBlock } from "@/components/code/CodeBlock";
 import { StopRoundel } from "@/components/gallery/StopRoundel";
+import { Breakable } from "@/lib/breakable";
 import { type JourneyStop, stopTitle } from "./model";
 import { fileLine, KIND_WORD } from "./words";
 
@@ -52,7 +53,9 @@ function StopDetails({ stop, journeyId }: { stop: JourneyStop; journeyId: string
         <StopRoundel n={stop.n} label={title} state="selected" decorative className="mt-0.5" />
         <div className="flex min-w-0 flex-col gap-0.5">
           <h2 className="text-[15px] leading-snug font-bold break-words">{title}</h2>
-          <span className="font-mono text-xs break-all text-muted-foreground">{fileLine(v.file, v.line)}</span>
+          <span className="font-mono text-xs wrap-break-word text-muted-foreground">
+            <Breakable text={fileLine(v.file, v.line)} />
+          </span>
           <span className="text-xs text-muted-foreground">
             {KIND_WORD[v.kind] ?? v.kind} · <span className="font-mono">{v.repo}</span>
             {v.op ? ` · ${v.op}` : ""}

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { Breakable } from "@/lib/breakable";
 import { cn } from "@/lib/utils";
 import { type Confidence, ConfidenceLine } from "./ConfidenceLine";
 import { StopRoundel, stopLabel } from "./StopRoundel";
@@ -54,7 +55,7 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
       aria-labelledby={`${id}-h`}
       data-slot="lane-column"
       data-lane={lane}
-      className={cn("flex min-w-0 flex-col gap-3.5 rounded-[10px] p-3", style.ground, className)}
+      className={cn("flex min-w-0 flex-col gap-3 rounded-[10px] p-2.5", style.ground, className)}
     >
       <h3 className={cn("flex items-baseline justify-between gap-2 text-[12.5px] font-bold", style.ink)}>
         <span id={`${id}-h`}>{name}</span>
@@ -76,12 +77,24 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
                   decorative={!!onSelect}
                   className={s.unresolved && selected ? "shadow-[0_0_0_4px_rgb(227_167_47_/_0.35)]" : undefined}
                 />
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-[13.5px] font-semibold text-foreground">{s.label}</span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  {/* names and paths wrap at "/", "." and word humps (title two lines at most, path three), never mid-segment;
+                      the full text is the tooltip */}
+                  <span title={s.label} className="line-clamp-2 text-[13px] leading-[1.3] font-semibold wrap-break-word text-foreground">
+                    <Breakable text={s.label} />
+                  </span>
                   {s.detail ? (
-                    <span id={detailId} className="truncate font-mono text-xs text-muted-foreground">
-                      {s.detail}
-                    </span>
+                    <>
+                      <span aria-hidden={onSelect ? true : undefined} title={s.detail} className="line-clamp-3 font-mono text-[11.5px] leading-[1.35] wrap-break-word text-muted-foreground">
+                        <Breakable text={s.detail} />
+                      </span>
+                      {/* a button's description: the plain path (the wrap points above are for the eye only) */}
+                      {onSelect ? (
+                        <span id={detailId} className="sr-only">
+                          {s.detail}
+                        </span>
+                      ) : null}
+                    </>
                   ) : null}
                   {s.note ? <span className="mt-0.5 text-xs text-muted-foreground">{s.note}</span> : null}
                 </span>
@@ -90,7 +103,7 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
             // like the roundel, "unresolved" wins the border: a selected unresolved stop keeps its dashed
             // oxblood edge, and the selection sits outside it as the ochre ring
             const card = cn(
-              "relative flex w-full items-start gap-2.5 rounded-[9px] border bg-card px-3 py-2.5 text-left shadow-[0_1px_2px_rgb(20_40_35_/_0.06)]",
+              "relative flex w-full items-start gap-2 rounded-[9px] border bg-card px-2.5 py-2 text-left shadow-[0_1px_2px_rgb(20_40_35_/_0.06)]",
               s.unresolved ? "border-dashed border-destructive" : selected ? "border-accent-foreground" : "border-border",
               selected && "shadow-[0_0_0_3px_rgb(227_167_47_/_0.4)]",
             );
@@ -99,7 +112,7 @@ export function LaneColumn({ lane, subtitle, stops, selectedIndex, onSelect, cla
                 {i === 0 ? null : s.connected === false ? (
                   <span aria-hidden="true" data-slot="lane-gap" className="block h-3.5" />
                 ) : (
-                  <ConfidenceLine confidence={s.confidence ?? "exact"} reason={s.reason} className="ml-[17px]" />
+                  <ConfidenceLine confidence={s.confidence ?? "exact"} reason={s.reason} className="ml-[15px]" />
                 )}
                 {onSelect ? (
                   <button

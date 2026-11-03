@@ -103,7 +103,7 @@ export function LanesView({ result, model, selected, onSelect }: LanesViewProps)
 
   return (
     <div className="flex flex-col gap-4">
-      <div ref={box} className="relative rounded-xl border border-border bg-card p-3.5">
+      <div ref={box} className="relative rounded-xl border border-border bg-card p-3">
         <svg aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-visible" width={size.w} height={size.h}>
           {wires.map(({ hop, d }) => {
             const s = confidenceStroke(hop.confidence);
@@ -124,7 +124,7 @@ export function LanesView({ result, model, selected, onSelect }: LanesViewProps)
             );
           })}
         </svg>
-        <div className="grid gap-3.5" style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(0, 1fr))` }}>
+        <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(0, 1fr))` }}>
           {lanes.map((l) => (
             <LaneColumn
               key={l}
