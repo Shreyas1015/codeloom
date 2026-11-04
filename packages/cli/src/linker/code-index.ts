@@ -42,7 +42,9 @@ export interface ClassField {
 }
 
 /** A name bound to one key of a hook's result (H10): in `const { handleSubmit, onDelete: remove } =
- * useCustomerForm()`, `remove` is `{ hook: "useCustomerForm", key: "onDelete" }`. */
+ * useCustomerForm()`, `remove` is `{ hook: "useCustomerForm", key: "onDelete" }`. v0.2a: `key` is a path —
+ * nested destructuring joins keys with "." and array positions read "[i]" (`const [save] = useX()` -> "[0]",
+ * `const { form: { submit } } = useX()` -> "form.submit"). */
 export interface HookKey {
   hook: string;
   key: string;
@@ -58,6 +60,9 @@ export type Callee =
     kind: "member"; object: string; prop: string;
     /** Set when the nearest declaration of `object` in scope is `const object = useX()` (H10): the hook's name. */
     hook?: string;
+    /** Set with `hook` when `object` is itself one key of the hook's result (`const { form } = useX()`):
+     * that key, so `form.submit` reads key "form.submit". */
+    hookKey?: string;
     /** What the receiver is known to be from its nearest declaration in scope (H4): a type name from a
      * parameter/variable annotation (`q: Queue` -> "Queue", `ids: number[]` -> "Array", `s: string` ->
      * "String") or from its initializer (`[]` -> "Array", `{}` -> "Object", `new Map()` -> "Map", a string
@@ -284,6 +289,8 @@ function classify(expr: ts.Expression): Callee {
     if (ts.isIdentifier(obj)) {
       const hook = wholeHookOf(obj);
       if (hook !== undefined) return { kind: "member", object: obj.text, prop, hook };
+      const keyed = hookKeyOf(obj);
+      if (keyed) return { kind: "member", object: obj.text, prop, hook: keyed.hook, hookKey: keyed.key };
       const recvType = receiverTypeOf(obj);
       return recvType !== undefined ? { kind: "member", object: obj.text, prop, recvType } : { kind: "member", object: obj.text, prop };
     }
@@ -649,19 +656,34 @@ function nearestDeclaration(id: ts.Identifier, stop?: ts.Node): ts.Identifier | 
 }
 
 /** `name` destructured from a hook call by its nearest declaration (`const { handleSubmit, onDelete: remove }
- * = useCustomerForm()`): the hook and the key. Rest elements (`...rest`), nested patterns and computed keys
- * are not followed. */
+ * = useCustomerForm()`): the hook and the key path. Nested patterns (`{ form: { submit } }`) and array
+ * patterns (`[save]`) are followed up to MAX_HOOK_KEY_DEPTH levels; rest elements (`...rest`) and computed
+ * keys are not. */
 function hookKeyOf(id: ts.Identifier): HookKey | undefined {
   const decl = nearestDeclaration(id);
-  const el = decl?.parent;
-  if (!el || !ts.isBindingElement(el) || el.dotDotDotToken || !ts.isObjectBindingPattern(el.parent)) return undefined;
-  const d = el.parent.parent;
-  if (!ts.isVariableDeclaration(d)) return undefined;
-  const hook = hookCallName(d.initializer);
-  if (hook === undefined) return undefined;
-  const prop = el.propertyName;
-  const key = !prop ? id.text : ts.isIdentifier(prop) || ts.isStringLiteral(prop) ? prop.text : undefined;
-  return key === undefined ? undefined : { hook, key };
+  let el: ts.Node | undefined = decl?.parent;
+  if (!el || !ts.isBindingElement(el)) return undefined;
+  const path: string[] = [];
+  for (;;) {
+    if (!ts.isBindingElement(el) || el.dotDotDotToken) return undefined;
+    const pattern: ts.Node = el.parent;
+    if (ts.isObjectBindingPattern(pattern)) {
+      const prop = el.propertyName;
+      const key = !prop ? (ts.isIdentifier(el.name) ? el.name.text : undefined)
+        : ts.isIdentifier(prop) || ts.isStringLiteral(prop) ? prop.text : undefined;
+      if (key === undefined) return undefined;
+      path.unshift(key);
+    } else if (ts.isArrayBindingPattern(pattern)) {
+      path.unshift(`[${pattern.elements.indexOf(el as ts.BindingElement)}]`);
+    } else return undefined;
+    if (path.length > MAX_HOOK_KEY_DEPTH) return undefined;
+    const up = pattern.parent;
+    if (ts.isVariableDeclaration(up)) {
+      const hook = hookCallName(up.initializer);
+      return hook === undefined ? undefined : { hook, key: path.join(".") };
+    }
+    el = up;
+  }
 }
 
 /** `object` bound by its nearest declaration to a whole hook result (`const form = useCustomerForm()`). */
@@ -720,33 +742,77 @@ function returnedExprs(fn: ts.FunctionLikeDeclaration): ts.Expression[] {
   return out;
 }
 
-/** Keys hook `hook` returns as handlers. Every returned value must be an object literal (or null / undefined);
- * any other return makes every key unknown. A key given two different targets is dropped; so is one a later
- * spread (`...base`) may override. */
+/** Max key-path segments followed into a hook's result (`form.submit`, `[0].pay`). */
+const MAX_HOOK_KEY_DEPTH = 3;
+
+/** Keys hook `hook` returns as handlers. Every returned value must be an object literal (or null / undefined),
+ * or every one an array literal (v0.2a: keys "[0]", "[1]", …); any other return, or a mix of the two, makes
+ * every key unknown. Object/array literals nested in the result are followed (keys "form.submit", "[0].pay")
+ * up to MAX_HOOK_KEY_DEPTH levels. A key given two different targets is dropped; so is one a later spread
+ * (`...base`) may override, an array position after a spread, and any key under a key that is also a plain
+ * value somewhere. */
 function hookReturnsOf(fn: ts.FunctionLikeDeclaration, hook: string): HookReturn[] {
   const byKey = new Map<string, HookReturn["target"] | null>();
-  for (const raw of returnedExprs(fn)) {
-    const e = unwrapExpr(raw);
-    if (e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined")) continue;
-    if (!ts.isObjectLiteralExpression(e)) return [];
-    const props = e.properties;
+  const set = (key: string, target: HookReturn["target"] | undefined): void => {
+    const prev = byKey.get(key);
+    if (prev === null) return;
+    if (!target || (prev !== undefined && JSON.stringify(prev) !== JSON.stringify(target))) byKey.set(key, null);
+    else byKey.set(key, target);
+  };
+  /** Keys whose value is a nested literal (never handlers themselves). */
+  const containers = new Set<string>();
+  const collect = (lit: ts.ObjectLiteralExpression | ts.ArrayLiteralExpression, prefix: string[]): void => {
+    const visit = (seg: string, value: ts.Expression | undefined, target: () => HookReturn["target"] | undefined): void => {
+      const path = [...prefix, seg];
+      const key = path.join(".");
+      const v = value && unwrapExpr(value);
+      if (v && (ts.isObjectLiteralExpression(v) || ts.isArrayLiteralExpression(v))) {
+        containers.add(key);
+        if (path.length < MAX_HOOK_KEY_DEPTH) collect(v, path);
+        return;
+      }
+      set(key, target());
+    };
+    if (ts.isArrayLiteralExpression(lit)) {
+      for (let i = 0; i < lit.elements.length; i++) {
+        const el = lit.elements[i]!;
+        if (ts.isSpreadElement(el)) break; // later positions are unknown
+        if (ts.isOmittedExpression(el)) continue;
+        visit(`[${i}]`, el, () => hookValueTarget(el, fn));
+      }
+      return;
+    }
+    const props = lit.properties;
     for (let i = 0; i < props.length; i++) {
       const p = props[i]!;
       if (ts.isSpreadAssignment(p)) continue;
       const key = ts.isShorthandPropertyAssignment(p) ? p.name.text : memberName(p.name);
       if (key === undefined) continue;
-      const overridden = props.slice(i + 1).some((q) => ts.isSpreadAssignment(q));
-      const target = overridden ? undefined
-        : ts.isShorthandPropertyAssignment(p) ? hookValueTarget(p.name, fn)
-          : ts.isPropertyAssignment(p) ? hookValueTarget(p.initializer, fn)
-            : ts.isMethodDeclaration(p) ? inlineTarget(p) : undefined;
-      const prev = byKey.get(key);
-      if (prev === null) continue;
-      if (!target || (prev !== undefined && JSON.stringify(prev) !== JSON.stringify(target))) byKey.set(key, null);
-      else byKey.set(key, target);
+      if (props.slice(i + 1).some((q) => ts.isSpreadAssignment(q))) {
+        set([...prefix, key].join("."), undefined);
+        continue;
+      }
+      if (ts.isShorthandPropertyAssignment(p)) visit(key, undefined, () => hookValueTarget(p.name, fn));
+      else if (ts.isPropertyAssignment(p)) visit(key, p.initializer, () => hookValueTarget(p.initializer, fn));
+      else visit(key, undefined, () => (ts.isMethodDeclaration(p) ? inlineTarget(p) : undefined));
     }
+  };
+  let shape: "object" | "array" | undefined;
+  for (const raw of returnedExprs(fn)) {
+    const e = unwrapExpr(raw);
+    if (e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined")) continue;
+    const kind = ts.isObjectLiteralExpression(e) ? "object" : ts.isArrayLiteralExpression(e) ? "array" : undefined;
+    if (!kind || (shape !== undefined && shape !== kind)) return [];
+    shape = kind;
+    collect(e as ts.ObjectLiteralExpression | ts.ArrayLiteralExpression, []);
   }
-  return [...byKey].flatMap(([key, target]) => (target ? [{ hook, key, target }] : []));
+  // A key under a key that is a plain value (or unknown) in some other return is not trusted.
+  const underValue = (key: string): boolean => {
+    const parts = key.split(".");
+    for (let i = 1; i < parts.length; i++) if (byKey.has(parts.slice(0, i).join("."))) return true;
+    return false;
+  };
+  return [...byKey].flatMap(([key, target]) => (target && !containers.has(key) && !underValue(key) ? [{ hook, key, target }] : []));
 }
 
 export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {

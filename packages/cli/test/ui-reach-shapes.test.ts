@@ -108,3 +108,78 @@ describe("a function passed as a call argument (fn-arg)", () => {
     expect(callsOf(r, PAGE, "CustomersPage")).toEqual([]);
   });
 });
+
+const HOOK = "src/hooks/useCustomer.ts";
+const pageWith = (body: string, imports = "import { useCustomer } from '../hooks/useCustomer';") =>
+  `${imports}\nexport default function CustomersPage() {\n${body}\n}\n`;
+
+describe("array-returning hooks and nested destructuring", () => {
+  it("const [save, state] = useCustomer() with return [save, state]", () => {
+    const r = resolverOf({
+      [HOOK]: [
+        "import { useState } from 'react';",
+        "export function useCustomer() {",
+        "  const [state] = useState(null);",
+        "  const save = () => fetch('/customers', { method: 'POST' });",
+        "  return [save, state, () => fetch('/customers/1', { method: 'DELETE' })];",
+        "}",
+      ].join("\n"),
+      [PAGE]: pageWith("  const [save, state, , ] = useCustomer();\n  const [, , remove] = useCustomer();\n  return <button onClick={save} onReset={remove} title={state} />;"),
+    });
+    const refs = r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref");
+    expect(refs.map((c) => [c.target.symbol, c.lines ?? null, c.confidence])).toEqual([
+      ["save", null, "param"],
+      ["useCustomer", [5, 5], "param"],
+    ]);
+  });
+
+  it("nested destructuring: const { form: { submit } } = useCustomer(); and const [{ reset }] = …", () => {
+    const r = resolverOf({
+      [HOOK]: [
+        "export function useCustomer() {",
+        "  function submit() { return fetch('/customers', { method: 'POST' }); }",
+        "  const reset = () => null;",
+        "  return { form: { submit, cancel: reset }, list: [reset] };",
+        "}",
+        "export function useInvoice() {",
+        "  const pay = () => fetch('/invoices/1/pay', { method: 'POST' });",
+        "  return [{ pay }];",
+        "}",
+      ].join("\n"),
+      [PAGE]: pageWith([
+        "  const { form: { submit, cancel: stop }, list: [first] } = useCustomer();",
+        "  const [{ pay }] = useInvoice();",
+        "  const { form } = useCustomer();",
+        "  return <form onSubmit={submit} onReset={stop} onClick={pay} onBlur={form.submit} onFocus={first} />;",
+      ].join("\n"), "import { useCustomer, useInvoice } from '../hooks/useCustomer';"),
+    });
+    const refs = r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref");
+    expect(refs.map((c) => `${c.target.symbol} ${c.confidence}`)).toEqual([
+      "submit param", "reset param", "pay param", "submit param", "reset param",
+    ]);
+  });
+
+  it("stays unresolved: mixed object/array returns, a spread before the index, a rest element", () => {
+    const r = resolverOf({
+      [HOOK]: [
+        "export function useCustomer(x: boolean) {",
+        "  const save = () => 1;",
+        "  if (x) return { save };",
+        "  return [save];",
+        "}",
+        "export function useInvoice(more: unknown[]) {",
+        "  const pay = () => 1;",
+        "  return [...more, pay];",
+        "}",
+      ].join("\n"),
+      [PAGE]: pageWith([
+        "  const [save] = useCustomer(true);",
+        "  const { save: s2 } = useCustomer(false);",
+        "  const [pay] = useInvoice([]);",
+        "  const [...rest] = useInvoice([]);",
+        "  return <button onClick={save} onReset={s2} onBlur={pay} onFocus={rest} />;",
+      ].join("\n"), "import { useCustomer, useInvoice } from '../hooks/useCustomer';"),
+    });
+    expect(r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref")).toEqual([]);
+  });
+});

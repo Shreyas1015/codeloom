@@ -324,7 +324,9 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   const fi = ctx.index.get(file);
   if (!fi) return null;
   // `form.handleSubmit` with `const form = useCustomerForm()`: the hook's key, never a guess.
-  if (callee.hook !== undefined) return resolveHookKey(ctx, file, site, callee.hook, callee.prop);
+  if (callee.hook !== undefined) {
+    return resolveHookKey(ctx, file, site, callee.hook, callee.hookKey !== undefined ? `${callee.hookKey}.${callee.prop}` : callee.prop);
+  }
 
   const ns = fi.imports.find((i) => i.local === callee.object && i.kind === "namespace");
   if (ns) {
