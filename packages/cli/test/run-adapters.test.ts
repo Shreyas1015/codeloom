@@ -63,7 +63,7 @@ describe("runAdapters + finalizeEndpoints", () => {
     expect(ep.dbAccess[0]!.table).toBeUndefined();
   });
 
-  it("resolves model collisions with first-wins rule (matching tables dedup)", () => {
+  it("a model name defined with two different tables resolves to no table, never the first one", () => {
     const part1 = emptyPart();
     part1.models.push({ model: "User", table: "users", file: "a/models/user.ts", line: 1, source: "lucid" });
     part1.dbAccess.push({ model: "User", op: "read", via: "lucid", at: { file: "x.ts", line: 1, symbol: "f" } });
@@ -72,8 +72,8 @@ describe("runAdapters + finalizeEndpoints", () => {
     part2.models.push({ model: "User", table: "accounts", file: "b/models/user.ts", line: 1, source: "lucid" });
 
     const ep = finalizeEndpoints("test", [part1, part2]);
-    // First User definition (users) should win for collision resolution
-    expect(ep.dbAccess[0]).toMatchObject({ model: "User", table: "users", op: "read" });
+    expect(ep.dbAccess[0]).toMatchObject({ model: "User", op: "read" });
+    expect(ep.dbAccess[0]!.table).toBeUndefined();
   });
 });
 

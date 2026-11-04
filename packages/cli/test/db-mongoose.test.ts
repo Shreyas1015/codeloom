@@ -87,6 +87,50 @@ describe("H9: mongoose models name their collection, never the model's own name"
     });
   });
 
+  it("a default import takes the table of the file it comes from, even when every model file names its variable Model", () => {
+    const r = index({
+      "src/models/customer.ts": `
+        import mongoose from "mongoose";
+        const schema = new mongoose.Schema({ name: String });
+        const Model = mongoose.model("Customer", schema);
+        export default Model;
+      `,
+      "src/models/invoice.ts": `
+        import mongoose from "mongoose";
+        const schema = new mongoose.Schema({ total: Number });
+        const Model = mongoose.model("Invoice", schema);
+        export default Model;
+      `,
+      "src/services/invoice-service.ts": `
+        import Invoice from "../models/invoice";
+        import Customer from "../models/customer";
+        export const list = () => Invoice.find();
+        export const one = (id: string) => Customer.findById(id);
+      `,
+    });
+    expect(r.access).toEqual(["read invoices via mongoose @list", "read customers via mongoose @one"]);
+  });
+
+  it("a model name that maps to more than one table resolves to no table, never the first one", () => {
+    const r = index({
+      "src/models/customer.ts": `
+        import mongoose from "mongoose";
+        const Model = mongoose.model("Customer", new mongoose.Schema({}));
+        export default Model;
+      `,
+      "src/models/invoice.ts": `
+        import mongoose from "mongoose";
+        const Model = mongoose.model("Invoice", new mongoose.Schema({}));
+        export default Model;
+      `,
+      "src/services/guess.ts": `
+        import { Model } from "../models/model";
+        export const list = () => Model.find();
+      `,
+    });
+    expect(r.access).toEqual(["read model:Model via mongoose @list"]);
+  });
+
   it("reports no table when the collection cannot be read (the access keeps its model, table unknown)", () => {
     const r = index({
       "src/models/dynamic.ts": `
