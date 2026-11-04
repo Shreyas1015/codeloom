@@ -598,12 +598,16 @@ function unwrapExpr(e: ts.Expression): ts.Expression {
   return cur;
 }
 
-/** `useX(…)` (a plain-identifier hook call) -> "useX". */
+/** `useX(…)` (a plain-identifier hook call) -> "useX"; `ns.useX(…)` -> "ns.useX" (v0.2a: the resolver follows
+ * it only when `ns` is a namespace import). */
 function hookCallName(e: ts.Expression | undefined): string | undefined {
   if (!e) return undefined;
   const call = unwrapExpr(e);
-  return ts.isCallExpression(call) && ts.isIdentifier(call.expression) && HOOK_NAME_RE.test(call.expression.text)
-    ? call.expression.text : undefined;
+  if (!ts.isCallExpression(call)) return undefined;
+  const callee = call.expression;
+  if (ts.isIdentifier(callee)) return HOOK_NAME_RE.test(callee.text) ? callee.text : undefined;
+  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && HOOK_NAME_RE.test(callee.name.text)
+    ? `${callee.expression.text}.${callee.name.text}` : undefined;
 }
 
 /** The identifier binding `name` inside a binding name (`x`, `{ a, b: x }`, `[x]`, nested patterns). */

@@ -296,6 +296,14 @@ function resolveIdent(ctx: Ctx, file: string, site: CallSite, callee: Extract<Ca
 function functionByName(ctx: Ctx, file: string, name: string): ExportHit | null {
   const fi = ctx.index.get(file);
   if (!fi) return null;
+  const dot = name.indexOf(".");
+  if (dot >= 0) {
+    // `ns.useX`: only through a namespace import (`import * as ns` / `const ns = require(…)`).
+    const ns = fi.imports.find((i) => i.local === name.slice(0, dot) && i.kind === "namespace");
+    const target = ns ? resolveImport(file, ns.from, ctx.files, ctx.aliases) : null;
+    const hit = target ? resolveExportIn(ctx, target, name.slice(dot + 1), 0) : null;
+    return hit && symbolKind(ctx, hit) === "function" ? hit : null;
+  }
   const locals = fi.symbols.filter((s) => s.name === name && s.kind === "function" && s.binding);
   if (locals.length > 0) return locals.length === 1 ? { file, symbol: name, hops: 0 } : null;
   const imp = fi.imports.find((i) => i.local === name && i.kind !== "namespace");

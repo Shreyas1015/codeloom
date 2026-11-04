@@ -183,3 +183,43 @@ describe("array-returning hooks and nested destructuring", () => {
     expect(r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref")).toEqual([]);
   });
 });
+
+describe("namespaced hooks (import * as hooks)", () => {
+  const hookFile = [
+    "export function useCustomer() {",
+    "  const save = () => fetch('/customers', { method: 'POST' });",
+    "  return { save };",
+    "}",
+  ].join("\n");
+
+  it("const { save } = hooks.useCustomer(); const c = hooks.useCustomer(); c.save — through a barrel too", () => {
+    const r = resolverOf({
+      [HOOK]: hookFile,
+      "src/hooks/index.ts": "export * from './useCustomer';",
+      [PAGE]: pageWith([
+        "  const { save } = hooks.useCustomer();",
+        "  const c = hooks.useCustomer();",
+        "  return <button onClick={save} onReset={c.save} />;",
+      ].join("\n"), "import * as hooks from '../hooks';"),
+    });
+    expect(callsOf(r, PAGE, "CustomersPage")).toEqual([
+      `3:call->${HOOK}#useCustomer (exact)`,
+      `4:call->${HOOK}#useCustomer (exact)`,
+      `5:jsx-ref->${HOOK}#save (param)`,
+      `5:jsx-ref->${HOOK}#save (param)`,
+    ]);
+  });
+
+  it("stays unresolved: a receiver that is not a namespace import, an unknown hook", () => {
+    const r = resolverOf({
+      [HOOK]: hookFile,
+      [PAGE]: pageWith([
+        "  const hooks = { useCustomer: () => ({ save: () => 1 }) };",
+        "  const { save } = hooks.useCustomer();",
+        "  const { save: s2 } = ns.useMissing();",
+        "  return <button onClick={save} onReset={s2} />;",
+      ].join("\n"), "import * as ns from '../hooks/useCustomer';"),
+    });
+    expect(r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref")).toEqual([]);
+  });
+});
