@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
-import { chainReach } from "../linker/completeness.js";
+import { chainReach, journeyReach } from "../linker/completeness.js";
 import { chainLookup, formatNodeRef, journeysByChain, loadMapState, type MapState } from "../mcp/state.js";
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
@@ -161,11 +161,10 @@ export function journeyRows(state: Pick<MapState, "chains" | "journeys">): Journ
       }
     }
     const allPresent = chains.length > 0 && resolved.missing.length === 0;
-    const complete = allPresent && chains.every((c) => c.complete);
+    const { complete, apiOnly } = journeyReach(chains, allPresent);
     return {
       id: j.id, name: j.name, area: j.area, note: j.note, status: j.status, chainIds,
-      repos: sortedSet(repos), stops, confidence, complete,
-      apiOnly: !complete && allPresent && chains.every((c) => c.complete || isApiOnly(c)),
+      repos: sortedSet(repos), stops, confidence, complete, apiOnly,
       tables: sortedSet(tables),
     };
   });

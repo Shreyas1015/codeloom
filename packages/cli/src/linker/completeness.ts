@@ -26,3 +26,17 @@ export function chainReach(stops: readonly StopLike[]): ChainReach {
 export function isComplete(stops: readonly StopLike[]): boolean {
   return chainReach(stops) === "complete";
 }
+
+/** A journey's completeness over its resolved chains (hG). A journey is "API → DB only" only when NONE of
+ * its chains has a UI stop and every chain reaches a store. When any chain has a UI stop, the journey is
+ * judged on its UI chains alone: complete when every one of them is complete (route-only or consumer
+ * chains beside them never make it API → DB). `allPresent`: every chain id the journey names resolved. */
+export function journeyReach(
+  chains: ReadonlyArray<{ complete: boolean; stops: readonly StopLike[] }>,
+  allPresent: boolean,
+): { complete: boolean; apiOnly: boolean } {
+  if (!allPresent || chains.length === 0) return { complete: false, apiOnly: false };
+  const ui = chains.filter((c) => hasUiStop(c.stops));
+  if (ui.length > 0) return { complete: ui.every((c) => c.complete), apiOnly: false };
+  return { complete: false, apiOnly: chains.every((c) => chainReach(c.stops) === "api-only") };
+}

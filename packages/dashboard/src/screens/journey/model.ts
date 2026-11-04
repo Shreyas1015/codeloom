@@ -1,5 +1,5 @@
 import type { Confidence, JourneyResult, Lane, StopView } from "@/api/types";
-import { isApiOnly } from "@/lib/completeness";
+import { journeyReach } from "@/lib/completeness";
 import { numberStops, stopFrom, stopKey } from "@/lib/journey-stops";
 
 /** One distinct stop of the journey, numbered in chain order (1-based; a stop shared by chains keeps its first number). */
@@ -26,9 +26,9 @@ export interface JourneyModel {
   showQueue: boolean;
   /** Worst over the chains; null when there are none. */
   confidence: Confidence | null;
-  /** Every chain present and complete (and at least one). */
+  /** Every chain present, and every chain with a UI stop complete (and at least one such chain) — hG. */
   complete: boolean;
-  /** Not complete, but every chain present reaches the DB or a queue and some have no UI stop (H3). */
+  /** No chain has a UI stop, and every chain present reaches the DB or a queue (H3, hG). */
   apiOnly: boolean;
   repos: string[];
   /** chain id → the stop numbers of its stops, in order. */
@@ -91,7 +91,7 @@ export function buildJourneyModel(r: JourneyResult): JourneyModel {
     null,
   );
   const allPresent = r.chains.length > 0 && r.missingChainIds.length === 0;
-  const complete = allPresent && r.chains.every((c) => c.complete);
+  const { complete, apiOnly } = journeyReach(r.chains, allPresent);
   return {
     stops,
     lanes,
@@ -99,7 +99,7 @@ export function buildJourneyModel(r: JourneyResult): JourneyModel {
     showQueue: lanes.queue.length > 0,
     confidence,
     complete,
-    apiOnly: !complete && allPresent && r.chains.every((c) => c.complete || isApiOnly(c.stops)),
+    apiOnly,
     repos: [...new Set(stops.map((s) => s.view.repo))].sort(),
     chainStops,
   };

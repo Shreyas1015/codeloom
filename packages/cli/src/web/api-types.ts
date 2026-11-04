@@ -76,9 +76,9 @@ export interface JourneyRow {
   stops: Record<Lane, number>;
   /** Worst over its chains. */
   confidence: Confidence;
-  /** Every chain present and complete. */
+  /** Every chain present, and every chain with a UI stop complete (at least one such chain) — hG. */
   complete: boolean;
-  /** Not complete, but every chain present reaches a store, and some have no UI stop (H3: "API → DB"). */
+  /** No chain has a UI stop and every chain present reaches a store (H3: "API → DB"; hG). */
   apiOnly: boolean;
   /** Tables its db stops touch, sorted. */
   tables: string[];

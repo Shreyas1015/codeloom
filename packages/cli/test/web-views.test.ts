@@ -19,7 +19,7 @@ describe("journeyRows", () => {
   const a = chain("ch_a", {
     confidence: "exact",
     stops: [
-      stop({ lane: "ui", repo: "web", file: "page.tsx" }),
+      stop({ lane: "ui", kind: "page", repo: "web", file: "page.tsx" }),
       stop({ lane: "api", repo: "api", file: "routes.ts" }),
       stop({ lane: "code", repo: "api", file: "svc.ts" }),
       stop({ lane: "db", repo: "api", file: "svc.ts", label: "users", line: 3 }),
@@ -52,7 +52,7 @@ describe("journeyRows", () => {
       repos: ["api", "billing", "web"],
       stops: { ui: 1, api: 1, code: 1, db: 2, queue: 1 },
       confidence: "param",
-      complete: false,
+      complete: true, // hG: judged on its UI chain (ch_a, complete); ch_b has no UI stop
       apiOnly: false,
       tables: ["audit", "users"],
     });
@@ -81,11 +81,33 @@ describe("journeyRows", () => {
       ],
     });
     expect(out.journeys.map((j) => [j.id, j.complete, j.apiOnly])).toEqual([
-      ["j_a", false, true], ["j_b", false, true], ["j_c", false, false], ["j_d", true, false],
+      // hG: j_b has a page chain, so it is judged on its UI chains (complete), never API → DB
+      ["j_a", false, true], ["j_b", true, false], ["j_c", false, false], ["j_d", true, false],
     ]);
     const empty = journeyRows({ chains: [routeOnly, noStore, ui], journeys: [] }).unnamedChains;
     expect(empty.map((c) => [c.id, c.complete, c.apiOnly])).toEqual([
       ["ch_nostore", false, false], ["ch_route", false, true], ["ch_ui", true, false],
+    ]);
+  });
+
+  it("hG: a journey with a page chain is never API → DB; it is complete when its UI chains are", () => {
+    const page = stop({ lane: "ui", kind: "page", repo: "web", file: "app/invoices/page.tsx" });
+    const call = stop({ lane: "ui", kind: "call", repo: "web", file: "lib/api.ts" });
+    const route = stop({ lane: "api", kind: "route", repo: "api", file: "start/routes.ts" });
+    const db = stop({ lane: "db", kind: "db", repo: "api", file: "app/invoices.ts", label: "invoices", line: 5 });
+    const pageDone = chain("ch_page", { entry: "page:web:/invoices", stops: [page, call, route, db] });
+    const pageOpen = chain("ch_open", { entry: "page:web:/invoices", complete: false, stops: [page, call] });
+    const routeOnly = chain("ch_route", { complete: false, stops: [route, db] });
+    const out = journeyRows({
+      chains: [pageDone, pageOpen, routeOnly],
+      journeys: [
+        journey("j_a", { name: "A", chainIds: ["ch_page", "ch_route"] }),
+        journey("j_b", { name: "B", chainIds: ["ch_open", "ch_route"] }),
+        journey("j_c", { name: "C", chainIds: ["ch_page", "ch_open", "ch_route"] }),
+      ],
+    });
+    expect(out.journeys.map((j) => [j.id, j.complete, j.apiOnly])).toEqual([
+      ["j_a", true, false], ["j_b", false, false], ["j_c", false, false],
     ]);
   });
 

@@ -91,6 +91,17 @@ describe("buildJourneyModel completeness (H3)", () => {
     expect(m.apiOnly).toBe(true);
   });
 
+  it("hG: one page chain + one route-only chain is not API → DB, and complete when the page chain is", () => {
+    const r = { ...routeOnly(chainA), id: "ch_rrrr", name: "GET /api/invoices/export" };
+    const m = buildJourneyModel({ ...journeyResult, chains: [chainA, r], lanes: lanesOf([chainA, r]) });
+    expect(m.apiOnly).toBe(false);
+    expect(m.complete).toBe(true);
+    const open = { ...chainA, complete: false };
+    const m2 = buildJourneyModel({ ...journeyResult, chains: [open, r], lanes: lanesOf([open, r]) });
+    expect(m2.apiOnly).toBe(false);
+    expect(m2.complete).toBe(false);
+  });
+
   it("a complete journey and an incomplete one are not API → DB", () => {
     expect(buildJourneyModel(chainResult).apiOnly).toBe(false);
     expect(buildJourneyModel(journeyResult).apiOnly).toBe(false);
