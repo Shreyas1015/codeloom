@@ -438,6 +438,49 @@ describe("linkUi", () => {
         .toMatchObject({ kind: "route" });
     });
   });
+  describe("other-service calls (env var bases)", () => {
+    const route: EndpointsFile["routes"][number] = { method: "ANY", path: "/api/customers", handler: "h", inline: false, framework: "express", at: { file: "s.ts", line: 1, symbol: "h" } };
+    const at = { file: "lib/pay.ts", line: 3, symbol: "charge" };
+    const envCall = (env: string, path: string): HttpCall => ({
+      method: "POST", path, raw: `\`\${process.env.${env}}${path}\``, base: `process.env.${env}`, resolved: true, client: "fetch", at, kind: "literal",
+    });
+    const run = (call: HttpCall, opts: { apiBase?: string[]; external?: WorkspaceData["external"]; clients?: HttpClient[] } = {}) => {
+      const web = repo("web", { httpCalls: [call], httpClients: opts.clients ?? [] });
+      const api = repo("api", { routes: [route] }, opts.apiBase ? { apiBase: opts.apiBase } : undefined);
+      const resolvers = new Map([["web", resolverFor({}, "web")], ["api", resolverFor({}, "api")]]);
+      return linkUi({ ws: { ...ws([web, api]), ...(opts.external ? { external: opts.external } : {}) }, resolvers })[0]!.target;
+    };
+
+    it("an env base that no repo's apiBase names, matching no route, is an external call", () => {
+      expect(run(envCall("PAYMENTS_URL", "/charges"), { apiBase: ["API_URL"] })).toEqual({ kind: "external", base: "PAYMENTS_URL" });
+    });
+
+    it("the same call stays a no-route call when no repo declares an apiBase (nothing to tell them apart)", () => {
+      expect(run(envCall("PAYMENTS_URL", "/charges"))).toEqual({ kind: "unresolved", reason: "no matching route" });
+    });
+
+    it("an apiBase env var that matches no route stays a no-route call (it is ours, so it is broken)", () => {
+      expect(run(envCall("API_URL", "/api/nope"), { apiBase: ["API_URL"] })).toEqual({ kind: "unresolved", reason: "no matching route" });
+    });
+
+    it("an undeclared env base that does match a route keeps the route", () => {
+      expect(run(envCall("OTHER_URL", "/api/customers"), { apiBase: ["API_URL"] })).toMatchObject({ kind: "route" });
+    });
+
+    it("a base named in the workspace's external list is external with that name, even if a route matches", () => {
+      const external = [{ name: "Payments", apiBase: ["PAYMENTS_URL", "pay.example.com"] }];
+      expect(run(envCall("PAYMENTS_URL", "/api/customers"), { external })).toEqual({ kind: "external", base: "PAYMENTS_URL", name: "Payments" });
+      const hostCall: HttpCall = { method: "GET", path: "/v1/x", raw: '"https://pay.example.com/v1/x"', resolved: true, client: "fetch", at, kind: "literal" };
+      expect(run(hostCall, { external })).toEqual({ kind: "external", base: "pay.example.com", name: "Payments" });
+    });
+
+    it("reads the env var from the call's client baseExpr", () => {
+      const clients: HttpClient[] = [{ name: "pay", file: "lib/pay-client.ts", line: 1, factory: "axios", baseExpr: "import.meta.env.VITE_PAYMENTS_URL" }];
+      const call: HttpCall = { method: "POST", path: "/charges", raw: '"/charges"', resolved: true, client: "pay", at, kind: "literal" };
+      expect(run(call, { apiBase: ["VITE_API_URL"], clients })).toEqual({ kind: "external", base: "VITE_PAYMENTS_URL" });
+    });
+  });
+
   it("orders calls on the same line by method, then path", () => {
     const at = { file: "lib/x.ts", line: 1, symbol: "f" };
     const mk = (method: HttpCall["method"], path: string): HttpCall => ({ method, path, raw: `"${path}"`, resolved: true, client: "fetch", at, kind: "literal" });

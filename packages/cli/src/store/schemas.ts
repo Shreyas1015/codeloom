@@ -214,6 +214,9 @@ export const TracesConfigSchema = z.discriminatedUnion("kind", [
 ]);
 export type TracesConfig = z.infer<typeof TracesConfigSchema>;
 
+export const ExternalServiceSchema = z.object({ name: z.string().min(1), apiBase: z.array(z.string().min(1)) });
+export type ExternalService = z.infer<typeof ExternalServiceSchema>;
+
 export const WorkspaceFileSchema = z.object({
   version: z.literal(1),
   name: z.string(),
@@ -222,6 +225,9 @@ export const WorkspaceFileSchema = z.object({
    * "route:<repo>:<METHOD path>" / "queue:<repo>:<queue>" (see R11 parseLinkRef, Task 11). */
   links: z.array(z.object({ from: z.string(), to: z.string() })),
   traces: TracesConfigSchema.optional(),
+  /** Other services the UI calls (not repos in this workspace): a call whose base env var / host is in
+   * an entry's `apiBase` is listed as a call to that `name`, never matched to a route. */
+  external: z.array(ExternalServiceSchema).optional(),
 });
 export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 

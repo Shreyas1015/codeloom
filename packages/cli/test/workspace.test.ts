@@ -98,6 +98,17 @@ describe("loadWorkspace", () => {
     expect(ws).toEqual({ root, name: "shop", repos: [{ id: "web", path: "web" }], links: [], traces: undefined });
   });
 
+  it("reads the optional external services list, and rejects a bad entry", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    const file = join(root, "codeloom.workspace.json");
+    const base = { version: 1, name: "shop", repos: [{ id: "web", path: "web" }], links: [] };
+    writeFileSync(file, JSON.stringify({ ...base, external: [{ name: "Payments", apiBase: ["PAYMENTS_URL"] }] }));
+    expect(loadWorkspace(root).external).toEqual([{ name: "Payments", apiBase: ["PAYMENTS_URL"] }]);
+    writeFileSync(file, JSON.stringify({ ...base, external: [{ name: "Payments", apiBase: "PAYMENTS_URL" }] }));
+    expect(() => loadWorkspace(root)).toThrow(/codeloom\.workspace\.json/);
+  });
+
   it("falls back to the git repo around the start folder", () => {
     const repo = makeRepo({ "src/a.ts": "" });
     const ws = loadWorkspace(join(repo, "src"));
