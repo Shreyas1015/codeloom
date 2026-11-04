@@ -47,6 +47,14 @@ Every hop was read from the app's own code, not from codeloom's output:
 | realworld | 22/22, 100%, 100% | 21/21, 100%, 100% | 32/32, 100%, 100% |
 | realworld-nest | 0/0 (no UI) | 4/4, 100%, 100% | 3/3, 100%, 100% |
 
-Note: realworld's 22 ui-api hops come from call-entry chains (`call:` — the call site that matches the
-route), not from page chains. Its pages reach the calls through class lifecycle methods and Redux dispatch,
-which codeloom does not follow yet, so `codeloom check` lists them as "not reached from any page".
+Note: realworld's pages reach their calls through class lifecycle methods, `this.props` handlers and Redux
+`connect(mapState, mapDispatch)`. v0.1 followed none of these, so its 22 ui-api hops came only from call-entry
+chains (`call:`) and no call was reached from a page. v0.2a §4 (2026-11-04) follows them at `param`:
+
+| realworld UI calls reached from a page | before (v0.1) | after (v0.2a §4) |
+|---|---|---|
+| reached / all UI calls | 0 / 22 | 21 / 22 |
+
+ui-api stays 22/22, 100% precision and recall. The one call still unreached, `Comments.delete`, sits 7 calls
+below its page (Article → render → CommentContainer → CommentList → Comment → DeleteButton → del), past the
+6-hop walk limit.
