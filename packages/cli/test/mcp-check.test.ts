@@ -154,7 +154,8 @@ describe("impact_of_diff", () => {
         id: "api",
         changedFiles: ["app/controllers/customers_controller.ts"],
         changedFilesTruncated: false,
-        changedNodes: ["api::class:app/controllers/customers_controller.ts:CustomersController"],
+        // v0.2a §1: the edited method has its own node now
+        changedNodes: ["api::class:app/controllers/customers_controller.ts:CustomersController", "api::function:app/controllers/customers_controller.ts:CustomersController.store"],
         changedNodesTruncated: false,
       },
     ]);

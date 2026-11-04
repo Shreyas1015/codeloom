@@ -83,12 +83,19 @@ function fileOfFileNode(state: MapState, ref: NodeRef): string | undefined {
   return ref.nodeId.startsWith("file:") ? ref.nodeId.slice("file:".length) : undefined;
 }
 
-/** Chains with a stop at that repo+nodeId, or (for a file node) at that repo+file. Sorted by id. */
+/** Chains with a stop at that repo+nodeId, or (for a file node) at that repo+file, or (for a class node) at
+ * one of its method nodes (`function:<file>:<Class>.<method>`, v0.2a §1 — before method nodes existed those
+ * stops pointed at the class node itself). Sorted by id. */
 export function chainsTouchingNode(state: MapState, ref: NodeRef): Chain[] {
   const file = fileOfFileNode(state, ref);
+  const methodPrefix = ref.nodeId.startsWith("class:") ? `function:${ref.nodeId.slice("class:".length)}.` : undefined;
   return state.chains
     .filter((c) =>
-      c.stops.some((s) => s.repo === ref.repo && (s.nodeId === ref.nodeId || (file !== undefined && s.file === file))),
+      c.stops.some((s) => s.repo === ref.repo && (
+        s.nodeId === ref.nodeId
+        || (file !== undefined && s.file === file)
+        || (methodPrefix !== undefined && s.nodeId?.startsWith(methodPrefix) === true)
+      )),
     )
     .sort((a, b) => compare(a.id, b.id));
 }

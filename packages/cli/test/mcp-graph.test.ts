@@ -145,7 +145,11 @@ describe("get_node", () => {
     expect(r.node.layer).toBe("layer:api-layer");
     expect(r.summary).toBeNull();
     expect(r.edges.in).toEqual([{ type: "contains", source: "api::file:app/controllers/customers_controller.ts" }]);
-    expect(r.edges.out).toEqual([]);
+    // v0.2a §1: the class contains its method nodes
+    expect(r.edges.out).toEqual([
+      { type: "contains", target: "api::function:app/controllers/customers_controller.ts:CustomersController.show" },
+      { type: "contains", target: "api::function:app/controllers/customers_controller.ts:CustomersController.store" },
+    ]);
     expect(r.chains).toEqual(customerChainIds);
     expect(r.journeys).toEqual([{ id: JOURNEY_ID, name: "Sign up a customer" }]);
   });
@@ -170,8 +174,13 @@ describe("get_neighbors", () => {
     expect(r.neighbors).toEqual([
       { ref: "api::class:app/controllers/customers_controller.ts:CustomersController", name: "CustomersController", type: "class", depth: 1, via: { type: "contains", direction: "out" } },
       { ref: "api::file:app/services/customer_service.ts", name: "customer_service.ts", type: "file", depth: 1, via: { type: "imports", direction: "out" } },
+      // v0.2a §1: method nodes, and the service methods they call
+      { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.show", name: "CustomersController.show", type: "function", depth: 1, via: { type: "contains", direction: "out" } },
+      { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.store", name: "CustomersController.store", type: "function", depth: 1, via: { type: "contains", direction: "out" } },
       { ref: "api::class:app/services/customer_service.ts:CustomerService", name: "CustomerService", type: "class", depth: 2, via: { type: "contains", direction: "out" } },
       { ref: "api::file:app/models/customer.ts", name: "customer.ts", type: "file", depth: 2, via: { type: "imports", direction: "out" } },
+      { ref: "api::function:app/services/customer_service.ts:CustomerService.create", name: "CustomerService.create", type: "function", depth: 2, via: { type: "contains", direction: "out" } },
+      { ref: "api::function:app/services/customer_service.ts:CustomerService.find", name: "CustomerService.find", type: "function", depth: 2, via: { type: "contains", direction: "out" } },
     ]);
     expect(await sc("get_neighbors", { node: root, depth: 2 })).toEqual(r);
   });
@@ -204,7 +213,11 @@ describe("explain_context", () => {
     const lines = readFileSync(join(demo, "api", "app/services/customer_service.ts"), "utf8").split("\n");
     expect(r.code.text).toBe(lines.slice(3, 14).join("\n"));
     expect(r.code.text).toMatch(/class CustomerService/);
-    expect(r.neighbors.map((n: { ref: string }) => n.ref)).toEqual(["api::file:app/services/customer_service.ts"]);
+    expect(r.neighbors.map((n: { ref: string }) => n.ref)).toEqual([
+      "api::file:app/services/customer_service.ts",
+      "api::function:app/services/customer_service.ts:CustomerService.create",
+      "api::function:app/services/customer_service.ts:CustomerService.find",
+    ]);
     expect(r.chains).toEqual(customerChainIds);
     expect(r.journeys).toEqual([{ id: JOURNEY_ID, name: "Sign up a customer" }]);
   });

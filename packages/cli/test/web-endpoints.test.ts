@@ -231,11 +231,17 @@ describe("dashboard JSON API on demo-shop", () => {
       path: "app/controllers/customers_controller.ts",
       name: "customers_controller.ts",
       layer: "layer:api-layer",
-      functions: [{ ref: "api::class:app/controllers/customers_controller.ts:CustomersController", name: "CustomersController", type: "class", line: 6 }],
+      functions: [
+        { ref: "api::class:app/controllers/customers_controller.ts:CustomersController", name: "CustomersController", type: "class", line: 6 },
+        // v0.2a §1: methods are listed on the file card
+        { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.store", name: "CustomersController.store", type: "function", line: 9 },
+        { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.show", name: "CustomersController.show", type: "function", line: 14 },
+      ],
       journeys: [JOURNEY_ID],
     });
     const app = await ok("/api/graph?repo=api&dir=app", GraphLevel);
     expect(app.edges).toEqual([
+      { from: "app/controllers", to: "app/services", type: "calls", count: 2 }, // v0.2a §1: store→create, show→find
       { from: "app/controllers", to: "app/services", type: "imports", count: 1 },
       { from: "app/services", to: "app/models", type: "imports", count: 1 },
     ]);
