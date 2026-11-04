@@ -8,7 +8,7 @@ First release.
 - Maps a repo, or a folder of repos, into request chains: UI page → API route → handler → database table
   or queue, with `exact` / `param` / `guess` confidence on every hop and unresolved hops listed with a reason.
 - Supports Next.js and React Router pages; fetch, axios, ky, got, superagent and wrapper functions; Express,
-  Fastify, NestJS, Next.js API routes and AdonisJS; Prisma, Drizzle, TypeORM, Knex, Lucid and raw SQL;
+  Fastify, NestJS, Next.js API routes and AdonisJS; Prisma, Drizzle, TypeORM, Knex, Lucid, Mongoose and raw SQL;
   RabbitMQ (amqplib).
 - Manual links and repo hints (`role`, `apiBase`) in `codeloom.workspace.json`.
 - `codeloom check --traces`: compare the map with traces from Grafana Tempo or an OTLP JSON file.
