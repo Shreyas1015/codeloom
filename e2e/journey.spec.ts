@@ -62,5 +62,17 @@ test("a journey opens from Home with its lanes, and the inspector shows the stop
   await expect(code.locator('[data-line="9"]')).toHaveAttribute("data-highlighted", "");
   await expect(code.locator('[data-line="9"]')).toContainText("async store(");
 
+  // v0.2a: the controller method's resolved call to the service method, exact, and the service is stop 6
+  const calls = inspector.getByRole("list", { name: "Calls" });
+  const create = calls.getByRole("listitem").filter({ hasText: "CustomerService.create" });
+  await expect(create).toContainText("(exact)");
+  await expect(create.locator('[data-slot="confidence-line"]')).toHaveAttribute("data-stroke", "solid");
+  await expect(inspector.getByText(/Call edges for methods aren't mapped yet/)).toHaveCount(0);
+
   await page.screenshot({ path: join(SCREENSHOTS, "journey.png"), fullPage: true });
+
+  await create.getByRole("button", { name: "Go to stop 6" }).click();
+  await expect(page).toHaveURL(/[?&]stop=6\b/);
+  await expect(inspector.getByRole("heading", { level: 2 })).toContainText("CustomerService.create");
+  await expect(inspector.getByRole("list", { name: "Called by" }).getByRole("link", { name: "CustomersController.store" })).toBeVisible();
 });

@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from "react";
 import { useCode, useNeighbors, useNode } from "@/api/queries";
 import type { Neighbor } from "@/api/types";
 import { CodeBlock } from "@/components/code/CodeBlock";
+import { ConfidenceLine } from "@/components/gallery/ConfidenceLine";
 import { StopRoundel } from "@/components/gallery/StopRoundel";
 import { Breakable } from "@/lib/breakable";
 import type { Confidence } from "@/api/types";
@@ -75,7 +76,7 @@ function StopDetails({ stop, journeyId, model, onSelect }: InspectorProps & { st
         </div>
       </header>
       {settled === stop.n ? (
-        <StopRequests key={stop.n} stop={stop} journeyId={journeyId} />
+        <StopRequests key={stop.n} stop={stop} journeyId={journeyId} model={model} onSelect={onSelect} />
       ) : (
         <section className={section}>
           <p className={quiet}>Loading code…</p>
@@ -87,7 +88,7 @@ function StopDetails({ stop, journeyId, model, onSelect }: InspectorProps & { st
   );
 }
 
-function StopRequests({ stop, journeyId }: { stop: JourneyStop; journeyId: string }) {
+function StopRequests({ stop, journeyId, model, onSelect }: { stop: JourneyStop; journeyId: string; model: JourneyModel; onSelect: (n: number) => void }) {
   const v = stop.view;
   const code = useCode(v.repo, v.file, Math.max(1, v.line - CONTEXT), v.line + CONTEXT);
   return (
@@ -103,7 +104,7 @@ function StopRequests({ stop, journeyId }: { stop: JourneyStop; journeyId: strin
           <p className={quiet}>Loading code…</p>
         )}
       </section>
-      {v.ref ? <NodeSections nodeRef={v.ref} journeyId={journeyId} exact={isExactFunctionRef(v)} /> : null}
+      {v.ref ? <NodeSections nodeRef={v.ref} journeyId={journeyId} exact={isExactFunctionRef(v)} model={model} onSelect={onSelect} /> : null}
     </>
   );
 }
@@ -163,18 +164,32 @@ function HopList({
   );
 }
 
-/** The graph has function nodes but no method nodes, so a method stop's ref falls back to its class or file;
- * only an exact function node's call edges describe this stop. */
+/** A stop's ref is its exact function or method node when the graph has one (v0.2a §1); otherwise it falls
+ * back to the class or file, whose edges are not this stop's, so only an exact ref shows call edges. */
 export function isExactFunctionRef(v: { repo: string; file: string; symbol: string; ref?: string }): boolean {
   return v.ref === `${v.repo}::function:${v.file}:${v.symbol}`;
 }
 
-function NodeSections({ nodeRef, journeyId, exact }: { nodeRef: string; journeyId: string; exact: boolean }) {
+function NodeSections({
+  nodeRef,
+  journeyId,
+  exact,
+  model,
+  onSelect,
+}: {
+  nodeRef: string;
+  journeyId: string;
+  exact: boolean;
+  model: JourneyModel;
+  onSelect: (n: number) => void;
+}) {
   const node = useNode(nodeRef);
   // no neighbour request for a fallback ref: its edges belong to the class or file, not this stop
   const near = useNeighbors(exact ? nodeRef : undefined, 1, "both");
   const calls = (dir: "in" | "out") => (near.data?.neighbors ?? []).filter((n) => n.via.type === "calls" && n.via.direction === dir);
   const others = (node.data?.journeys ?? []).filter((j) => j.id !== journeyId);
+  // a callee or caller that is also a stop of this journey: its first stop number
+  const stopOf = (ref: string) => model.stops.find((s) => s.view.ref === ref)?.n;
   return (
     <>
       {node.data?.summary ? (
@@ -186,8 +201,8 @@ function NodeSections({ nodeRef, journeyId, exact }: { nodeRef: string; journeyI
       <section className={section}>
         {exact ? (
           <>
-            <NeighborList title="Called by" items={calls("in")} loading={near.isPending} />
-            <NeighborList title="Calls" items={calls("out")} loading={near.isPending} />
+            <CallList title="Called by" items={calls("in")} loading={near.isPending} stopOf={stopOf} onSelect={onSelect} />
+            <CallList title="Calls" items={calls("out")} loading={near.isPending} stopOf={stopOf} onSelect={onSelect} />
           </>
         ) : (
           <p className={quiet}>Call edges for methods aren't mapped yet — see Reached from / Leads to.</p>
@@ -216,16 +231,52 @@ function MapLink({ nodeRef }: { nodeRef: string }) {
   );
 }
 
-function NeighborList({ title, items, loading }: { title: string; items: Neighbor[]; loading: boolean }) {
+/** "Called by" / "Calls": each function or method one call edge away. A resolved call (v0.2a) leads with a short
+ * wire in the journey's own connector language (exact solid, param thin) and says its confidence in words; the
+ * name opens it on the Map, and a callee that is also a stop of this journey can be selected in place. */
+function CallList({
+  title,
+  items,
+  loading,
+  stopOf,
+  onSelect,
+}: {
+  title: string;
+  items: Neighbor[];
+  loading: boolean;
+  stopOf: (ref: string) => number | undefined;
+  onSelect: (n: number) => void;
+}) {
   return (
     <LinkList title={title} loading={loading} empty="None found" more={items.length - MAX_LINKS}>
-      {items.slice(0, MAX_LINKS).map((n) => (
-        <li key={n.ref} className="min-w-0 truncate">
-          <Link to="/map" search={{ repo: n.ref.split("::")[0], node: n.ref }} className={`${link} font-mono text-xs`}>
-            {n.name}
-          </Link>
-        </li>
-      ))}
+      {items.slice(0, MAX_LINKS).map((n) => {
+        const c = n.via.confidence;
+        const at = stopOf(n.ref);
+        return (
+          <li key={n.ref} className="flex min-w-0 items-center gap-1.5 text-xs">
+            {c ? <ConfidenceLine confidence={c} orientation="horizontal" className="w-3.5" /> : <span aria-hidden className="w-3.5 flex-none" />}
+            <Link to="/map" search={{ repo: n.ref.split("::")[0], node: n.ref }} className={`${link} min-w-0 truncate font-mono`}>
+              {n.name}
+            </Link>
+            {c ? (
+              <span data-confidence={c} className="flex-none text-muted-foreground">
+                {" "}
+                ({HOP_TAG[c]})
+              </span>
+            ) : null}
+            {at !== undefined ? (
+              <button
+                type="button"
+                aria-label={`Go to stop ${at}`}
+                onClick={() => onSelect(at)}
+                className={`${link} ml-auto flex-none font-semibold text-primary`}
+              >
+                stop {at}
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
     </LinkList>
   );
 }

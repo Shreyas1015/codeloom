@@ -206,11 +206,16 @@ function NodeDetails({ repo, selectedRef, file, onJump }: InspectorProps & { sel
 function NeighborRow({ n, onJump }: { n: Neighbor; onJump: (ref: string) => void }) {
   const Arrow = n.via.direction === "out" ? ArrowRight : ArrowLeft;
   const how = n.via.direction === "out" ? n.via.type : `${n.via.type} it`;
+  // v0.2a: a resolved call says how sure it is, in the same words as the Journey inspector
+  const sure = n.via.confidence ? ` · ${n.via.confidence === "param" ? "path param" : "exact"}` : "";
   const body = (
     <>
       <Arrow aria-hidden className="size-3.5 flex-none text-muted-foreground" />
       <span className="truncate font-mono text-[12.5px]">{n.name}</span>
-      <span className="ml-auto flex-none text-[11.5px] text-muted-foreground">{how}</span>
+      <span data-confidence={n.via.confidence} className="ml-auto flex-none text-[11.5px] text-muted-foreground">
+        {how}
+        {sure}
+      </span>
     </>
   );
   const jumpable = fileOfRef(n.ref) !== undefined;

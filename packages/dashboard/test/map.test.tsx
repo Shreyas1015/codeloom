@@ -157,6 +157,9 @@ const neighbors: NeighborsResult = {
   neighbors: [
     { ref: "api::file:app/controllers/customers_controller.ts", name: "customers_controller.ts", type: "file", depth: 1, via: { type: "imports", direction: "in" } },
     { ref: "api::file:app/models/customer.ts", name: "customer.ts", type: "file", depth: 1, via: { type: "imports", direction: "out" } },
+    // v0.2a: method nodes reached by resolved calls edges
+    { ref: "api::function:app/billing.ts:Billing.charge", name: "Billing.charge", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "exact" } },
+    { ref: "api::function:app/routes.ts:Routes.show", name: "Routes.show", type: "function", depth: 1, via: { type: "calls", direction: "in", confidence: "param" } },
   ],
   truncated: false,
 };
@@ -306,6 +309,11 @@ describe("Map screen", () => {
     const near = await within(inspector).findByRole("list", { name: "Neighbors" });
     expect(within(near).getByText("customers_controller.ts")).toBeInTheDocument();
     expect(within(near).getByText("customer.ts")).toBeInTheDocument();
+    // v0.2a: a resolved call says how sure it is
+    const rows = within(near).getAllByRole("listitem").map((li) => li.textContent);
+    expect(rows).toContain("Billing.chargecalls · exact");
+    expect(rows).toContain("Routes.showcalls it · path param");
+    expect(rows).toContain("customer.tsimports");
   });
 
   it("search jumps to the hit's folder and selects it", async () => {

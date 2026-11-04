@@ -34,7 +34,8 @@ const storeNeighbors: NeighborsResult = {
   root: storeNode.ref,
   neighbors: [
     { ref: "api::function:start/routes.ts:routes", name: "routes", type: "function", depth: 1, via: { type: "calls", direction: "in" } },
-    { ref: "api::function:app/services/invoice.ts:InvoiceService.create", name: "InvoiceService.create", type: "function", depth: 1, via: { type: "calls", direction: "out" } },
+    { ref: "api::function:app/services/invoice.ts:InvoiceService.create", name: "InvoiceService.create", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "exact" } },
+    { ref: "api::function:app/services/invoice.ts:InvoiceService.forCustomer", name: "InvoiceService.forCustomer", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "param" } },
     { ref: "api::file:app/models/invoice.ts", name: "invoice.ts", type: "file", depth: 1, via: { type: "imports", direction: "out" } },
   ],
   truncated: false,
@@ -223,6 +224,41 @@ describe("Journey screen", () => {
     const link = within(also).getByRole("link", { name: "Customer edits an invoice" });
     expect(link).toHaveAttribute("href", "/journeys/j_edit");
     expect(within(also).queryByText("Customer creates an invoice")).toBeNull();
+  });
+
+  it("v0.2a: each method call shows its confidence (exact solid, param thin) and links to the callee on the Map", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice?stop=4");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    const calls = await within(inspector).findByRole("list", { name: "Calls" });
+    const [exact, param] = within(calls).getAllByRole("listitem");
+    expect(exact!.textContent).toBe("InvoiceService.create (exact)");
+    expect(within(exact!).getByRole("img", { name: "Exact link" })).toHaveAttribute("data-stroke", "solid");
+    expect(within(exact!).getByRole("link", { name: "InvoiceService.create" })).toHaveAttribute(
+      "href",
+      "/map?repo=api&node=api%3A%3Afunction%3Aapp%2Fservices%2Finvoice.ts%3AInvoiceService.create",
+    );
+    expect(param!.textContent).toBe("InvoiceService.forCustomer (path param)");
+    expect(within(param!).getByRole("img", { name: "Matched with a path parameter" })).toHaveAttribute("data-stroke", "thin");
+    // a calls edge with no recorded confidence (tree-sitter's own) gets no wire and no tag
+    const calledBy = within(inspector).getByRole("list", { name: "Called by" });
+    expect(calledBy.textContent).toBe("routes");
+    expect(within(calledBy).queryByRole("img")).toBeNull();
+  });
+
+  it("v0.2a: a callee that is a stop of this journey also selects that stop", async () => {
+    const callee = "api::function:app/services/invoice.ts:InvoiceService.create";
+    const withCallee = {
+      ...journeyResult,
+      chains: journeyResult.chains.map((c) => ({ ...c, stops: c.stops.map((s, i) => (i === 4 ? { ...s, ref: callee } : s)) })),
+    };
+    stubApi({ j_invoice: withCallee });
+    const router = renderAt("/journeys/j_invoice?stop=4");
+    const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
+    const calls = await within(inspector).findByRole("list", { name: "Calls" });
+    const [first] = within(calls).getAllByRole("listitem");
+    await userEvent.click(within(first!).getByRole("button", { name: "Go to stop 5" }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ stop: 5 }));
   });
 
   it("lists the linker's hops to and from the stop, each with its confidence", async () => {
