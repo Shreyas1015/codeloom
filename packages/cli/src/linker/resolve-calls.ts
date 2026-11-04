@@ -14,9 +14,9 @@ export interface ResolvedCall {
   site: CallSite;
   target: SymbolRef;
   /** "exact" for import/new/this/DI/object; "guess" for the unique-method fallback; "param" for a
-   * JSX reference (`via: "jsx-ref"`) and for a handler read off a hook's result (`via: "hook"`, H10). */
+   * JSX reference (`via: "jsx-ref"`), a function handed over as a call argument (`via: "fn-arg"`), and for a handler read off a hook's result (`via: "hook"`, H10). */
   confidence: Confidence;
-  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "hook";
+  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "fn-arg" | "hook";
   /** Set when the target is an inline function a hook returns (H10): `target` is the hook, these are the
    * function's own lines inside it. */
   lines?: [number, number];
@@ -296,6 +296,14 @@ function resolveIdent(ctx: Ctx, file: string, site: CallSite, callee: Extract<Ca
 function functionByName(ctx: Ctx, file: string, name: string): ExportHit | null {
   const fi = ctx.index.get(file);
   if (!fi) return null;
+  const dot = name.indexOf(".");
+  if (dot >= 0) {
+    // `ns.useX`: only through a namespace import (`import * as ns` / `const ns = require(…)`).
+    const ns = fi.imports.find((i) => i.local === name.slice(0, dot) && i.kind === "namespace");
+    const target = ns ? resolveImport(file, ns.from, ctx.files, ctx.aliases) : null;
+    const hit = target ? resolveExportIn(ctx, target, name.slice(dot + 1), 0) : null;
+    return hit && symbolKind(ctx, hit) === "function" ? hit : null;
+  }
   const locals = fi.symbols.filter((s) => s.name === name && s.kind === "function" && s.binding);
   if (locals.length > 0) return locals.length === 1 ? { file, symbol: name, hops: 0 } : null;
   const imp = fi.imports.find((i) => i.local === name && i.kind !== "namespace");
@@ -324,7 +332,9 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   const fi = ctx.index.get(file);
   if (!fi) return null;
   // `form.handleSubmit` with `const form = useCustomerForm()`: the hook's key, never a guess.
-  if (callee.hook !== undefined) return resolveHookKey(ctx, file, site, callee.hook, callee.prop);
+  if (callee.hook !== undefined) {
+    return resolveHookKey(ctx, file, site, callee.hook, callee.hookKey !== undefined ? `${callee.hookKey}.${callee.prop}` : callee.prop);
+  }
 
   const ns = fi.imports.find((i) => i.local === callee.object && i.kind === "namespace");
   if (ns) {
@@ -466,8 +476,8 @@ function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null
   const rc = resolveCallee(ctx, file, site);
   // Production code never resolves into a test/fixture/mock file.
   if (rc && isTestFile(rc.target.file) && !isTestFile(file)) return null;
-  if (!rc || site.kind !== "jsx-ref") return rc;
-  return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: rc.via === "hook" ? "hook" : "jsx-ref" };
+  if (!rc || site.kind === undefined) return rc;
+  return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: rc.via === "hook" ? "hook" : site.kind };
 }
 
 function resolveCallee(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {

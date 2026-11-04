@@ -28,6 +28,12 @@ export type HttpCallDraft = HttpCall & { clientImport?: { from: string; name: st
  * ("default" for the default export); used by `finalizeEndpoints`, then dropped. */
 export type HttpClientDraft = HttpClient & { exportNames?: string[] };
 
+/** A module re-export (`export * from "./x"` / `export { a as b } from "./x"`), so `finalizeEndpoints` can
+ * follow an imported HTTP client through barrel files (v0.2a). Never written to endpoints.json. */
+export type ReExportDraft =
+  | { file: string; kind: "all"; from: string }
+  | { file: string; kind: "named"; exported: string; imported: string; from: string };
+
 export interface ParsedFile {
   rel: string;
   content: string;
@@ -67,11 +73,12 @@ export interface EndpointsPart {
   tables: TableDef[];
   models: ModelDef[];
   queues: QueueOp[];
+  reExports: ReExportDraft[];
 }
 
 export function emptyPart(): EndpointsPart {
   return {
     pages: [], httpCalls: [], httpClients: [], routes: [], mounts: [], routers: [], dbAccess: [], tables: [], models: [],
-    queues: [],
+    queues: [], reExports: [],
   };
 }

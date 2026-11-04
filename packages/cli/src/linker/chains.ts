@@ -128,7 +128,7 @@ function uiStops(ctx: Ctx, link: UiLink, page: PageReach | undefined): ChainStop
     const sym: SymbolRef = { repo: ref.repo, file: ref.file, symbol: ref.symbol };
     stops.push(reachedFrom(ctx, i === 0
       ? refStop(ctx, "ui", "page", sym, hop("exact"), page!.page.line)
-      : refStop(ctx, "ui", "function", sym, hop(page!.path[i - 1]!.confidence)), stops[i - 1]));
+      : refStop(ctx, "ui", "function", sym, hop(page!.path[i - 1]!.confidence), ref.line), stops[i - 1]));
   });
   stops.push(reachedFrom(ctx, withoutUndefined({
     lane: "ui" as const, kind: "call" as const, repo: link.repo,
