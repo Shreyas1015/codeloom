@@ -14,9 +14,9 @@ export interface ResolvedCall {
   site: CallSite;
   target: SymbolRef;
   /** "exact" for import/new/this/DI/object; "guess" for the unique-method fallback; "param" for a
-   * JSX reference (`via: "jsx-ref"`) and for a handler read off a hook's result (`via: "hook"`, H10). */
+   * JSX reference (`via: "jsx-ref"`), a function handed over as a call argument (`via: "fn-arg"`), and for a handler read off a hook's result (`via: "hook"`, H10). */
   confidence: Confidence;
-  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "hook";
+  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "fn-arg" | "hook";
   /** Set when the target is an inline function a hook returns (H10): `target` is the hook, these are the
    * function's own lines inside it. */
   lines?: [number, number];
@@ -466,8 +466,8 @@ function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null
   const rc = resolveCallee(ctx, file, site);
   // Production code never resolves into a test/fixture/mock file.
   if (rc && isTestFile(rc.target.file) && !isTestFile(file)) return null;
-  if (!rc || site.kind !== "jsx-ref") return rc;
-  return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: rc.via === "hook" ? "hook" : "jsx-ref" };
+  if (!rc || site.kind === undefined) return rc;
+  return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: rc.via === "hook" ? "hook" : site.kind };
 }
 
 function resolveCallee(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {

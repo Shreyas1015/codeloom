@@ -75,8 +75,11 @@ export interface CallSite {
   callee: Callee;
   /** Absent for a real call. `"jsx-ref"`: not a call but a function handed to JSX (H3) — a JSX attribute
    * value that is a plain name / `this.x` / `obj.x` (`<form onSubmit={submitData}>`), or a component
-   * tag (`<PostDetails />`). Resolved like a call, but at best "param" (it may never run). */
-  kind?: "jsx-ref";
+   * tag (`<PostDetails />`). Resolved like a call, but at best "param" (it may never run).
+   * `"fn-arg"`: not a call but a function handed over as a call argument (v0.2a) — `useMutation(saveCustomer)`,
+   * `useQuery({ onSuccess: refresh })` — only when the outer callee is a local/imported function or a
+   * hook-like `use*` name (never a member call like `ids.forEach(save)`). At best "param" too. */
+  kind?: "jsx-ref" | "fn-arg";
   /** Plain-identifier arguments that name a function/class declared in this file or an import binding —
    * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
    * handleEmail)` — with their argument position. Absent when none. */
@@ -548,6 +551,31 @@ function jsxRefOf(node: ts.Node): ts.Identifier | ts.PropertyAccessExpression | 
   return undefined;
 }
 
+/** The outer callee of a call whose arguments may hand functions over: a plain name (kept later only when it
+ * is a local/imported function or a `use*` hook) -> that name; `ns.useX(…)` -> "". Undefined otherwise
+ * (member calls like `ids.forEach(save)` / `p.then(load)` are built-in or library methods). */
+function fnArgCallee(e: ts.Expression): string | undefined {
+  if (ts.isIdentifier(e)) return e.text === "require" ? undefined : e.text;
+  if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && HOOK_NAME_RE.test(e.name.text)) return "";
+  return undefined;
+}
+
+/** Functions a call hands over by reference: arguments that are a plain name / `obj.x` / `this.x`, and such
+ * values of an object-literal argument's properties (`{ onSuccess: refresh }`, shorthand `{ refresh }`). */
+function fnArgRefs(call: ts.CallExpression): Array<ts.Identifier | ts.PropertyAccessExpression> {
+  const out: Array<ts.Identifier | ts.PropertyAccessExpression> = [];
+  for (const a of call.arguments) {
+    if (isJsxRefExpr(a)) out.push(a);
+    else if (ts.isObjectLiteralExpression(a)) {
+      for (const p of a.properties) {
+        if (ts.isShorthandPropertyAssignment(p)) out.push(p.name);
+        else if (ts.isPropertyAssignment(p) && isJsxRefExpr(p.initializer)) out.push(p.initializer);
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Hook handlers (H10)
 // ---------------------------------------------------------------------------------------------------
@@ -730,6 +758,8 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const consts = stringConsts(file.sf);
   /** symbol -> its wrapper candidate; null once a second HTTP call in the same symbol makes it ambiguous. */
   const wrappers = new Map<string, HttpWrapper | null>();
+  /** fn-arg site -> its outer callee's name ("" for a `ns.useX(…)` hook call, which always qualifies). */
+  const fnArgOuter = new Map<CallSite, string>();
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
@@ -882,6 +912,14 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       const configArgs = configArgsOf(node);
       if (configArgs.length > 0) site.configArgs = configArgs;
       idx.calls.push(site);
+      const outer = fnArgCallee(node.expression);
+      if (outer !== undefined) {
+        for (const arg of fnArgRefs(node)) {
+          const fnArg: CallSite = { caller: site.caller, line: lineOf(arg), kind: "fn-arg", callee: classify(arg) };
+          fnArgOuter.set(fnArg, outer);
+          idx.calls.push(fnArg);
+        }
+      }
       const w = wrapperCandidate(node, superagent, consts) ?? configWrapperCandidate(node);
       if (w) wrappers.set(w.symbol, wrappers.has(w.symbol) ? null : w);
     }
@@ -902,7 +940,13 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   }
   // A plain-name JSX reference (`value={title}`) counts only when the name can be a function.
   // A name destructured from a hook's result can be a function too (H10).
-  idx.calls = idx.calls.filter((c) => c.kind !== "jsx-ref" || c.callee.kind !== "ident" || c.callee.hook !== undefined || fnNames.has(c.callee.name));
+  idx.calls = idx.calls.filter((c) => {
+    if (c.kind === "fn-arg") {
+      const outer = fnArgOuter.get(c)!;
+      if (outer !== "" && !HOOK_NAME_RE.test(outer) && !fnNames.has(outer)) return false;
+    } else if (c.kind !== "jsx-ref") return true;
+    return c.callee.kind !== "ident" || c.callee.hook !== undefined || fnNames.has(c.callee.name);
+  });
   idx.hookReturns?.sort((a, b) => compare(a.hook, b.hook) || compare(a.key, b.key));
   // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
   const obj = defaultCandidate;
