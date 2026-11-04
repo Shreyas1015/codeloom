@@ -98,7 +98,39 @@ function cteNames(text: string): Set<string> {
   return names;
 }
 
+/** The SQL with every `-- line` and `/* block *\/` comment blanked out (each comment character becomes a
+ * space, newlines are kept, so indexes and line numbers do not move). Comment markers inside a quoted
+ * string or identifier (`'--'`, `"a/*b"`) are text, not comments, and stay. */
+export function stripSqlComments(text: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+      out += ch;
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      out += ch;
+    } else if (ch === "-" && text[i + 1] === "-") {
+      let end = text.indexOf("\n", i);
+      if (end === -1) end = text.length;
+      out += " ".repeat(end - i);
+      i = end - 1;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      let end = text.indexOf("*/", i + 2);
+      end = end === -1 ? text.length : end + 2;
+      out += text.slice(i, end).replace(/[^\n]/g, " ");
+      i = end - 1;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
+  text = stripSqlComments(text);
   if (!/^\s*(select|insert|update|delete|with)\b/i.test(text)) return [];
   const out: Array<{ table: string; op: DbOp }> = [];
   const seen = new Set<string>();
@@ -428,9 +460,10 @@ function prismaSchema(file: ParsedFile): DbPart {
 
 function sqlFile(file: ParsedFile): DbPart {
   const tables: TableDef[] = [];
-  for (const m of file.content.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?([\w."`]+)/gi)) {
+  const content = stripSqlComments(file.content);
+  for (const m of content.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?([\w."`]+)/gi)) {
     const name = m[1]!.replace(/["`]/g, "").split(".").pop()!;
-    tables.push({ name, file: file.rel, line: file.content.slice(0, m.index).split("\n").length, source: "migration" });
+    tables.push({ name, file: file.rel, line: content.slice(0, m.index).split("\n").length, source: "migration" });
   }
   return { dbAccess: [], tables, models: [] };
 }

@@ -345,3 +345,29 @@ describe("H9: table-valued functions and every CTE name are not tables", () => {
       .toEqual(["insert invoice_lines", "read invoices"]);
   });
 });
+
+describe("hG: SQL comments are stripped before table / CTE parsing", () => {
+  const tables = (sql: string) => sqlTables(sql).map((t) => `${t.op} ${t.table}`);
+
+  it("a comment that says 'with x as' does not declare a CTE or a table", () => {
+    expect(tables(`SELECT * FROM customers -- joined with invoices as (needed later)
+      JOIN invoices ON invoices.customer_id = customers.id`)).toEqual(["read customers", "read invoices"]);
+    expect(tables(`SELECT * FROM customers /* with invoices as (a cte) */ JOIN invoices i ON i.customer_id = customers.id`))
+      .toEqual(["read customers", "read invoices"]);
+  });
+
+  it("a comment that says 'from foo' does not create table foo", () => {
+    expect(tables(`SELECT id -- copied from foo
+      FROM customers`)).toEqual(["read customers"]);
+    expect(tables(`/* read from foo first */ SELECT id FROM customers /* then join foo */`)).toEqual(["read customers"]);
+    expect(tables(`-- leading comment: delete from foo
+      UPDATE invoices SET paid = true`)).toEqual(["update invoices"]);
+  });
+
+  it("keeps '--' and '/*' inside string literals", () => {
+    expect(tables(`SELECT '--' AS dash, '/*' AS star FROM customers JOIN invoices i ON i.note = '--'`))
+      .toEqual(["read customers", "read invoices"]);
+    expect(tables(`SELECT * FROM customers WHERE name = 'a -- b' AND id IN (SELECT customer_id FROM invoices)`))
+      .toEqual(["read customers", "read invoices"]);
+  });
+});
