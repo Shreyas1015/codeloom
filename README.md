@@ -28,8 +28,10 @@ Then open Claude Code in the same folder and run the `name-journeys` prompt. Cla
 prompts as `/mcp__codeloom__name-journeys`. Claude groups the request chains into named journeys and saves
 them; the dashboard updates by itself.
 
-`init` also adds a post-commit git hook that re-indexes after each commit. The hook only runs when
-`codeloom` is on your `PATH`, so install it globally if you want that: `npm i -g codeloom`.
+`init` also adds a post-commit git hook that re-indexes after each commit. The hook runs the codeloom
+that ran `init`, by its full path. With `npx` that is a copy in the npx cache, which can be cleared; then
+the hook falls back to `codeloom` on your `PATH`. To keep the hook working, install it globally:
+`npm i -g codeloom`.
 
 ## How it works
 
