@@ -218,6 +218,8 @@ Known limits:
 - A component reused for "create" and "edit" can link its edit path to the create call (marked `param`).
 - When two routes match a call equally well (for example both end in a parameter), the link is a `guess`.
 - An inline arrow handler returned by a hook is shown at the hook's first line, not the arrow's own line.
+- Mongoose: `new Model().save()`, `connection.model(...)` and CommonJS `module.exports = mongoose.model(...)`
+  are not detected yet.
 
 ## Not in v0.1
 
