@@ -90,7 +90,9 @@ function toParsedFile(rel: string, content: string): ParsedFile {
 export async function indexRepo(
   repoAbs: string,
   repoId: string,
-  opts?: { codeloomVersion?: string },
+  /** `writeGraph: false` leaves graph.json to the caller: `codeloom index` writes it after the linker has
+   * enriched it with method nodes and call edges (enrich-graph.ts), so it is written once per run. */
+  opts?: { codeloomVersion?: string; writeGraph?: boolean },
 ): Promise<IndexResult> {
   checkRepo(repoAbs, repoId);
   const dir = join(repoAbs, CODELOOM_DIR);
@@ -159,7 +161,7 @@ export async function indexRepo(
   graph.project.analyzedAt = "";
   graph.project.gitCommitHash = "";
   const endpoints = finalizeEndpoints(repoId, parts, (from, spec) => resolveImport(from, spec, fileSet, aliases));
-  writeJsonIfChanged(join(dir, FILES.graph), graph);
+  if (opts?.writeGraph !== false) writeJsonIfChanged(join(dir, FILES.graph), graph);
   writeJsonIfChanged(join(dir, FILES.endpoints), endpoints);
   writeJsonAtomic(cachePath, {
     version: 2,

@@ -101,7 +101,7 @@ type QueueFollow = { skip?: string } | null;
 
 /** A stop for a bare SymbolRef (no Loc of its own). Line: `line` when given (the page stop's
  * UiPage.line, an inline handler's first line), else the symbol's own first line from the code index,
- * else the nearest graph node's line (the graph has no method nodes, so that may be the class or file). */
+ * else the nearest graph node's line (the method node when the enriched graph has one, else the class or file). */
 function refStop(ctx: Ctx, lane: ChainStop["lane"], kind: "function" | "handler" | "page", ref: SymbolRef, hop: Hop, line?: number): ChainStop {
   const graph = graphOf(ctx.ws, ref.repo);
   const nodeId = nearestNodeId(graph, ref.file, ref.symbol);

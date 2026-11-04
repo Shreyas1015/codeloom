@@ -17,7 +17,7 @@ export async function runIndex(start: string): Promise<IndexRunResult> {
   const indexed: Array<{ ref: RepoRef; abs: string; result: Awaited<ReturnType<typeof indexRepo>> }> = [];
   for (const repo of ws.repos) {
     const abs = join(ws.root, repo.path);
-    const res = await indexRepo(abs, repo.id);
+    const res = await indexRepo(abs, repo.id, { writeGraph: false }); // runLinker writes the enriched graph
     repos.push({ id: repo.id, stats: res.stats, endpoints: res.endpoints });
     indexed.push({ ref: repo, abs, result: res });
   }
