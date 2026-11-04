@@ -194,6 +194,8 @@ describe("Journey screen", () => {
     const calls = within(inspector).getByRole("list", { name: "Calls" });
     expect(within(calls).getByText("InvoiceService.create")).toBeInTheDocument();
     expect(within(calls).queryByText("invoice.ts")).toBeNull();
+    // v0.2a §1: a stop whose ref is the exact method node shows its call edges, not the "not mapped yet" note
+    expect(within(inspector).queryByText(/Call edges for methods aren't mapped yet/)).toBeNull();
     const also = within(inspector).getByRole("list", { name: "Also in journeys" });
     const link = within(also).getByRole("link", { name: "Customer edits an invoice" });
     expect(link).toHaveAttribute("href", "/journeys/j_edit");

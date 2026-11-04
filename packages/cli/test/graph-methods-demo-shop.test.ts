@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { KnowledgeGraphSchema } from "@codeloom/core";
 import { describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
+import { graphLevel } from "../src/web/api.js";
 import { materializeFixture } from "./helpers.js";
 
 function workspace(): string {
@@ -41,6 +42,16 @@ describe("graph.json method nodes on demo-shop (v0.2a §1)", () => {
       const g = JSON.parse(read(root, repo)) as { edges: Array<{ type: string; description?: string }> };
       expect(g.edges.filter((e) => e.type === "calls" && e.description === "guess")).toEqual([]);
     }
+  });
+
+  it("lists methods on the Map's file cards (GraphLevel.files[].functions)", async () => {
+    const root = workspace();
+    await runIndex(root);
+    const graph = KnowledgeGraphSchema.parse(JSON.parse(read(root, "api")));
+    const level = graphLevel({ id: "api", graph }, { chains: [], journeys: [] }, "app/services");
+    const card = level.files.find((f) => f.path === S)!;
+    expect(card.functions.map((f) => f.name)).toEqual(["CustomerService", "CustomerService.create", "CustomerService.find"]);
+    expect(card.functions.find((f) => f.name === "CustomerService.create")).toMatchObject({ type: "function", ref: `api::function:${S}:CustomerService.create`, line: 5 });
   });
 
   it("points the handler chain stop at the method node", async () => {
