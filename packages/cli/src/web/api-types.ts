@@ -260,20 +260,25 @@ export interface NodeResult {
   node: NodeInfo;
   summary: string | null;
   edges: {
-    out: Array<{ type: string; target: string }>;
-    in: Array<{ type: string; source: string }>;
+    /** `confidence` only on a `calls` edge from a resolved call (v0.2a). */
+    out: Array<{ type: string; target: string; confidence?: CallConfidence }>;
+    in: Array<{ type: string; source: string; confidence?: CallConfidence }>;
     truncated: boolean;
   };
   chains: string[];
   journeys: Array<{ id: string; name: string }>;
 }
 
+/** How sure a resolved `calls` edge is: `exact` (the callee is known) or `param` (known up to a path param). */
+export type CallConfidence = "exact" | "param";
+
 export interface Neighbor {
   ref: string;
   name: string;
   type: string;
   depth: number;
-  via: { type: string; direction: "in" | "out" };
+  /** `confidence` only when reached by a `calls` edge from a resolved call (v0.2a). */
+  via: { type: string; direction: "in" | "out"; confidence?: CallConfidence };
 }
 
 /** GET /api/neighbors/:ref (get_neighbors). */

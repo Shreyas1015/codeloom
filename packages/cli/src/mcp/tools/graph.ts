@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { type GraphNode, SearchEngine } from "@codeloom/core";
+import { type GraphEdge, type GraphNode, SearchEngine } from "@codeloom/core";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dataError } from "../../errors.js";
@@ -175,6 +175,12 @@ function chainsAndJourneys(state: MapState, ref: { repo: string; nodeId: string 
 
 const EDGE_CAP = 100;
 
+/** v0.2a: a `calls` edge added from a resolved call carries its confidence in `description`; tree-sitter's
+ * own calls edges (and every other edge type) have none. */
+function callConfidence(e: GraphEdge): { confidence?: "exact" | "param" } {
+  return e.type === "calls" && (e.description === "exact" || e.description === "param") ? { confidence: e.description } : {};
+}
+
 /** get_node: one graph node, its saved summary, its edges (≤ 100 each way), and the chains and
  * journeys it takes part in. */
 export function getNode(start: string, nodeRef: string): Record<string, unknown> {
@@ -184,11 +190,11 @@ export function getNode(start: string, nodeRef: string): Record<string, unknown>
   const toRef = (id: string) => formatNodeRef({ repo: ref.repo, nodeId: id });
   const out = repo.graph.edges
     .filter((e) => e.source === node.id)
-    .map((e) => ({ type: e.type, target: toRef(e.target) }))
+    .map((e) => ({ type: e.type, target: toRef(e.target), ...callConfidence(e) }))
     .sort((a, b) => compare(a.type, b.type) || compare(a.target, b.target));
   const inn = repo.graph.edges
     .filter((e) => e.target === node.id)
-    .map((e) => ({ type: e.type, source: toRef(e.source) }))
+    .map((e) => ({ type: e.type, source: toRef(e.source), ...callConfidence(e) }))
     .sort((a, b) => compare(a.type, b.type) || compare(a.source, b.source));
   return {
     ref: formatNodeRef(ref),
@@ -214,7 +220,7 @@ interface Neighbor {
   name: string;
   type: string;
   depth: number;
-  via: { type: string; direction: "in" | "out" };
+  via: { type: string; direction: "in" | "out"; confidence?: "exact" | "param" };
 }
 
 /** Breadth-first walk over one repo's graph edges. Each node keeps the depth (and edge) it was first
@@ -223,16 +229,17 @@ interface Neighbor {
 function neighbors(repo: RepoData, rootId: string, args: Required<Omit<NeighborsArgs, "node" | "edgeTypes">> & { edgeTypes?: string[] }) {
   const types = args.edgeTypes && args.edgeTypes.length > 0 ? new Set(args.edgeTypes) : undefined;
   const nodes = new Map(repo.graph.nodes.map((n) => [n.id, n]));
-  const adj = new Map<string, Array<{ other: string; type: string; direction: "in" | "out" }>>();
-  const push = (from: string, other: string, type: string, direction: "in" | "out") => {
+  type Step = { other: string; type: string; direction: "in" | "out"; confidence?: "exact" | "param" };
+  const adj = new Map<string, Step[]>();
+  const push = (from: string, other: string, e: GraphEdge, direction: "in" | "out") => {
     const list = adj.get(from) ?? [];
-    list.push({ other, type, direction });
+    list.push({ other, type: e.type, direction, ...callConfidence(e) });
     adj.set(from, list);
   };
   for (const e of repo.graph.edges) {
     if (types && !types.has(e.type)) continue;
-    if (args.direction !== "in") push(e.source, e.target, e.type, "out");
-    if (args.direction !== "out") push(e.target, e.source, e.type, "in");
+    if (args.direction !== "in") push(e.source, e.target, e, "out");
+    if (args.direction !== "out") push(e.target, e.source, e, "in");
   }
   for (const list of adj.values()) {
     list.sort((a, b) => compare(a.type, b.type) || compare(a.other, b.other) || compare(a.direction, b.direction));
@@ -254,7 +261,7 @@ function neighbors(repo: RepoData, rootId: string, args: Required<Omit<Neighbors
           name: n?.name ?? edge.other,
           type: n?.type ?? "unknown",
           depth,
-          via: { type: edge.type, direction: edge.direction },
+          via: { type: edge.type, direction: edge.direction, ...(edge.confidence ? { confidence: edge.confidence } : {}) },
         });
       }
     }
@@ -380,7 +387,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
       title: "Get node",
       description:
         "One graph node (file, function or class): its type, name, file, lines and layer, its saved summary, its " +
-        "incoming and outgoing edges, and the request chains and journeys it takes part in.",
+        "incoming and outgoing edges (a resolved `calls` edge carries its `confidence`: exact or param), and the request chains and journeys it takes part in.",
       inputSchema: { node: nodeArg },
     },
     withErrors((args: { node: string }) => getNode(opts.start, args.node), "Call get_neighbors with a limit for its edges, or list_chains for its chains."),
@@ -392,7 +399,8 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
       title: "Get neighbors",
       description:
         "The nodes around one node, up to `depth` hops away (1-3), following edges in `direction` " +
-        '("out" = what it contains/imports/calls, "in" = what contains/imports/calls it). Optionally only some edge types.',
+        '("out" = what it contains/imports/calls, "in" = what contains/imports/calls it). Optionally only some edge types. ' +
+        "A neighbor reached by a resolved `calls` edge has `via.confidence` (exact or param).",
       inputSchema: {
         node: nodeArg,
         direction: z.enum(["in", "out", "both"]).default("both"),

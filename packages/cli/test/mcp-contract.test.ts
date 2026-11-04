@@ -82,13 +82,15 @@ const JourneyRef = z.object({ id: str.regex(/^j_[0-9a-f]{12}$/), name: str }).st
 const NodeView = z
   .object({ type: str, name: str, filePath: str.optional(), lineRange: z.tuple([int, int]).optional(), layer: str.optional() })
   .strict();
+const CallConfidence = z.enum(["exact", "param"]);
 const Neighbor = z
   .object({
     ref: str,
     name: str,
     type: str,
     depth: int.min(1).max(3),
-    via: z.object({ type: str, direction: z.enum(["in", "out"]) }).strict(),
+    // v0.2a: a resolved `calls` edge carries its confidence (never guess: guesses are not edges)
+    via: z.object({ type: str, direction: z.enum(["in", "out"]), confidence: CallConfidence.optional() }).strict(),
   })
   .strict();
 
@@ -187,8 +189,8 @@ const RawSchemas: Record<string, z.ZodObject> = {
       summary: str.nullable(),
       edges: z
         .object({
-          out: z.array(z.object({ type: str, target: str }).strict()).max(100),
-          in: z.array(z.object({ type: str, source: str }).strict()).max(100),
+          out: z.array(z.object({ type: str, target: str, confidence: CallConfidence.optional() }).strict()).max(100),
+          in: z.array(z.object({ type: str, source: str, confidence: CallConfidence.optional() }).strict()).max(100),
           truncated: z.boolean(),
         })
         .strict(),
@@ -414,6 +416,16 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     expect(node.chains).toContain(chainId);
     await valid(client, "get_node", { node: fileRef });
     await valid(client, "get_neighbors", { node: fileRef, direction: "out", depth: 2, limit: 5 });
+    // v0.2a: a controller method node's resolved calls carry a confidence
+    const methodRef = "demo-api::function:app/controllers/customers_controller.ts:CustomersController.store";
+    const method = (await valid(client, "get_node", { node: methodRef })) as { edges: { out: Array<{ type: string; confidence?: string }> } };
+    expect(method.edges.out.filter((e) => e.type === "calls").every((e) => e.confidence === "exact" || e.confidence === "param")).toBe(true);
+    expect(method.edges.out.some((e) => e.type === "calls")).toBe(true);
+    const calls = (await valid(client, "get_neighbors", { node: methodRef, direction: "out", edgeTypes: ["calls"] })) as {
+      neighbors: Array<{ type: string; via: { confidence?: string } }>;
+    };
+    expect(calls.neighbors.length).toBeGreaterThan(0);
+    expect(calls.neighbors.every((n) => n.type === "function" && n.via.confidence !== undefined)).toBe(true);
     const explained = (await valid(client, "explain_context", { node: fnRef })) as { code: { text: string } | null };
     expect(explained.code?.text.length).toBeGreaterThan(0);
     await valid(client, "list_chains", { complete: true, confidence: "exact", unnamed: true, limit: 2, offset: 1 });

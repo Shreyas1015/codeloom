@@ -154,6 +154,16 @@ describe("get_node", () => {
     expect(r.journeys).toEqual([{ id: JOURNEY_ID, name: "Sign up a customer" }]);
   });
 
+  it("v0.2a: a method node lists its resolved calls edges with their confidence", async () => {
+    const r = await sc("get_node", { node: "api::function:app/controllers/customers_controller.ts:CustomersController.store" });
+    expect(r.node).toMatchObject({ type: "function", name: "CustomersController.store" });
+    expect(r.edges.out).toContainEqual({ type: "calls", target: "api::function:app/services/customer_service.ts:CustomerService.create", confidence: "exact" });
+    // contains edges carry no confidence
+    expect(r.edges.in).toContainEqual({ type: "contains", source: "api::file:app/controllers/customers_controller.ts" });
+    const callee = await sc("get_node", { node: "api::function:app/services/customer_service.ts:CustomerService.create" });
+    expect(callee.edges.in).toContainEqual({ type: "calls", source: "api::function:app/controllers/customers_controller.ts:CustomersController.store", confidence: "exact" });
+  });
+
   it("bad or unknown refs are tool errors", async () => {
     const bad = await call("get_node", { node: "no-separator" });
     expect(bad.isError).toBe(true);
@@ -195,6 +205,18 @@ describe("get_neighbors", () => {
     const capped = await sc("get_neighbors", { node: root, depth: 2, limit: 1 });
     expect(capped.neighbors).toHaveLength(1);
     expect(capped.truncated).toBe(true);
+  });
+
+  it("v0.2a: calls edges between method nodes carry their confidence in `via`", async () => {
+    const store = "api::function:app/controllers/customers_controller.ts:CustomersController.store";
+    const out = await sc("get_neighbors", { node: store, direction: "out", edgeTypes: ["calls"] });
+    expect(out.neighbors).toEqual([
+      { ref: "api::function:app/services/customer_service.ts:CustomerService.create", name: "CustomerService.create", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "exact" } },
+    ]);
+    const inn = await sc("get_neighbors", { node: "api::function:app/services/customer_service.ts:CustomerService.create", direction: "in", edgeTypes: ["calls"] });
+    expect(inn.neighbors).toEqual([
+      { ref: store, name: "CustomersController.store", type: "function", depth: 1, via: { type: "calls", direction: "in", confidence: "exact" } },
+    ]);
   });
 
   it("depth over 3 is rejected", async () => {
