@@ -207,7 +207,15 @@ Known limits:
   codeloom does not follow yet. The UI → API hops are found from the call sites, but `codeloom check` lists
   those calls as "not reached from any page".
 - A method call on an object whose class codeloom cannot see (for example, one passed in as a parameter) is
-  linked only when exactly one method in the repo has that name, and then only as a `guess`.
+  linked only when exactly one method in the repo has that name, and then only as a `guess`. Common
+  built-in and ORM method names (`map`, `then`, `create`, `save`, …) are never guessed.
+- Tested on a real two-repo app (a React UI and an AdonisJS API, about 3,000 files): about 120 UI → API links
+  were found and all checked links were right, but some UI calls still have no page (for example a handler
+  passed as a plain function argument), and calls to a backend that is not in the workspace show as
+  unmatched.
+- A component reused for "create" and "edit" can link its edit path to the create call (marked `param`).
+- When two routes match a call equally well (for example both end in a parameter), the link is a `guess`.
+- An inline arrow handler returned by a hook is shown at the hook's first line, not the arrow's own line.
 
 ## Not in v0.1
 
