@@ -371,3 +371,29 @@ describe("hG: SQL comments are stripped before table / CTE parsing", () => {
       .toEqual(["read customers", "read invoices"]);
   });
 });
+
+describe("hH-2: raw SQL strings, IS DISTINCT FROM and FROM ONLY never yield false tables", () => {
+  const tables = (sql: string) => sqlTables(sql).map((t) => `${t.op} ${t.table}`);
+
+  it("skips IS [NOT] DISTINCT FROM", () => {
+    expect(tables(`SELECT * FROM invoices WHERE a IS DISTINCT FROM b`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT * FROM invoices WHERE a is not distinct from b`)).toEqual(["read invoices"]);
+  });
+
+  it("ignores FROM / JOIN inside quoted string literals", () => {
+    expect(tables(`SELECT * FROM invoices WHERE note = 'paid from bank'`)).toEqual(["read invoices"]);
+    expect(tables(`SELECT * FROM invoices WHERE note = 'it''s from here' AND kind = 'left join customers'`)).toEqual(["read invoices"]);
+    expect(tables(`UPDATE invoices SET note = 'moved from archive' WHERE id = 1`)).toEqual(["update invoices"]);
+  });
+
+  it("keeps double-quoted identifiers as identifiers", () => {
+    expect(tables(`SELECT * FROM "customers" c JOIN "billing"."invoices" i ON i.customer_id = c.id WHERE c.note = 'from x'`))
+      .toEqual(["read customers", "read invoices"]);
+  });
+
+  it("treats ONLY as a keyword", () => {
+    expect(tables(`SELECT * FROM ONLY customers`)).toEqual(["read customers"]);
+    expect(tables(`SELECT * FROM invoices i JOIN only customers c ON c.id = i.customer_id`)).toEqual(["read invoices", "read customers"]);
+    expect(tables(`DELETE FROM ONLY invoices WHERE id = 1`)).toEqual(["delete invoices"]);
+  });
+});

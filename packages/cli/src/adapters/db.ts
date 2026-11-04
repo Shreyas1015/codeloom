@@ -129,8 +129,35 @@ export function stripSqlComments(text: string): string {
   return out;
 }
 
+/** Blank the contents of single-quoted string literals (`''` is an escaped quote inside one), so words in
+ * a value (`note = 'paid from bank'`) never read as SQL. Double-quoted and backtick identifiers are kept. */
+function blankSqlStrings(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"' || ch === "`") {
+      let end = text.indexOf(ch, i + 1);
+      if (end === -1) end = text.length - 1;
+      out += text.slice(i, end + 1);
+      i = end;
+    } else if (ch === "'") {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === "'" && text[j + 1] === "'") j += 2;
+        else if (text[j] === "'") break;
+        else j++;
+      }
+      out += "'" + text.slice(i + 1, j).replace(/[^\n]/g, " ") + (j < text.length ? "'" : "");
+      i = j;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
-  text = stripSqlComments(text);
+  text = blankSqlStrings(stripSqlComments(text));
   if (!/^\s*(select|insert|update|delete|with)\b/i.test(text)) return [];
   const out: Array<{ table: string; op: DbOp }> = [];
   const seen = new Set<string>();
@@ -144,11 +171,11 @@ export function sqlTables(text: string): Array<{ table: string; op: DbOp }> {
   const ident = `([\\w."\`\\[\\]]+)`;
   for (const m of text.matchAll(new RegExp(`insert\\s+into\\s+${ident}`, "gi"))) add(m[1]!, "insert");
   for (const m of text.matchAll(new RegExp(`(?:^|;)\\s*update\\s+${ident}\\s+set`, "gi"))) add(m[1]!, "update");
-  for (const m of text.matchAll(new RegExp(`delete\\s+from\\s+${ident}`, "gi"))) add(m[1]!, "delete");
+  for (const m of text.matchAll(new RegExp(`delete\\s+from\\s+(?:only\\s+)?${ident}`, "gi"))) add(m[1]!, "delete");
   const inCall = functionCallMask(text);
   // An identifier followed by "(" after FROM / JOIN is a table-valued function (`FROM unnest(arr)`,
   // `JOIN generate_series(1, 3)`), not a table.
-  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+)\\b(?:from|join)\\s+(?:lateral\\s+)?(?!lateral\\b)${ident}(?!\\s*\\(|[\\w."\`\\[\\]])`, "gi"))) {
+  for (const m of text.matchAll(new RegExp(`(?<!delete\\s+|\\bdistinct\\s+)\\b(?:from|join)\\s+(?:(?:lateral|only)\\s+)?(?!(?:lateral|only)\\b)${ident}(?!\\s*\\(|[\\w."\`\\[\\]])`, "gi"))) {
     if (!inCall(m.index)) add(m[1]!, "read");
   }
   return out;
