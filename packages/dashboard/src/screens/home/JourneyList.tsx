@@ -85,6 +85,11 @@ function Row({ r }: { r: JourneyRow }) {
             )}
           </b>
           {r.note && <small className="truncate text-[12.5px] text-muted-foreground">{r.note}</small>}
+          {r.external?.length ? (
+            <small className="truncate text-[12.5px] text-muted-foreground" title="Other services its pages call">
+              calls {r.external.join(", ")}
+            </small>
+          ) : null}
         </span>
         <span className="text-[13.5px]">{r.area || <span className="text-muted-foreground">No area</span>}</span>
         <LaneCounts stops={r.stops} />

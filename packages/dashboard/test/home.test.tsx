@@ -58,6 +58,7 @@ const journeys: JourneysResponse = {
       repos: ["api", "web"],
       stops: { ui: 2, api: 1, code: 1, db: 1, queue: 0 },
       tables: ["customers"],
+      external: ["MAPS_URL", "Payments"],
     }),
     row({
       id: "j_email",
@@ -155,6 +156,9 @@ describe("Home", () => {
     expect(within(signup).getByLabelText("1 API stop")).toBeInTheDocument();
     expect(within(signup).queryByLabelText(/Queue stop/)).toBeNull();
     expect(signup).toHaveTextContent("api, web");
+    // Other services its pages call: a quiet "calls <name>" note, only on rows that have some.
+    expect(signup).toHaveTextContent("calls MAPS_URL, Payments");
+    expect(within(l).getByRole("link", { name: /Admin voids an invoice/ })).not.toHaveTextContent(/calls /);
     expect(signup).toHaveTextContent("Exact");
     expect(signup).toHaveTextContent("Complete");
 

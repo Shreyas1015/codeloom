@@ -7,6 +7,16 @@ import { CONFIDENCE_WORD, plural } from "./words";
 
 const pill = "inline-flex items-center rounded-[4px] px-1.75 py-px text-[11.5px] font-semibold";
 
+/** One "calls <name>" note per other service the journey's pages call (already sorted by name); the
+ * title lists each call and where it is made. */
+function externalNotes(result: JourneyResult): Array<{ name: string; title: string }> {
+  const byName = new Map<string, string[]>();
+  for (const e of result.external ?? []) {
+    byName.set(e.name, [...(byName.get(e.name) ?? []), `${e.method} ${e.path} (${e.repo}/${e.file}:${e.line})`]);
+  }
+  return [...byName].map(([name, lines]) => ({ name, title: lines.join("\n") }));
+}
+
 /** The fixed wall label of one journey (or one chain not yet in a journey). */
 export function Nameplate({ result, model }: { result: JourneyResult; model: JourneyModel }) {
   const j = result.journey;
@@ -41,6 +51,11 @@ export function Nameplate({ result, model }: { result: JourneyResult; model: Jou
             </>
           )}
           <span>{facts}</span>
+          {externalNotes(result).map((e) => (
+            <span key={e.name} title={e.title}>
+              calls {e.name}
+            </span>
+          ))}
           {model.confidence ? (
             <span
               data-confidence={model.confidence}

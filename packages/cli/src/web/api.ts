@@ -9,7 +9,8 @@ import { chainLookup, formatNodeRef, journeysByChain, loadMapState, type MapStat
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
 import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/workspace.js";
-import type { Chain } from "../store/schemas.js";
+import type { Chain, ExternalCallFact } from "../store/schemas.js";
+import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import type {
@@ -17,6 +18,7 @@ import type {
   ChainsResult,
   CodeResponse,
   Confidence,
+  ExternalCallView,
   GraphEdgeAgg,
   GraphFile,
   GraphFolder,
@@ -135,9 +137,25 @@ function chainRow(c: Chain): ChainRow {
   };
 }
 
+/** The other-service calls made from the pages these chains start at (`page:<repo>:<route>` entries),
+ * sorted by name, then repo, file, line, method, path. */
+export function externalCallsFor(chains: Array<Pick<Chain, "entry">>, external: ExternalCallFact[]): ExternalCallView[] {
+  const entries = new Set(chains.map((c) => c.entry));
+  return external
+    .filter((f) => f.pages.some((p) => entries.has(`page:${f.repo}:${p}`)))
+    .map((f): ExternalCallView => ({
+      name: externalLabel(f), repo: f.repo, file: f.file, line: f.line, symbol: f.symbol, method: f.method, path: f.path,
+    }))
+    .sort((a, b) => compare(a.name, b.name) || compare(a.repo, b.repo) || compare(a.file, b.file) || a.line - b.line
+      || compare(a.method, b.method) || compare(a.path, b.path));
+}
+
 /** Home's lists: every journey summarised over its chains (stops deduped the way get_journey does),
- * sorted by name then id; and the chains no journey names, sorted by id. */
-export function journeyRows(state: Pick<MapState, "chains" | "journeys">): JourneysResponse {
+ * sorted by name then id; and the chains no journey names, sorted by id. `external`: chains.json's
+ * other-service calls, named on the journeys whose pages make them. */
+export function journeyRows(
+  state: Pick<MapState, "chains" | "journeys"> & { external?: ExternalCallFact[] },
+): JourneysResponse {
   const lookup = chainLookup(state.chains);
   const journeys = state.journeys.map((j): JourneyRow => {
     const chainIds = sortedSet(j.chainIds);
@@ -162,10 +180,12 @@ export function journeyRows(state: Pick<MapState, "chains" | "journeys">): Journ
     }
     const allPresent = chains.length > 0 && resolved.missing.length === 0;
     const { complete, apiOnly } = journeyReach(chains, allPresent);
+    const external = sortedSet(externalCallsFor(chains, state.external ?? []).map((e) => e.name));
     return {
       id: j.id, name: j.name, area: j.area, note: j.note, status: j.status, chainIds,
       repos: sortedSet(repos), stops, confidence, complete, apiOnly,
       tables: sortedSet(tables),
+      ...(external.length > 0 ? { external } : {}),
     };
   });
   journeys.sort((a, b) => compare(a.name, b.name) || compare(a.id, b.id));
@@ -433,12 +453,18 @@ function graphFor(start: string, url: URL): GraphLevel {
 /** The MCP tool results, typed as api-types declares them (test/web-endpoints.test.ts checks the match). */
 const as = <T>(x: Record<string, unknown>) => x as unknown as T;
 
+/** get_journey plus the other-service calls its pages make (dashboard-only `external`). */
+function journeyWithExternal(start: string, result: JourneyResult): JourneyResult {
+  const external = externalCallsFor(result.chains, loadMapState(start).external);
+  return external.length > 0 ? { ...result, external } : result;
+}
+
 /** The route table. Every handler reads the store fresh on each request (no cache), like the MCP tools,
  * and none runs git (overview's git calls are async). */
 export const API_ROUTES: ApiRoute[] = [
   { path: "/api/overview", handler: ({ start }) => overview(start) },
   { path: "/api/journeys", handler: ({ start }): JourneysResponse => journeyRows(loadMapState(start)) },
-  { path: "/api/journeys/:id", handler: ({ start, params }) => as<JourneyResult>(getJourney(start, params.id!)) },
+  { path: "/api/journeys/:id", handler: ({ start, params }) => journeyWithExternal(start, as<JourneyResult>(getJourney(start, params.id!))) },
   { path: "/api/chains", handler: ({ start, url }) => as<ChainsResult>(listChains(start, listChainsArgs(url))) },
   { path: "/api/graph", handler: ({ start, url }) => graphFor(start, url) },
   { path: "/api/node/:ref", handler: ({ start, params }) => as<NodeResult>(getNode(start, params.ref!)) },
