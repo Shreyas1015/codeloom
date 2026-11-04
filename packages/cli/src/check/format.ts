@@ -1,9 +1,12 @@
 import type { CheckItem, CheckReport, TracesReport } from "../store/schemas.js";
+import { compare } from "../util.js";
 import { completePercent } from "./report.js";
 
 interface Group {
   label: string;
   match: (i: CheckItem) => boolean;
+  /** Order within the group (default: the items' own order). */
+  order?: (a: CheckItem, b: CheckItem) => number;
 }
 
 // Text groups read UI → API → DB top to bottom, with the informational unresolved calls last. Groups
@@ -23,6 +26,12 @@ const GROUPS: Group[] = [
   },
   { label: "Manual links that could not be resolved", match: (i) => i.kind === "manual-link-broken" },
   { label: "Manual links that match no chain, info only", match: (i) => i.kind === "manual-link-unused" },
+  {
+    // Grouped by service: every detail starts "calls <name>:", so ordering by detail keeps a service's calls together.
+    label: "Calls to other services, info only — not broken",
+    match: (i) => i.kind === "external-call",
+    order: (a, b) => compare(a.detail, b.detail) || compare(a.repo, b.repo) || compare(a.file, b.file) || a.line - b.line,
+  },
 ];
 
 /** Manual-link items point at the workspace file itself, not at a file inside a repo. */
@@ -65,6 +74,12 @@ function unreadableUrlLine(r: CheckReport): string | undefined {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** Calls to other services are info only: a separate line, never added into the summary. */
+function externalLine(r: CheckReport): string | undefined {
+  const n = r.summary.externalCalls;
+  return n === 0 ? undefined : plural(n, "call to another service", "calls to other services");
+}
+
 /** The `--traces` section: one summary line, then each non-empty group. */
 function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
   if ("skipped" in t) return [`Traces: skipped — ${t.skipped}`];
@@ -89,10 +104,10 @@ function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
 }
 
 export function formatCheckText(r: CheckReport): string {
-  const extra = [routesLine(r), unreadableUrlLine(r)].filter((l): l is string => l !== undefined);
+  const extra = [routesLine(r), unreadableUrlLine(r), externalLine(r)].filter((l): l is string => l !== undefined);
   const lines = [summaryLine(r), ...extra, completeLine(r), ""];
-  for (const { label, match } of GROUPS) {
-    const group = r.items.filter(match);
+  for (const { label, match, order } of GROUPS) {
+    const group = order ? r.items.filter(match).sort(order) : r.items.filter(match);
     if (group.length === 0) continue;
     lines.push(`${label} (${group.length}):`);
     for (const item of group) lines.push(itemLine(item));

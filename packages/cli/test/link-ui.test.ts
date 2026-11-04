@@ -5,6 +5,8 @@ import type { RepoCodeIndex } from "../src/linker/code-index.js";
 import { createCallResolver } from "../src/linker/resolve-calls.js";
 import type { CallResolver } from "../src/linker/resolve-calls.js";
 import { callPathWithClient, chooseBackend, linkUi } from "../src/linker/link.js";
+import type { UiLink } from "../src/linker/link.js";
+import { externalCallFacts } from "../src/linker/external.js";
 import type { RepoData, WorkspaceData } from "../src/store/read.js";
 import type { EndpointsFile, HttpCall, HttpClient } from "../src/store/schemas.js";
 import { parsed } from "./adapter-helpers.js";
@@ -696,5 +698,22 @@ describe("linkUi — handlers reached through JSX (H3)", () => {
     const web = repo("app", { pages: [{ route: "/", file: "src/page.tsx", line: 2, framework: "next-app" }] });
     const links = linkUi({ ws: ws([web]), resolvers: new Map([["app", resolverFor(files, "app")]]) });
     expect(links).toEqual([]);
+  });
+});
+
+describe("externalCallFacts", () => {
+  it("keeps one fact per external call site, with its pages, and skips route/unresolved links", () => {
+    const at = { file: "lib/pay.ts", line: 3, symbol: "charge" };
+    const call: HttpCall = { method: "POST", path: "/charges", raw: '"/charges"', resolved: true, client: "fetch", at, kind: "literal" };
+    const page = (route: string) => ({ page: { route, file: "p.tsx", line: 1, framework: "next-app" as const }, path: [], confidence: "exact" as const });
+    const links: UiLink[] = [
+      { repo: "web", call, pages: [page("/orders")], target: { kind: "external", base: "PAYMENTS_URL", name: "Payments" } },
+      { repo: "web", call, pages: [page("/checkout"), page("/orders")], target: { kind: "external", base: "PAYMENTS_URL", name: "Payments" } },
+      { repo: "web", call: { ...call, path: "/nope" }, pages: [], target: { kind: "unresolved", reason: "no matching route" } },
+    ];
+    expect(externalCallFacts(links)).toEqual([{
+      repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", method: "POST", path: "/charges",
+      base: "PAYMENTS_URL", name: "Payments", pages: ["/checkout", "/orders"],
+    }]);
   });
 });

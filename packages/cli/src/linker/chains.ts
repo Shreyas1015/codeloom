@@ -12,7 +12,7 @@ import { worse } from "./paths.js";
 import type { WorkspaceData } from "../store/read.js";
 import {
   type Chain, type ChainStop, type ChainsFile, type Confidence, type Hop, type Journey, type JourneysFile,
-  JourneysFileSchema, type ManualLinkStatus, type QueueOp, type UiReachFact, type Unresolved,
+  JourneysFileSchema, type ExternalCallFact, type ManualLinkStatus, type QueueOp, type UiReachFact, type Unresolved,
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -666,9 +666,12 @@ export function sortChains(chains: Chain[]): Chain[] {
 
 /** `uiReach` (the linker's per-call reach facts, already sorted) is written only when given;
  * `manualLinks` only when non-empty (a workspace with no `links` keeps its file unchanged). */
-export function writeChains(wsRoot: string, chains: Chain[], uiReach?: UiReachFact[], manualLinks?: ManualLinkStatus[]): boolean {
+export function writeChains(
+  wsRoot: string, chains: Chain[], uiReach?: UiReachFact[], manualLinks?: ManualLinkStatus[], external?: ExternalCallFact[],
+): boolean {
   const file: ChainsFile = {
     version: 1, chains, ...(uiReach ? { uiReach } : {}), ...(manualLinks && manualLinks.length > 0 ? { manualLinks } : {}),
+    ...(external && external.length > 0 ? { external } : {}),
   };
   return writeJsonIfChanged(join(wsRoot, CODELOOM_DIR, FILES.chains), file);
 }
