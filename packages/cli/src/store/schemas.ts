@@ -214,6 +214,9 @@ export const TracesConfigSchema = z.discriminatedUnion("kind", [
 ]);
 export type TracesConfig = z.infer<typeof TracesConfigSchema>;
 
+export const ExternalServiceSchema = z.object({ name: z.string().min(1), apiBase: z.array(z.string().min(1)) });
+export type ExternalService = z.infer<typeof ExternalServiceSchema>;
+
 export const WorkspaceFileSchema = z.object({
   version: z.literal(1),
   name: z.string(),
@@ -222,6 +225,9 @@ export const WorkspaceFileSchema = z.object({
    * "route:<repo>:<METHOD path>" / "queue:<repo>:<queue>" (see R11 parseLinkRef, Task 11). */
   links: z.array(z.object({ from: z.string(), to: z.string() })),
   traces: TracesConfigSchema.optional(),
+  /** Other services the UI calls (not repos in this workspace): a call whose base env var / host is in
+   * an entry's `apiBase` is listed as a call to that `name`, never matched to a route. */
+  external: z.array(ExternalServiceSchema).optional(),
 });
 export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 
@@ -313,9 +319,28 @@ export const ManualLinkStatusSchema = z.object({
 });
 export type ManualLinkStatus = z.infer<typeof ManualLinkStatusSchema>;
 
+/** A UI call to another service (spec §3): `base` is the env var name or host it goes to, `name` the
+ * workspace file's `external` entry for that base (when one lists it), `pages` the routes of the pages
+ * that reach it (sorted). Never a route match, never broken. */
+export const ExternalCallFactSchema = z.object({
+  repo: z.string(),
+  file: z.string(),
+  line: z.number().int().positive(),
+  symbol: z.string(),
+  method: HttpMethodSchema,
+  path: z.string(),
+  base: z.string(),
+  name: z.string().optional(),
+  pages: z.array(z.string()),
+});
+export type ExternalCallFact = z.infer<typeof ExternalCallFactSchema>;
+
+/** `external` is written only when some UI call goes to another service (sorted by repo, file, line,
+ * method, path, base). */
 export const ChainsFileSchema = z.object({
   version: z.literal(1), chains: z.array(ChainSchema), uiReach: z.array(UiReachFactSchema).optional(),
   manualLinks: z.array(ManualLinkStatusSchema).optional(),
+  external: z.array(ExternalCallFactSchema).optional(),
 });
 export type ChainsFile = z.infer<typeof ChainsFileSchema>;
 
@@ -352,6 +377,7 @@ export const CheckItemKindSchema = z.enum([
   "ui-unreached",
   "manual-link-broken",
   "manual-link-unused",
+  "external-call",
 ]);
 export type CheckItemKind = z.infer<typeof CheckItemKindSchema>;
 
@@ -414,6 +440,8 @@ export const CheckReportSchema = z.object({
      * part of chains = complete + apiOnly + missingDb + brokenUiApi. */
     unresolvedCalls: z.number().int(),
     uncalledRoutes: z.number().int(),
+    /** UI calls to other services (`external-call` items): info only, never broken, never in the buckets. */
+    externalCalls: z.number().int(),
     byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),
   }),
   items: z.array(CheckItemSchema),

@@ -1,7 +1,7 @@
 import type { GraphEdge, GraphNode } from "@codeloom/core";
 import { describe, expect, it } from "vitest";
 import type { Chain, ChainStop, Journey } from "../src/store/schemas.js";
-import { graphLevel, journeyRows, sliceCode } from "../src/web/api.js";
+import { externalCallsFor, graphLevel, journeyRows, sliceCode } from "../src/web/api.js";
 
 const stop = (s: Partial<ChainStop> & Pick<ChainStop, "lane" | "repo" | "file">): ChainStop => ({
   kind: "function", line: 1, symbol: "f", hop: { confidence: "exact" }, ...s,
@@ -61,6 +61,26 @@ describe("journeyRows", () => {
       { id: "ch_c", name: "chain ch_c", entry: "route:ch_c", confidence: "guess", complete: true, apiOnly: false, repos: ["billing"] },
       { id: "ch_d", name: "chain ch_d", entry: "route:ch_d", confidence: "exact", complete: true, apiOnly: false, repos: [] },
     ]);
+  });
+
+  it("names the other services a journey's pages call (external), only when there are some", () => {
+    const pageChain = chain("ch_p", { entry: "page:web:/checkout" });
+    const external = [
+      { repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", method: "POST" as const, path: "/charges", base: "PAYMENTS_URL", name: "Payments", pages: ["/checkout"] },
+      { repo: "web", file: "lib/geo.ts", line: 9, symbol: "lookup", method: "GET" as const, path: "/places", base: "MAPS_URL", pages: ["/checkout", "/stores"] },
+      { repo: "web", file: "lib/x.ts", line: 1, symbol: "x", method: "GET" as const, path: "/x", base: "X_URL", pages: ["/other"] },
+    ];
+    const out = journeyRows({
+      chains: [pageChain, d],
+      journeys: [journey("j_1", { chainIds: ["ch_p"] }), journey("j_2", { chainIds: ["ch_d"] })],
+      external,
+    });
+    expect(out.journeys[0]!.external).toEqual(["MAPS_URL", "Payments"]);
+    expect(out.journeys[1]).not.toHaveProperty("external");
+    expect(externalCallsFor([pageChain], external).map((e) => e.name)).toEqual(["MAPS_URL", "Payments"]);
+    expect(externalCallsFor([pageChain], external)[1]).toEqual({
+      name: "Payments", repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", method: "POST", path: "/charges",
+    });
   });
 
   // H3: a route-only chain that reaches a store is "API → DB", not complete and not plain incomplete.

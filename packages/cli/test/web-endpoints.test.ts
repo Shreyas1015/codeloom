@@ -40,6 +40,7 @@ const OverviewResponse = z.strictObject({
 const JourneyRow = z.strictObject({
   id: z.string(), name: z.string(), area: z.string(), note: z.string(), status: z.enum(["ok", "orphaned"]),
   chainIds: z.array(z.string()), repos: z.array(z.string()), stops: laneCounts, confidence, complete: z.boolean(), apiOnly: z.boolean(), tables: z.array(z.string()),
+  external: z.array(z.string()).optional(),
 });
 const ChainRow = z.strictObject({ id: z.string(), name: z.string(), entry: z.string(), confidence, complete: z.boolean(), apiOnly: z.boolean(), repos: z.array(z.string()) });
 const JourneysResponse = z.strictObject({ journeys: z.array(JourneyRow), unnamedChains: z.array(ChainRow) });
@@ -63,6 +64,7 @@ const JourneyResult = z.strictObject({
   files: z.array(z.string()), tables: z.array(z.string()), queues: z.array(z.string()),
   unresolved: z.array(Unresolved.extend({ chainId: z.string() })), missingChainIds: z.array(z.string()),
   movedChainIds: z.array(z.strictObject({ from: z.string(), to: z.array(z.string()) })),
+  external: z.array(z.strictObject({ name: z.string(), repo: z.string(), file: z.string(), line: z.number(), symbol: z.string(), method: z.string(), path: z.string() })).optional(),
 });
 
 const GraphLevel = z.strictObject({

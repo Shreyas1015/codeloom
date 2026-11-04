@@ -143,6 +143,9 @@ and `save_summary` write anything; `reindex` runs the indexer.
   ],
   "links": [
     { "from": "web:lib/legacy.ts#saveLegacy", "to": "route:api:POST /api/customers" }
+  ],
+  "external": [
+    { "name": "Payments", "apiBase": ["PAYMENTS_URL", "pay.example.com"] }
   ]
 }
 ```
@@ -155,6 +158,14 @@ and `save_summary` write anything; `reindex` runs the indexer.
   - `queue:<repo>:<queue>`
 
   A manual link is `exact`. `codeloom check` lists links that could not be resolved or match no chain.
+- `external` (optional): other services the UI calls that are not repos in this workspace. A call whose
+  env var or host is in an entry's `apiBase` is a call to that `name`, never matched to a route.
+
+Calls to other services: a UI call that goes to a host or env var that no repo's `apiBase` names is a call
+to another service, not a broken link. `codeloom check` lists these under "Calls to other services" (by
+`external` name, else by env var or host) and never counts them as broken; the dashboard shows
+"calls <name>" on the journeys whose pages make them. An env var call is only treated this way when it
+matches no route and some repo has an `apiBase`, so give your own backends an `apiBase` to tell them apart.
 
 ## Trace check
 
@@ -212,11 +223,14 @@ Known limits:
   linked only when exactly one method in the repo has that name, and then only as a `guess`. Common
   built-in and ORM method names (`map`, `then`, `create`, `save`, …) are never guessed.
 - Tested on a real two-repo app (a React UI and an AdonisJS API, about 3,000 files): about 120 UI → API links
-  were found and all checked links were right, but some UI calls still had no page (v0.2a now follows a
-  handler passed as a plain function argument), and calls to a backend that is not in the workspace show as
-  unmatched.
+  were found and all checked links were right, but some UI calls still have no page (v0.2a now follows a
+  handler passed as a plain function argument). Calls to a backend that is not in the workspace show as calls
+  to other services only when your repos declare an `apiBase` (or the service is listed under `external`);
+  otherwise they still show as UI calls that match no route.
 - A component reused for "create" and "edit" can link its edit path to the create call (marked `param`).
-- When two routes match a call equally well (for example both end in a parameter), the link is a `guess`.
+- When two routes match a call equally well, the one with a fixed segment (not a parameter) at the first
+  place where they differ wins, at `param` (`GET /invoices/summary` picks `/invoices/:id` over
+  `/:kind/summary`). A real tie (for example `/items/:id` and `/items/:slug`) stays a `guess`.
 - Mongoose: `new Model().save()`, `connection.model(...)` and CommonJS `module.exports = mongoose.model(...)`
   are not detected yet.
 

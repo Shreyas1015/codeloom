@@ -103,6 +103,29 @@ describe("Journey screen", () => {
     expect(within(plate).getByText("Incomplete")).toBeInTheDocument();
   });
 
+  it("names the other services the journey's pages call, only when there are some", async () => {
+    stubApi({
+      j_invoice: {
+        ...journeyResult,
+        external: [
+          { name: "Payments", repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", method: "POST", path: "/charges" },
+          { name: "Payments", repo: "web", file: "lib/pay.ts", line: 8, symbol: "refund", method: "POST", path: "/refunds" },
+        ],
+      },
+    });
+    renderAt("/journeys/j_invoice");
+    const plate = (await opened()).closest("header")!;
+    const calls = within(plate).getByText("calls Payments");
+    expect(calls).toHaveAttribute("title", "POST /charges (web/lib/pay.ts:3)\nPOST /refunds (web/lib/pay.ts:8)");
+  });
+
+  it("shows no other-service note when the journey calls none", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice");
+    const plate = (await opened()).closest("header")!;
+    expect(within(plate).queryByText(/^calls /)).toBeNull();
+  });
+
   it("lays the stops out in UI / API / Code / DB lanes, numbered in chain order; no Queue lane without queue stops", async () => {
     stubApi();
     renderAt("/journeys/j_invoice");

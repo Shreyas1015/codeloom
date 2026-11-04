@@ -50,7 +50,7 @@ function fakeWorkspace(repos: RepoData[]): WorkspaceData {
 
 /** A CheckReport summary: the H3 fields default to "every chain starts in the UI, no routes". */
 function S(s: { chains: number; complete: number; missingDb: number; brokenUiApi: number; unresolvedCalls: number; uncalledRoutes: number; byConfidence: { exact: number; param: number; guess: number }; apiOnly?: number; uiChains?: number; routes?: number; routesWithUiCaller?: number }) {
-  return { apiOnly: 0, uiChains: s.chains, routes: 0, routesWithUiCaller: 0, ...s };
+  return { apiOnly: 0, uiChains: s.chains, routes: 0, routesWithUiCaller: 0, externalCalls: 0, ...s };
 }
 
 function fakeChain(overrides: Partial<Chain>): Chain {
@@ -283,6 +283,33 @@ describe("buildCheckReport", () => {
     expect(lines[0]).toBe("1 journey: 1 complete UI → API → DB");
     expect(lines).toContain("1 call with a URL codeloom could not read");
     expect(lines).toContain("complete: 100% of journeys that start in the UI (1/1)");
+  });
+
+  it("lists calls to other services in their own group, by name, never as broken or no-route", () => {
+    const web = fakeRepoData({ id: "web", path: "web" }, fakeEndpoints("web"));
+    const external = [
+      { repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", method: "POST" as const, path: "/charges", base: "PAYMENTS_URL", name: "Payments", pages: ["/checkout"] },
+      { repo: "web", file: "lib/geo.ts", line: 9, symbol: "lookup", method: "GET" as const, path: "/places", base: "MAPS_URL", pages: [] },
+      { repo: "web", file: "lib/pay.ts", line: 8, symbol: "refund", method: "POST" as const, path: "/refunds", base: "PAYMENTS_URL", name: "Payments", pages: ["/orders", "/orders/:id"] },
+    ];
+    const report = buildCheckReport([], fakeWorkspace([web]), [], [], external);
+    expect(report.summary).toMatchObject({ externalCalls: 3, brokenUiApi: 0, unresolvedCalls: 0 });
+    expect(report.items).toEqual([
+      { kind: "external-call", repo: "web", file: "lib/geo.ts", line: 9, symbol: "lookup", detail: "calls MAPS_URL: GET /places (no page)" },
+      { kind: "external-call", repo: "web", file: "lib/pay.ts", line: 3, symbol: "charge", detail: "calls Payments: POST /charges (page: /checkout)" },
+      { kind: "external-call", repo: "web", file: "lib/pay.ts", line: 8, symbol: "refund", detail: "calls Payments: POST /refunds (pages: /orders, /orders/:id)" },
+    ]);
+    expect(CheckReportSchema.parse(report)).toEqual(report);
+    const lines = formatCheckText(report).split("\n");
+    const at = lines.indexOf("Calls to other services, info only — not broken (3):");
+    expect(at).toBeGreaterThan(-1);
+    // Grouped by service name: MAPS_URL, then both Payments calls.
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      "  web/lib/geo.ts:9 lookup — calls MAPS_URL: GET /places (no page)",
+      "  web/lib/pay.ts:3 charge — calls Payments: POST /charges (page: /checkout)",
+      "  web/lib/pay.ts:8 refund — calls Payments: POST /refunds (pages: /orders, /orders/:id)",
+    ]);
+    expect(lines).toContain("3 calls to other services");
   });
 
   it("produces a report that passes CheckReportSchema", () => {

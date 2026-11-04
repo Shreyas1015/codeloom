@@ -2,7 +2,8 @@ import { chainReach, hasUiStop, reachesStore } from "../linker/completeness.js";
 import { effectiveRoutes, type EffectiveRoute, routeKey } from "../linker/mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
-import type { Chain, ChainStop, CheckItem, CheckReport, ManualLinkStatus, UiReachFact } from "../store/schemas.js";
+import type { Chain, ChainStop, CheckItem, CheckReport, ExternalCallFact, ManualLinkStatus, UiReachFact } from "../store/schemas.js";
+import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
 import { calleeOf, isBuiltinCallee } from "./noise.js";
 
@@ -242,6 +243,18 @@ function manualLinkItems(links: ManualLinkStatus[]): CheckItem[] {
   });
 }
 
+/** One `external-call` item per UI call to another service (chains.json `external`), info only: its
+ * detail names the service (the workspace file's `external` name, else the base) and the pages. */
+function externalCallItems(external: ExternalCallFact[]): CheckItem[] {
+  return external.map((f) => {
+    const pages = f.pages.length === 0 ? "no page" : `${f.pages.length === 1 ? "page" : "pages"}: ${f.pages.join(", ")}`;
+    return {
+      kind: "external-call" as const, repo: f.repo, file: f.file, line: f.line, symbol: f.symbol,
+      detail: `calls ${externalLabel(f)}: ${f.method} ${f.path} (${pages})`,
+    };
+  });
+}
+
 function sortItems(items: CheckItem[]): CheckItem[] {
   return [...items].sort(
     (a, b) =>
@@ -257,8 +270,10 @@ function sortItems(items: CheckItem[]): CheckItem[] {
  * `manualLinks`: chains.json's manual link statuses (absent when the workspace has no links). */
 export function buildCheckReport(
   chains: Chain[], ws: WorkspaceData, uiReach: UiReachFact[] = [], manualLinks: ManualLinkStatus[] = [],
+  external: ExternalCallFact[] = [],
 ): CheckReport {
   const items = sortItems([
+    ...externalCallItems(external),
     ...manualLinkItems(manualLinks),
     ...unresolvedUrlItems(ws.repos, chains),
     ...routeNoCallerItems(ws.repos, chains),
@@ -291,6 +306,7 @@ export function buildCheckReport(
       routesWithUiCaller: routes - count("route-no-caller"),
       unresolvedCalls: count("unresolved-url"),
       uncalledRoutes: count("route-no-caller"),
+      externalCalls: count("external-call"),
       byConfidence,
     },
     items,

@@ -82,6 +82,21 @@ export interface JourneyRow {
   apiOnly: boolean;
   /** Tables its db stops touch, sorted. */
   tables: string[];
+  /** Other services its pages call (the workspace file's `external` name, else the env var / host),
+   * sorted; absent when none. Dashboard-only. */
+  external?: string[];
+}
+
+/** A UI call to another service, from one of a journey's pages. */
+export interface ExternalCallView {
+  /** The workspace file's `external` name, else the env var / host. */
+  name: string;
+  repo: string;
+  file: string;
+  line: number;
+  symbol: string;
+  method: string;
+  path: string;
 }
 
 export interface ChainRow {
@@ -174,6 +189,9 @@ export interface JourneyResult {
   missingChainIds: string[];
   /** H11: saved chain ids found only as another chain's alias (the flow gained a UI step), with the current ids. */
   movedChainIds: Array<{ from: string; to: string[] }>;
+  /** GET /api/journeys/:id only (not get_journey): the other-service calls its pages make, sorted by
+   * name; absent when none. */
+  external?: ExternalCallView[];
 }
 
 // ---- /api/graph (dashboard-only) ----------------------------------------------------------------

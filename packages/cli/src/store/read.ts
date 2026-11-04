@@ -6,7 +6,7 @@ import { compare } from "../util.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import { readJson } from "./json.js";
 import { CODELOOM_DIR, FILES } from "./paths.js";
-import { type EndpointsFile, EndpointsFileSchema, type RepoRef, type TracesConfig, type WorkspaceFile } from "./schemas.js";
+import { type EndpointsFile, EndpointsFileSchema, type ExternalService, type RepoRef, type TracesConfig, type WorkspaceFile } from "./schemas.js";
 
 /** Missing file -> null. Bad shape -> CodeloomError (via readJson). */
 export function readGraph(repoAbs: string): KnowledgeGraph | null {
@@ -45,6 +45,8 @@ export interface WorkspaceData {
   repos: RepoData[];
   links: WorkspaceFile["links"];
   traces?: TracesConfig;
+  /** The workspace file's `external` services (other services the UI calls). */
+  external?: ExternalService[];
 }
 
 /** Every repo's graph + endpoints, sorted by repo id. Any repo missing either file -> dataError
@@ -63,5 +65,5 @@ export function loadWorkspaceData(start: string): WorkspaceData {
     return { ref, abs, graph, endpoints };
   });
   repos.sort((a, b) => compare(a.ref.id, b.ref.id));
-  return { root: ws.root, name: ws.name, repos, links: ws.links, traces: ws.traces };
+  return { root: ws.root, name: ws.name, repos, links: ws.links, traces: ws.traces, ...(ws.external ? { external: ws.external } : {}) };
 }

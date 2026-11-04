@@ -7,7 +7,7 @@ import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
 import type { EffectiveRoute } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Confidence, DbAccess, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage, UiReachFact } from "../store/schemas.js";
+import type { Confidence, DbAccess, ExternalService, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage, UiReachFact } from "../store/schemas.js";
 import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
@@ -43,7 +43,9 @@ export interface UiLink {
   pages: PageReach[];
   target:
     | { kind: "route"; route: EffectiveRoute; confidence: Confidence; reason?: string }
-    | { kind: "external"; base: string }
+    /** A call to another service: `base` is its host or env var name; `name` the workspace file's
+     * `external` entry that lists that base, when one does. */
+    | { kind: "external"; base: string; name?: string }
     | { kind: "unresolved"; reason: string };
 }
 
@@ -196,11 +198,52 @@ export function externalHost(call: LinkedCall, clients: HttpClient[], knownHosts
   return host !== undefined && !isInternalHost(host, knownHosts) ? host : undefined;
 }
 
+/** The env var a call's base comes from (`process.env.X` / `import.meta.env.X`, on the call or its
+ * client's baseExpr), when it has one and no absolute host of its own. */
+function envBaseOf(call: LinkedCall, clients: HttpClient[]): string | undefined {
+  if (ownHostOf(call) !== undefined) return undefined;
+  const text = call.base ?? clients.find((c) => c.name === call.client)?.baseExpr ?? "";
+  return text.match(ENV_VAR_RE)?.[1];
+}
+
+/** The workspace file's `external` entry naming this base (env var name or host, port optional). */
+function externalNameFor(base: string, external: ExternalService[]): string | undefined {
+  const hostname = base.replace(/:\d+$/, "");
+  return external.find((e) => e.apiBase.some((b) => {
+    const entry = absoluteHost(b) ?? b.trim();
+    return entry === base || entry === hostname || entry.toLowerCase() === base.toLowerCase();
+  }))?.name;
+}
+
+/** Is `envVar` named in some repo's apiBase (so calls through it are ours)? */
+function isOwnEnvBase(envVar: string, repos: RepoData[]): boolean {
+  return repos.some((r) => (r.ref.apiBase ?? []).includes(envVar));
+}
+
+/** Other-service calls (spec §3): a call whose base the workspace file's `external` list names is that
+ * service's, before any route matching. An env var base that no repo's apiBase names is another
+ * service's only when the call also matches no route (never drops a route) and some repo declares an
+ * apiBase (otherwise there is nothing to tell other services from our own backend). */
 function resolveTarget(
   call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
-  knownHosts: Set<string>,
+  knownHosts: Set<string>, ctx: { repos: RepoData[]; external: ExternalService[] },
+): UiLink["target"] {
+  const found = resolveRouteTarget(call, clients, allBackends, effectiveByRepo, knownHosts, ctx);
+  if (found.kind !== "unresolved" || call.kind === "unknown") return found;
+  const env = envBaseOf(call, clients);
+  if (env === undefined || isOwnEnvBase(env, ctx.repos)) return found;
+  if (!ctx.repos.some((r) => (r.ref.apiBase ?? []).length > 0)) return found;
+  return { kind: "external", base: env };
+}
+
+function resolveRouteTarget(
+  call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
+  knownHosts: Set<string>, ctx: { repos: RepoData[]; external: ExternalService[] },
 ): UiLink["target"] {
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
+  const declaredBase = envBaseOf(call, clients) ?? ownHostOf(call) ?? clients.find((c) => c.name === call.client)?.baseHost;
+  const declaredName = declaredBase === undefined ? undefined : externalNameFor(declaredBase, ctx.external);
+  if (declaredBase !== undefined && declaredName !== undefined) return { kind: "external", base: declaredBase, name: declaredName };
   const external = externalHost(call, clients, knownHosts);
   if (external !== undefined) return { kind: "external", base: external };
   const ownHost = ownHostOf(call);
@@ -232,6 +275,7 @@ export function linkUi(input: LinkInput): UiLink[] {
   const allBackends = input.ws.repos.filter((r) => r.endpoints.routes.length > 0);
   const effectiveByRepo = new Map(input.ws.repos.map((r) => [r.ref.id, effectiveRoutes(r.endpoints)]));
   const knownHosts = apiBaseHosts(input.ws.repos);
+  const externalCtx = { repos: input.ws.repos, external: input.ws.external ?? [] };
   const links: UiLink[] = [];
   for (const repo of input.ws.repos) {
     const resolver = input.resolvers.get(repo.ref.id);
@@ -247,7 +291,7 @@ export function linkUi(input: LinkInput): UiLink[] {
         repo: repo.ref.id,
         call,
         pages: reachingPages(input, repo.ref.id, call),
-        target: resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts),
+        target: resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts, externalCtx),
       });
     }
   }

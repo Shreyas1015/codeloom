@@ -4,7 +4,7 @@ import { CodeloomError, dataError } from "../errors.js";
 import { compare } from "../util.js";
 import { readJson } from "../store/json.js";
 import { WORKSPACE_FILE } from "../store/paths.js";
-import { type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
+import { type ExternalService, type RepoRef, type TracesConfig, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
 import { git, gitAsync } from "./git.js";
 
 /** A repo id from its package.json name (else its folder name), safe for link refs (`[^:#]+`):
@@ -79,13 +79,15 @@ function gitToplevel(start: string): string | null {
 }
 
 export function loadWorkspace(start: string): {
-  root: string; name: string; repos: RepoRef[]; links: WorkspaceFile["links"]; traces?: TracesConfig;
+  root: string; name: string; repos: RepoRef[]; links: WorkspaceFile["links"]; traces?: TracesConfig; external?: ExternalService[];
 } {
   const wsRoot = findWorkspaceRoot(start);
   if (wsRoot) {
     // Hand-written: a bad file must be fixed by hand, never deleted and re-indexed.
     const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
-    if (ws) return { root: wsRoot, name: ws.name, repos: ws.repos, links: ws.links, traces: ws.traces };
+    if (ws) {
+      return { root: wsRoot, name: ws.name, repos: ws.repos, links: ws.links, traces: ws.traces, ...(ws.external ? { external: ws.external } : {}) };
+    }
   }
   const top = gitToplevel(start);
   if (!top) {

@@ -37,7 +37,7 @@ export async function buildReport(start: string, opts: BuildReportOptions = {}):
   const chainsPath = join(ws.root, CODELOOM_DIR, FILES.chains);
   const chainsFile = readJson(chainsPath, ChainsFileSchema);
   if (!chainsFile) throw dataError(`${chainsPath} not found. Run "codeloom index" first.`);
-  const report = buildCheckReport(chainsFile.chains, ws, chainsFile.uiReach ?? [], chainsFile.manualLinks ?? []);
+  const report = buildCheckReport(chainsFile.chains, ws, chainsFile.uiReach ?? [], chainsFile.manualLinks ?? [], chainsFile.external ?? []);
   if (!opts.traces) return report;
   return { ...report, traces: await runTraces(ws, chainsFile.chains, opts) };
 }

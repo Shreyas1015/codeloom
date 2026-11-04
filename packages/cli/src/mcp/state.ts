@@ -9,6 +9,7 @@ import {
   ChainsFileSchema,
   type Journey,
   JourneysFileSchema,
+  type ExternalCallFact,
   type ManualLinkStatus,
   type UiReachFact,
 } from "../store/schemas.js";
@@ -20,6 +21,8 @@ export interface MapState {
   chains: Chain[];
   uiReach: UiReachFact[];
   manualLinks: ManualLinkStatus[];
+  /** UI calls to other services (chains.json `external`; empty when absent). */
+  external: ExternalCallFact[];
   journeys: Journey[];
   chainsPath: string;
   journeysPath: string;
@@ -38,6 +41,7 @@ export function loadMapState(start: string): MapState {
     chains: chainsFile?.chains ?? [],
     uiReach: chainsFile?.uiReach ?? [],
     manualLinks: chainsFile?.manualLinks ?? [],
+    external: chainsFile?.external ?? [],
     journeys: journeysFile?.journeys ?? [],
     chainsPath,
     journeysPath,
