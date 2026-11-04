@@ -218,9 +218,11 @@ numbers on large ones.
 
 Known limits:
 
-- In realworld, the pages reach their API calls through class lifecycle methods and Redux dispatch, which
-  codeloom does not follow yet. The UI → API hops are found from the call sites, but `codeloom check` lists
-  those calls as "not reached from any page".
+- Class components and Redux are followed at `param`: lifecycle methods and `render`, `this.handleX` handlers,
+  `this.props.onX()` when the JSX passes a function, `connect(mapState, mapDispatch)`, `dispatch(thunk())`,
+  `createAsyncThunk` and RTK Query `createApi` endpoints (with `fetchBaseQuery`) and their generated hooks.
+  RTK Query `injectEndpoints` and custom `baseQuery` functions are not read. In realworld, 21 of the 22 UI
+  calls are now reached from a page; the last one (deleting a comment) is more than 6 calls below its page.
 - A method call on an object whose class codeloom cannot see (for example, one passed in as a parameter) is
   linked only when exactly one method in the repo has that name, and then only as a `guess`. Common
   built-in and ORM method names (`map`, `then`, `create`, `save`, …) are never guessed.
@@ -233,8 +235,6 @@ Known limits:
 - When two routes match a call equally well, the one with a fixed segment (not a parameter) at the first
   place where they differ wins, at `param` (`GET /invoices/summary` picks `/invoices/:id` over
   `/:kind/summary`). A real tie (for example `/items/:id` and `/items/:slug`) stays a `guess`.
-- Mongoose: `new Model().save()`, `connection.model(...)` and CommonJS `module.exports = mongoose.model(...)`
-  are not detected yet.
 
 ## Not in v0.1
 

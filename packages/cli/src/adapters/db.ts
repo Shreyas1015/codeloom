@@ -1,6 +1,6 @@
 import ts from "typescript";
 import type { DbOp, ModelDef, TableDef } from "../store/schemas.js";
-import { enclosingSymbol, lastName, lineOf, prop, rootName, snakePlural, stringValue, walk } from "./ast.js";
+import { commonJsExportName, enclosingSymbol, lastName, lineOf, prop, rootName, snakePlural, stringValue, walk } from "./ast.js";
 import type { AdapterContext, DbAccessDraft, EndpointsPart, ParsedFile } from "./types.js";
 
 type DbPart = Pick<EndpointsPart, "dbAccess" | "tables" | "models">;
@@ -371,22 +371,41 @@ export function mongooseCollection(model: string): string {
   return rule ? name.replace(rule[0], rule[1]) : name;
 }
 
-/** Local names bound to the mongoose module: its default/namespace import (`mongoose`), and named
- * imports of `model` / `Schema` under their local names. */
+/** `require("<spec>")` -> "<spec>"; undefined for anything else. */
+function requireSpec(e: ts.Expression | undefined): string | undefined {
+  return e && ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "require" ? stringValue(e.arguments[0]) : undefined;
+}
+
+/** Local names bound to the mongoose module: its default/namespace import or CommonJS require (`mongoose`),
+ * and named imports / destructured requires of `model` / `Schema` under their local names. */
 function mongooseImports(sf: ts.SourceFile): { root: Set<string>; model: Set<string>; schema: Set<string> } {
   const out = { root: new Set<string>(), model: new Set<string>(), schema: new Set<string>() };
+  const named = (imported: string, local: string) => {
+    if (imported === "model") out.model.add(local);
+    if (imported === "Schema") out.schema.add(local);
+  };
   for (const st of sf.statements) {
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (requireSpec(d.initializer) !== "mongoose") continue;
+        if (ts.isIdentifier(d.name)) out.root.add(d.name.text);
+        else if (ts.isObjectBindingPattern(d.name)) {
+          for (const el of d.name.elements) {
+            if (!ts.isIdentifier(el.name)) continue;
+            const imported = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+            named(imported, el.name.text);
+          }
+        }
+      }
+      continue;
+    }
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || st.moduleSpecifier.text !== "mongoose") continue;
     const clause = st.importClause;
     if (clause?.name) out.root.add(clause.name.text);
     const nb = clause?.namedBindings;
     if (nb && ts.isNamespaceImport(nb)) out.root.add(nb.name.text);
     if (nb && ts.isNamedImports(nb)) {
-      for (const el of nb.elements) {
-        const imported = (el.propertyName ?? el.name).text;
-        if (imported === "model") out.model.add(el.name.text);
-        if (imported === "Schema") out.schema.add(el.name.text);
-      }
+      for (const el of nb.elements) named((el.propertyName ?? el.name).text, el.name.text);
     }
   }
   return out;
@@ -401,7 +420,10 @@ function assignedName(node: ts.Node): string | undefined {
     || (ts.isBinaryExpression(cur) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(cur.operatorToken.kind)))) {
     cur = cur.parent;
   }
-  return cur && ts.isVariableDeclaration(cur) && ts.isIdentifier(cur.name) ? cur.name.text : undefined;
+  if (cur && ts.isVariableDeclaration(cur) && ts.isIdentifier(cur.name)) return cur.name.text;
+  // CommonJS `exports.Customer = model(…)` -> "Customer" (`module.exports = model(…)` keeps the model's own name).
+  const cjs = cur && ts.isBinaryExpression(cur) && cur.operatorToken.kind === ts.SyntaxKind.EqualsToken ? commonJsExportName(cur.left) : undefined;
+  return cjs !== undefined && cjs !== "default" ? cjs : undefined;
 }
 
 /** Mongoose models declared in this file: each `model(Name, schema[, collection])` call (via the
@@ -424,16 +446,33 @@ function mongooseModels(sf: ts.SourceFile): Map<string, { table?: string; node: 
     const c = prop(opts, "collection");
     return c === undefined ? null : (stringValue(c) ?? "?");
   };
+  /** Names bound to `mongoose.createConnection(…)` (optionally awaited). */
+  const connections = new Set<string>();
   walk(sf, (node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isSchemaNew(node.initializer)) {
       schemaCollection.set(node.name.text, optionOf(node.initializer));
     }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let init = node.initializer;
+      if (ts.isAwaitExpression(init)) init = init.expression;
+      if (ts.isCallExpression(init) && ts.isPropertyAccessExpression(init.expression) && init.expression.name.text === "createConnection"
+        && ts.isIdentifier(init.expression.expression) && imp.root.has(init.expression.expression.text)) connections.add(node.name.text);
+    }
   });
+  /** `<receiver>.model(…)`: on mongoose itself, on `mongoose.connection`, on a `createConnection` result, or on
+   * any receiver when the schema argument is a mongoose Schema of this file (v0.2a: `connection.model(…)`). */
+  const modelReceiver = (recv: ts.Expression, schemaArg: ts.Expression | undefined): boolean => {
+    if (ts.isIdentifier(recv) && (imp.root.has(recv.text) || connections.has(recv.text))) return true;
+    if (ts.isPropertyAccessExpression(recv) && recv.name.text === "connection" && ts.isIdentifier(recv.expression) && imp.root.has(recv.expression.text)) {
+      return true;
+    }
+    return !!schemaArg && ((ts.isIdentifier(schemaArg) && schemaCollection.has(schemaArg.text)) || isSchemaNew(schemaArg));
+  };
   walk(sf, (node) => {
     if (!ts.isCallExpression(node) || node.arguments.length < 2) return;
     const e = node.expression;
     const isModel = (ts.isIdentifier(e) && imp.model.has(e.text))
-      || (ts.isPropertyAccessExpression(e) && e.name.text === "model" && ts.isIdentifier(e.expression) && imp.root.has(e.expression.text));
+      || (ts.isPropertyAccessExpression(e) && e.name.text === "model" && modelReceiver(e.expression, node.arguments[1]));
     if (!isModel) return;
     const [nameArg, schemaArg, collArg] = node.arguments;
     const name = stringValue(nameArg);
@@ -457,6 +496,22 @@ function mongooseModels(sf: ts.SourceFile): Map<string, { table?: string; node: 
 function mongooseModelImports(sf: ts.SourceFile): Map<string, ModelImport> {
   const names = new Map<string, ModelImport>();
   for (const st of sf.statements) {
+    // CommonJS: `const Customer = require("../models/customer")` / `const { Invoice } = require("../models/invoice")`.
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        const spec = requireSpec(d.initializer);
+        if (spec === undefined || !MONGOOSE_MODEL_SPEC.test(spec)) continue;
+        if (ts.isIdentifier(d.name) && /^[A-Z]/.test(d.name.text)) names.set(d.name.text, { model: d.name.text, defaultFrom: spec });
+        else if (ts.isObjectBindingPattern(d.name)) {
+          for (const el of d.name.elements) {
+            if (!ts.isIdentifier(el.name)) continue;
+            const imported = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+            if (/^[A-Z]/.test(el.name.text) && /^[A-Z]/.test(imported)) names.set(el.name.text, { model: imported });
+          }
+        }
+      }
+      continue;
+    }
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !MONGOOSE_MODEL_SPEC.test(st.moduleSpecifier.text)) continue;
     const clause = st.importClause;
     if (clause?.name && /^[A-Z]/.test(clause.name.text)) {
@@ -470,6 +525,35 @@ function mongooseModelImports(sf: ts.SourceFile): Map<string, ModelImport> {
     }
   }
   return names;
+}
+
+/** `new X(…)` -> "X". */
+function newClassName(e: ts.Expression | undefined): string | undefined {
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+  return e && ts.isNewExpression(e) && ts.isIdentifier(e.expression) ? e.expression.text : undefined;
+}
+
+/** The class a `.save()` receiver was made with: `new X(…)` itself, or a name whose nearest declaration is
+ * `const name = new X(…)` (a `let`/`var`, a parameter or any other declaration in between gives undefined). */
+function newDocModel(recv: ts.Expression): string | undefined {
+  const direct = newClassName(recv);
+  if (direct !== undefined || !ts.isIdentifier(recv)) return direct;
+  const name = recv.text;
+  const binds = (n: ts.BindingName): boolean =>
+    ts.isIdentifier(n) ? n.text === name : n.elements.some((el) => !ts.isOmittedExpression(el) && binds(el.name));
+  for (let cur: ts.Node | undefined = recv.parent; cur; cur = cur.parent) {
+    if (ts.isFunctionLike(cur) && cur.parameters.some((p) => binds(p.name))) return undefined;
+    if (!ts.isBlock(cur) && !ts.isSourceFile(cur)) continue;
+    for (const st of cur.statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (!binds(d.name)) continue;
+        const isConst = (st.declarationList.flags & ts.NodeFlags.Const) !== 0;
+        return isConst && ts.isIdentifier(d.name) ? newClassName(d.initializer) : undefined;
+      }
+    }
+  }
+  return undefined;
 }
 
 function prismaSchema(file: ParsedFile): DbPart {
@@ -546,6 +630,18 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       const imp = modelImports.get(e.expression.text)!;
       push({ model: imp.model, op, via: "lucid", at: at(node), ...(imp.defaultFrom ? { modelImport: imp.defaultFrom } : {}) });
       return;
+    }
+    // `new Customer(data).save()` / `const doc = new Customer(data); doc.save()` (v0.2a): an insert.
+    if (mongoose && ts.isPropertyAccessExpression(e) && e.name.text === "save" && node.arguments.length <= 1) {
+      const local = newDocModel(e.expression);
+      const imp = local === undefined || mgModels.has(local) ? undefined : mgImports.get(local);
+      if (local !== undefined && (mgModels.has(local) || imp)) {
+        push({
+          model: imp ? imp.model : local, op: "insert", via: "mongoose", at: at(node),
+          ...(imp?.defaultFrom ? { modelImport: imp.defaultFrom } : {}),
+        });
+        return;
+      }
     }
     if (mongoose && ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && MONGOOSE_OPS[e.name.text]) {
       const local = e.expression.text;

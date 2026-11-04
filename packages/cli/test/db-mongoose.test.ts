@@ -157,6 +157,92 @@ describe("H9: mongoose models name their collection, never the model's own name"
   });
 });
 
+describe("v0.2a §4: more mongoose shapes", () => {
+  it("new Model(data).save() inserts into the model's collection (imported or local model)", () => {
+    expect(index({
+      "src/models/customer.ts": `
+        import mongoose from "mongoose";
+        const Customer = mongoose.model("Customer", new mongoose.Schema({ name: String }));
+        export default Customer;
+      `,
+      "src/services/customer-service.ts": `
+        import Customer from "../models/customer";
+        import { Invoice } from "../models/invoice";
+        export async function register(data: unknown) { return new Customer(data).save(); }
+        export async function bill(data: unknown) {
+          const invoice = new Invoice(data);
+          await invoice.save();
+        }
+      `,
+      "src/models/invoice.ts": `
+        import { model, Schema } from "mongoose";
+        export const Invoice = model("Invoice", new Schema({ total: Number }));
+      `,
+    }).access).toEqual(["insert customers via mongoose @register", "insert invoices via mongoose @bill"]);
+  });
+
+  it("save() on anything that is not a new model document is not an access", () => {
+    expect(index({
+      "src/models/customer.ts": `
+        import mongoose from "mongoose";
+        export const Customer = mongoose.model("Customer", new mongoose.Schema({}));
+        export async function a(form: any) { await new Draft(form).save(); }
+        export async function b(doc: any) { await doc.save(); }
+        export async function c(d: unknown) {
+          let x = new Customer(d);
+          x = load();
+          await x.save();
+        }
+      `,
+    }).access).toEqual([]);
+  });
+
+  it("connection.model(Name, schema) on a mongoose connection or with a schema of this file is a model", () => {
+    const r = index({
+      "src/db/models.ts": `
+        import mongoose from "mongoose";
+        const conn = mongoose.createConnection(process.env.MONGO_URL);
+        const invoiceSchema = new mongoose.Schema({ total: Number });
+        export const Invoice = conn.model("Invoice", invoiceSchema);
+        export const Customer = connection.model("Customer", new mongoose.Schema({}), "clients");
+        export const Other = registry.model("Other", { strict: true });
+        export const list = () => Invoice.find();
+        export const one = () => Customer.findOne();
+        export const other = () => Other.find();
+      `,
+    });
+    expect(r.models).toEqual(["Customer -> clients", "Invoice -> invoices"]);
+    expect(r.access).toEqual(["read invoices via mongoose @list", "read clients via mongoose @one"]);
+  });
+
+  it("CommonJS: module.exports = mongoose.model(...) and exports.X = mongoose.model(...), required elsewhere", () => {
+    const r = index({
+      "src/models/customer.ts": `
+        const mongoose = require("mongoose");
+        const CustomerSchema = new mongoose.Schema({ name: String });
+        module.exports = mongoose.model("Customer", CustomerSchema);
+      `,
+      "src/models/invoice.ts": `
+        const { model, Schema } = require("mongoose");
+        exports.Invoice = model("Invoice", new Schema({ total: Number }), "billing_invoices");
+      `,
+      "src/services/billing.ts": `
+        const Customer = require("../models/customer");
+        const { Invoice } = require("../models/invoice");
+        exports.list = () => Customer.find();
+        module.exports.pay = async (id) => Invoice.updateOne({ _id: id }, { paid: true });
+        exports.open = (d) => new Invoice(d).save();
+      `,
+    });
+    expect(r.models).toEqual(["Customer -> customers", "Invoice -> billing_invoices"]);
+    expect(r.access).toEqual([
+      "read customers via mongoose @list",
+      "update billing_invoices via mongoose @pay",
+      "insert billing_invoices via mongoose @open",
+    ]);
+  });
+});
+
 describe("mongooseCollection (mongoose's pluralise rule)", () => {
   it("lowercases and pluralises like mongoose", () => {
     expect(["Customer", "Invoice", "InvoiceLine", "Person", "Category", "Address", "Box", "Alias", "News", "Child", "Shelf", "Quiz", "Mouse", "Datum", "Bus"]

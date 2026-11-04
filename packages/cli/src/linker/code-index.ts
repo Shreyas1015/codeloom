@@ -1,6 +1,7 @@
 import ts from "typescript";
 import {
-  className, commonJsAssignedName, enclosingSymbol, functionLikeName, isModuleExports, lineOf, objectName, stringValue, walk,
+  asyncThunkOf, className, commonJsAssignedName, constructorFieldOf, enclosingSymbol, functionLikeName, isModuleExports, lastName, lineOf,
+  objectName, rtkEndpointOf, stringValue, walk,
 } from "../adapters/ast.js";
 import type { ParsedFile } from "../adapters/types.js";
 import { httpCallShape, superagentReceivers } from "../adapters/http-calls.js";
@@ -24,6 +25,9 @@ export interface CodeSymbol {
   /** Functions/classes: every name other files can import this symbol under ("default" for the default
    * export). Own `name` is included only when actually exported under it. Absent when not exported. */
   exportNames?: string[];
+  /** v0.2a §4: the function is handed to a Redux Toolkit factory — a `createAsyncThunk` payload creator, or an RTK
+   * Query endpoint's `query` function. Calling the name does not run it directly, so a hop to it is at best "param". */
+  factory?: "createAsyncThunk" | "rtk-query";
 }
 
 export type ImportBinding =
@@ -68,6 +72,9 @@ export type Callee =
      * "String") or from its initializer (`[]` -> "Array", `{}` -> "Object", `new Map()` -> "Map", a string
      * literal -> "String"). Absent when unknown. The resolver never guesses onto a non-repo type. */
     recvType?: string;
+    /** v0.2a §4: `object` is the first parameter of the named function `props` (a component's props object), so
+     * `props.onX()` calls whatever the component is given as `onX` (connect's mapDispatchToProps, or a JSX prop). */
+    props?: string;
   }
   | { kind: "new-member"; className: string; prop: string }
   | { kind: "this"; prop: string }
@@ -83,8 +90,13 @@ export interface CallSite {
    * tag (`<PostDetails />`). Resolved like a call, but at best "param" (it may never run).
    * `"fn-arg"`: not a call but a function handed over as a call argument (v0.2a) — `useMutation(saveCustomer)`,
    * `useQuery({ onSuccess: refresh })` — only when the outer callee is a local/imported function or a
-   * hook-like `use*` name (never a member call like `ids.forEach(save)`). At best "param" too. */
-  kind?: "jsx-ref" | "fn-arg";
+   * hook-like `use*` name (never a member call like `ids.forEach(save)`). At best "param" too.
+   * `"lifecycle"` (v0.2a §4): not a call but React running a class component's lifecycle method or `render`: the
+   * caller is the class itself, the callee `this.<method>`. At best "param". */
+  kind?: "jsx-ref" | "fn-arg" | "lifecycle";
+  /** v0.2a §4: a jsx-ref that is a JSX attribute on a component tag (`<CustomerRow onRemove={this.remove} />`): the tag
+   * name as written and the attribute, so the component's `this.props.onRemove()` can find what it is given. */
+  jsxProp?: { tag: string; attr: string };
   /** Plain-identifier arguments that name a function/class declared in this file or an import binding —
    * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
    * handleEmail)` — with their argument position. Absent when none. */
@@ -145,6 +157,22 @@ export interface FileCodeIndex {
   /** Handlers a hook (a function named `use[A-Z]…`) returns under a key, when every value it returns is an
    * object literal (H10). Sorted by hook, then key. Absent when none. */
   hookReturns?: HookReturn[];
+  /** v0.2a §4: `export default connect(…)(Customer)` / `withRouter(Customer)` / `module.exports = memo(Customer)`: the
+   * local component a higher-order-component default export wraps. The default import stands for it. */
+  defaultWraps?: string;
+  /** v0.2a §4: Redux `connect(mapState, mapDispatch)(Component)` in this file. `fn`: mapDispatch is a function of this
+   * file (its returned keys are recorded in hookReturns under its name); `object`: an object literal of plain names. */
+  reduxConnects?: ReduxConnect[];
+  /** v0.2a §4: RTK Query endpoints declared in this file (`const api = createApi({ endpoints: (b) => ({ x: b.query(…) }) })`);
+   * each endpoint's `query` function is the symbol `<api>.<endpoint>`. Source order. */
+  rtkEndpoints?: Array<{ api: string; endpoint: string; kind: "query" | "mutation" }>;
+  /** v0.2a §4: generated hooks destructured from an RTK Query api (`export const { useGetCustomerQuery } = api`). */
+  rtkHooks?: Array<{ local: string; api: string; exported: boolean; /** the generated name, when renamed */ key?: string }>;
+}
+
+export interface ReduxConnect {
+  component: string;
+  dispatch: { kind: "fn"; name: string } | { kind: "object"; props: Array<{ key: string; name: string }> };
 }
 
 /** What hook `hook` returns under `key`: a function named in the hook's file (`{ handleSubmit }` /
@@ -292,7 +320,11 @@ function classify(expr: ts.Expression): Callee {
       const keyed = hookKeyOf(obj);
       if (keyed) return { kind: "member", object: obj.text, prop, hook: keyed.hook, hookKey: keyed.key };
       const recvType = receiverTypeOf(obj);
-      return recvType !== undefined ? { kind: "member", object: obj.text, prop, recvType } : { kind: "member", object: obj.text, prop };
+      const props = propsOwnerOf(obj);
+      return {
+        kind: "member", object: obj.text, prop,
+        ...(recvType !== undefined ? { recvType } : {}), ...(props !== undefined ? { props } : {}),
+      };
     }
     const receiver = identifierChain(obj);
     return receiver ? { kind: "other", prop, receiver } : { kind: "other", prop };
@@ -365,6 +397,18 @@ function functionSymbol(node: ts.Node, name: string): CodeSymbol {
   if (ts.isPropertyAssignment(p) && objectName(p.parent) !== undefined) {
     return { name, kind: "object-method", lines: own, exported: objectExported(p.parent), binding: objectBinds(p.parent) };
   }
+  // v0.2a §4: `this.handleX = () => {…}` in a constructor is a method of the class.
+  const ctorField = constructorFieldOf(node);
+  if (ctorField) return { name, kind: "method", lines: own, exported: false, binding: classBinds(ctorField.cls) };
+  // v0.2a §4: `const fetchX = createAsyncThunk("x", payloadCreator)` binds `fetchX` like a const function.
+  const thunk = asyncThunkOf(node);
+  if (thunk) {
+    const stmt = ownVariableStatement(thunk.decl);
+    const sym = plainSymbol(name, "function", [lineOf(thunk.decl), endLineOf(thunk.decl)], stmt && isExported(stmt) ? [name] : [], true);
+    return { ...sym, factory: "createAsyncThunk" };
+  }
+  // v0.2a §4: an RTK Query endpoint's `query` function ("<api>.<endpoint>"), reached through generated hooks only.
+  if (rtkEndpointOf(node)) return { ...plainSymbol(name, "function", own, [], false), factory: "rtk-query" };
   // Below, `name` is a CommonJS property, "default", or a function expression's own name (visible only
   // inside that function): none of them bind in the file's scope.
   // `exports.x = function () {}` (exported as x) / `module.exports = function main() {}` (as default).
@@ -538,7 +582,21 @@ function urlArgsOf(call: ts.CallExpression): UrlArg[] {
 function isJsxRefExpr(e: ts.Node): e is ts.Identifier | ts.PropertyAccessExpression {
   if (ts.isIdentifier(e)) return true;
   return ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.name) &&
-    (ts.isIdentifier(e.expression) || e.expression.kind === ts.SyntaxKind.ThisKeyword);
+    (ts.isIdentifier(e.expression) || e.expression.kind === ts.SyntaxKind.ThisKeyword || isThisProps(e.expression));
+}
+
+/** `this.props` (v0.2a §4: `onRemove={this.props.onRemove}` hands a prop on). */
+function isThisProps(e: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(e) && e.name.text === "props" && e.expression.kind === ts.SyntaxKind.ThisKeyword;
+}
+
+/** The component tag and attribute name of a JSX attribute on a component element (`<CustomerRow onRemove={…}>`). */
+function jsxPropOf(attr: ts.JsxAttribute): { tag: string; attr: string } | undefined {
+  const el = attr.parent?.parent;
+  if (!el || (!ts.isJsxOpeningElement(el) && !ts.isJsxSelfClosingElement(el))) return undefined;
+  const tag = el.tagName;
+  if (!ts.isIdentifier(tag) || !/^[A-Z]/.test(tag.text) || !ts.isIdentifier(attr.name)) return undefined;
+  return { tag: tag.text, attr: attr.name.text };
 }
 
 /** The expression a JSX node hands over by reference, if any: `onX={handler}` attribute values, and
@@ -690,6 +748,18 @@ function hookKeyOf(id: ts.Identifier): HookKey | undefined {
   }
 }
 
+/** v0.2a §4: the name of the function whose first parameter `id` is, by its nearest declaration (a component's
+ * `props`: `function CustomerRow(props) { … props.onRemove() }`). Undefined for anything else. */
+function propsOwnerOf(id: ts.Identifier): string | undefined {
+  const decl = nearestDeclaration(id);
+  const param = decl?.parent;
+  if (!param || !ts.isParameter(param) || param.name !== decl) return undefined;
+  const fn = param.parent;
+  const name = ts.isFunctionLike(fn) && fn.parameters[0] === param ? functionLikeName(fn) : undefined;
+  // React's rule: a component's name starts with an upper-case letter.
+  return name !== undefined && /^[A-Z]/.test(name) && !name.includes(".") ? name : undefined;
+}
+
 /** `object` bound by its nearest declaration to a whole hook result (`const form = useCustomerForm()`). */
 function wholeHookOf(id: ts.Identifier): string | undefined {
   const decl = nearestDeclaration(id);
@@ -819,6 +889,77 @@ function hookReturnsOf(fn: ts.FunctionLikeDeclaration, hook: string): HookReturn
   return [...byKey].flatMap(([key, target]) => (target && !containers.has(key) && !underValue(key) ? [{ hook, key, target }] : []));
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Class components, Redux connect, RTK Query hooks (v0.2a §4)
+// ---------------------------------------------------------------------------------------------------
+
+/** Lifecycle methods React itself calls on a class component (and `render`). */
+const LIFECYCLE_METHODS = new Set([
+  "render", "componentDidMount", "componentDidUpdate", "componentWillUnmount", "shouldComponentUpdate",
+  "getSnapshotBeforeUpdate", "componentDidCatch", "componentWillMount", "UNSAFE_componentWillMount",
+  "componentWillReceiveProps", "UNSAFE_componentWillReceiveProps", "componentWillUpdate", "UNSAFE_componentWillUpdate",
+]);
+
+/** A class that extends `Component` / `PureComponent` (`React.Component` too), or that extends another class and
+ * declares one of React's own `component*` lifecycle methods (`class Favorites extends Profile { componentWillMount() … }`). */
+function isReactClassComponent(cls: ts.ClassLikeDeclaration): boolean {
+  const ext = cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword);
+  if (!ext) return false;
+  if (ext.types.some((t) => ["Component", "PureComponent"].includes(lastName(t.expression)))) return true;
+  return cls.members.some((m) => {
+    const name = ts.isMethodDeclaration(m) ? memberName(m.name) : undefined;
+    return name !== undefined && LIFECYCLE_METHODS.has(name) && /^(UNSAFE_)?component[A-Z]/.test(name);
+  });
+}
+
+/** Max higher-order-component calls unwrapped around a component (`connect(…)(withRouter(X))` is two). */
+const MAX_HOC_DEPTH = 3;
+
+/** The component a chain of single-argument HOC calls wraps: `X`, `hoc(X)`, `connect(a, b)(X)`, `React.memo(X)`. */
+function hocInner(e: ts.Expression, depth = 0): string | undefined {
+  const x = unwrapExpr(e);
+  if (ts.isIdentifier(x)) return depth > 0 ? x.text : undefined;
+  if (!ts.isCallExpression(x) || x.arguments.length !== 1 || depth >= MAX_HOC_DEPTH) return undefined;
+  const callee = x.expression;
+  const ok = ts.isIdentifier(callee) || ts.isPropertyAccessExpression(callee)
+    || (ts.isCallExpression(callee) && (ts.isIdentifier(callee.expression) || ts.isPropertyAccessExpression(callee.expression)));
+  return ok ? hocInner(x.arguments[0]!, depth + 1) : undefined;
+}
+
+/** `connect(mapState, mapDispatch)(Component)` (Redux): the component and what mapDispatch is. Undefined when
+ * mapDispatch is absent / null / anything but a plain name or an object literal of plain names. */
+function reduxConnectOf(node: ts.Node): ReduxConnect | undefined {
+  if (!ts.isCallExpression(node) || node.arguments.length !== 1) return undefined;
+  const inner = node.expression;
+  if (!ts.isCallExpression(inner) || lastName(inner.expression) !== "connect") return undefined;
+  const component = hocInner(node.arguments[0]!, 1) ?? (ts.isIdentifier(node.arguments[0]!) ? node.arguments[0]!.text : undefined);
+  const md = inner.arguments[1] && unwrapExpr(inner.arguments[1]);
+  if (component === undefined || !md) return undefined;
+  if (ts.isIdentifier(md)) return { component, dispatch: { kind: "fn", name: md.text } };
+  if (!ts.isObjectLiteralExpression(md)) return undefined;
+  const props: Array<{ key: string; name: string }> = [];
+  for (const p of md.properties) {
+    if (ts.isShorthandPropertyAssignment(p)) props.push({ key: p.name.text, name: p.name.text });
+    else if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.initializer) && memberName(p.name) !== undefined) {
+      props.push({ key: memberName(p.name)!, name: p.initializer.text });
+    }
+  }
+  return props.length > 0 ? { component, dispatch: { kind: "object", props } } : undefined;
+}
+
+/** RTK Query's generated hook names: `use<Endpoint>Query`, `useLazy<Endpoint>Query`, `use<Endpoint>QueryState`,
+ * `use<Endpoint>Mutation`. */
+export const RTK_HOOK_RE = /^use(Lazy)?([A-Z]\w*?)(Query|QueryState|Mutation)$/;
+
+/** The endpoint and kind a generated hook name stands for (`useGetCustomerQuery` -> getCustomer, query). */
+export function rtkHookEndpoint(hook: string): { endpoint: string; kind: "query" | "mutation" } | undefined {
+  const m = RTK_HOOK_RE.exec(hook);
+  if (!m) return undefined;
+  if (m[1] && m[3] !== "Query") return undefined;
+  const name = m[2]!;
+  return { endpoint: name[0]!.toLowerCase() + name.slice(1), kind: m[3] === "Mutation" ? "mutation" : "query" };
+}
+
 export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const idx: FileCodeIndex = { symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] };
   if (!file.sf) return idx;
@@ -830,11 +971,21 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const wrappers = new Map<string, HttpWrapper | null>();
   /** fn-arg site -> its outer callee's name ("" for a `ns.useX(…)` hook call, which always qualifies). */
   const fnArgOuter = new Map<CallSite, string>();
+  /** Function-like nodes of plain bound function symbols, by name (first one wins), for mapDispatchToProps. */
+  const fnNodes = new Map<string, ts.FunctionLikeDeclaration>();
+  /** `export default <hoc>(X)` / `module.exports = <hoc>(X)`: X, checked against the symbols after the walk. */
+  let wrapCandidate: string | undefined;
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
     if (fnName !== undefined) {
-      idx.symbols.push(functionSymbol(node, fnName));
+      const sym = functionSymbol(node, fnName);
+      idx.symbols.push(sym);
+      if (sym.kind === "function" && sym.binding && ts.isFunctionLike(node) && "body" in node && !fnNodes.has(fnName)) {
+        fnNodes.set(fnName, node as ts.FunctionLikeDeclaration);
+      }
+      const rtk = sym.factory === "rtk-query" ? rtkEndpointOf(node) : undefined;
+      if (rtk) (idx.rtkEndpoints ??= []).push({ api: rtk.api, endpoint: rtk.endpoint, kind: rtk.kind });
       if (HOOK_NAME_RE.test(fnName) && ts.isFunctionLike(node) && "body" in node) {
         const returns = hookReturnsOf(node as ts.FunctionLikeDeclaration, fnName);
         if (returns.length > 0) (idx.hookReturns ??= []).push(...returns);
@@ -863,6 +1014,36 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
           }
           if (m.body) constructorThisNews(m.body, (field, typeName) => addField(idx, { className: cls, field, typeName }));
         }
+      }
+      // v0.2a §4: React runs a class component's lifecycle methods and render: one "lifecycle" site per method.
+      if (isReactClassComponent(node)) {
+        for (const m of node.members) {
+          const name = ts.isMethodDeclaration(m) ? memberName(m.name) : undefined;
+          if (name !== undefined && LIFECYCLE_METHODS.has(name) && !hasModifier(m, ts.SyntaxKind.StaticKeyword)) {
+            idx.calls.push({ caller: cls, line: lineOf(m), kind: "lifecycle", callee: { kind: "this", prop: name } });
+          }
+        }
+      }
+    }
+
+    // v0.2a §4: `export default connect(…)(X)` / `module.exports = withRouter(X)`.
+    if (ts.isExportAssignment(node) && !node.isExportEquals) wrapCandidate ??= hocInner(node.expression);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isModuleExports(node.left)) {
+      wrapCandidate ??= hocInner(node.right);
+    }
+    // v0.2a §4: `connect(mapState, mapDispatch)(Component)`.
+    const connect = reduxConnectOf(node);
+    if (connect) (idx.reduxConnects ??= []).push(connect);
+    // v0.2a §4: `export const { useGetCustomerQuery } = customersApi`.
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && ts.isIdentifier(node.initializer)) {
+      const api = node.initializer.text;
+      const stmt = ownVariableStatement(node);
+      for (const el of node.name.elements) {
+        if (el.dotDotDotToken || !ts.isIdentifier(el.name)) continue;
+        const key = el.propertyName ? (ts.isIdentifier(el.propertyName) ? el.propertyName.text : undefined) : el.name.text;
+        if (key === undefined || !RTK_HOOK_RE.test(key)) continue;
+        // Only the generated name itself (an alias keeps the generated name as `key`).
+        (idx.rtkHooks ??= []).push({ local: el.name.text, api, exported: !!stmt && isExported(stmt), ...(key !== el.name.text ? { key } : {}) });
       }
     }
 
@@ -971,7 +1152,10 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     }
 
     const jsxRef = jsxRefOf(node);
-    if (jsxRef) idx.calls.push({ caller: enclosingSymbol(node), line: lineOf(node), kind: "jsx-ref", callee: classify(jsxRef) });
+    if (jsxRef) {
+      const jsxProp = ts.isJsxAttribute(node) ? jsxPropOf(node) : undefined;
+      idx.calls.push({ caller: enclosingSymbol(node), line: lineOf(node), kind: "jsx-ref", callee: classify(jsxRef), ...(jsxProp ? { jsxProp } : {}) });
+    }
 
     if (ts.isCallExpression(node)) {
       const site: CallSite = { caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) };
@@ -1017,6 +1201,20 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     } else if (c.kind !== "jsx-ref") return true;
     return c.callee.kind !== "ident" || c.callee.hook !== undefined || fnNames.has(c.callee.name);
   });
+  // v0.2a §4: a HOC-wrapped default export stands for the local component it wraps.
+  if (wrapCandidate !== undefined && !idx.symbols.some((s) => s.exportNames?.includes("default"))
+    && idx.symbols.some((s) => s.name === wrapCandidate && s.binding && (s.kind === "class" || s.kind === "function"))) {
+    idx.defaultWraps = wrapCandidate;
+  }
+  // v0.2a §4: the keys a connected component's mapDispatchToProps function returns (read like a hook's result).
+  for (const c of idx.reduxConnects ?? []) {
+    if (c.dispatch.kind !== "fn") continue;
+    const name = c.dispatch.name;
+    const fn = fnNodes.get(name);
+    if (!fn || idx.hookReturns?.some((r) => r.hook === name)) continue;
+    const returns = hookReturnsOf(fn, name);
+    if (returns.length > 0) (idx.hookReturns ??= []).push(...returns);
+  }
   idx.hookReturns?.sort((a, b) => compare(a.hook, b.hook) || compare(a.key, b.key));
   // Only an object literal (one carrying `<name>.*` object-methods) is a default *object*.
   const obj = defaultCandidate;

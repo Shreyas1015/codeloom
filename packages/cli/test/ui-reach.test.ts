@@ -115,8 +115,8 @@ export const routes = <Route path="/" component={Home} />;
   it("writes one call-entry chain per wrapper call no page reaches, scored as ui-api hops", () => {
     const { chains } = realworld();
     const callChains = chains.filter((c) => c.entry.startsWith("call:"));
+    // v0.2a §4: Home's componentWillMount reaches Articles.all from the page, so it has a page chain instead.
     expect(callChains.map((c) => [c.entry, c.name]).sort()).toEqual([
-      ["call:ui:src/agent.js#Articles.all", "GET /api/articles · Articles.all"],
       ["call:ui:src/agent.js#Articles.get", "GET /api/articles/:slug · Articles.get"],
       ["call:ui:src/agent.js#Auth.current", "GET /api/user · Auth.current"],
     ]);
@@ -135,8 +135,8 @@ export const routes = <Route path="/" component={Home} />;
 
   it("records the reach facts and lists every unreached call under ui-unreached", () => {
     const { links, report } = realworld();
-    expect(links.uiReach.map((f) => `${f.symbol}:${f.reached}`)).toEqual(["Auth.current:false", "Articles.all:false", "Articles.get:false"]);
-    expect(report.items.filter((i) => i.kind === "ui-unreached").map((i) => i.symbol)).toEqual(["Auth.current", "Articles.all", "Articles.get"]);
+    expect(links.uiReach.map((f) => `${f.symbol}:${f.reached}`)).toEqual(["Auth.current:false", "Articles.all:true", "Articles.get:false"]);
+    expect(report.items.filter((i) => i.kind === "ui-unreached").map((i) => i.symbol)).toEqual(["Auth.current", "Articles.get"]);
   });
 
   it("a call reached by a page gets a page chain, no call-entry chain", () => {
@@ -183,6 +183,8 @@ describe("reach facts drive ui-unreached (H3b)", () => {
     });
     // The two calls share one page chain (same entry and route), so only one call stop survives there.
     expect(chains.filter((c) => c.entry === "page:app:/edit")).toHaveLength(1);
+    // v0.2a §4: the call the page chain dropped keeps a call-entry chain, so its UI → API hop is still there.
+    expect(chains.filter((c) => c.entry.startsWith("call:")).map((c) => c.entry)).toEqual(["call:app:src/app/edit/page.tsx#publish"]);
     expect(links.uiReach.map((f) => [f.symbol, f.reached])).toEqual([["save", true], ["publish", true]]);
     expect(report.items.filter((i) => i.kind === "ui-unreached")).toEqual([]);
   });
@@ -307,11 +309,12 @@ describe("call-entry chains and reach facts are deterministic (H3b)", () => {
     const path = join(root, ".codeloom", "chains.json");
     const first = readFileSync(path, "utf8");
     const file = ChainsFileSchema.parse(JSON.parse(first));
+    // v0.2a §4: the class page's componentWillMount reaches Tags.getAll.
     expect(file.chains.filter((c) => c.entry.startsWith("call:")).map((c) => c.name).sort()).toEqual([
-      "GET /api/tags · Tags.getAll", "GET /api/user · Auth.current",
+      "GET /api/user · Auth.current",
     ]);
     expect(file.uiReach!.map((f) => [f.symbol, f.path, f.reached])).toEqual([
-      ["Tags.getAll", "/api/tags", false], ["Auth.current", "/api/user", false],
+      ["Tags.getAll", "/api/tags", true], ["Auth.current", "/api/user", false],
     ]);
     expect((await runIndex(root)).linker.wrote).toBe(false);
     expect(readFileSync(path, "utf8")).toBe(first);

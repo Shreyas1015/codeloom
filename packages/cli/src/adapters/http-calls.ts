@@ -1,6 +1,8 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
-import { absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
+import {
+  absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, rtkBaseUrl, rtkEndpointOf, stringValue, walk,
+} from "./ast.js";
 import type { HttpCallDraft, HttpClientDraft, ParsedFile, ReExportDraft } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
@@ -252,12 +254,55 @@ function callOf(file: ParsedFile, node: ts.CallExpression, shape: AnyShape, env:
   };
 }
 
+/** The URL a function returns: its expression body, or the single `return <expr>` of its block. */
+function returnedExpr(fn: ts.Node): ts.Expression | undefined {
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn) && !ts.isMethodDeclaration(fn)) return undefined;
+  const body = fn.body;
+  if (!body) return undefined;
+  if (!ts.isBlock(body)) return body;
+  const [only] = body.statements;
+  return body.statements.length === 1 && only && ts.isReturnStatement(only) ? only.expression : undefined;
+}
+
+/** v0.2a §4: an RTK Query endpoint's `query` function as an HTTP call on its api (the api is an HttpClient named
+ * after its variable, so fetchBaseQuery's baseUrl applies): `query: (id) => \`/customers/${id}\`` is a GET, and
+ * `query: (b) => ({ url: "/customers", method: "POST", body: b })` takes `method` (GET when absent). Only for an api
+ * whose baseQuery is `fetchBaseQuery(…)`; a query whose URL cannot be read is left out. */
+function rtkQueryCall(file: ParsedFile, node: ts.Node, env: Map<string, string>): HttpCall | undefined {
+  const ep = rtkEndpointOf(node);
+  if (!ep || !rtkUsesFetchBaseQuery(ep.createApi)) return undefined;
+  let e = returnedExpr(node);
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!e) return undefined;
+  let method: HttpMethod | undefined = "GET";
+  let urlExpr: ts.Expression | undefined = e;
+  if (ts.isObjectLiteralExpression(e)) {
+    urlExpr = prop(e, "url");
+    method = configMethod(e, "GET");
+  }
+  const pattern = urlExpr && urlPattern(urlExpr, env);
+  if (!urlExpr || !pattern || !method) return undefined;
+  return {
+    method, path: pattern.path, raw: urlExpr.getText(), resolved: pattern.resolved, client: ep.api,
+    at: { file: file.rel, line: lineOf(node), symbol: `${ep.api}.${ep.endpoint}` }, kind: pattern.kind,
+    ...(pattern.base !== undefined ? { base: pattern.base } : {}),
+  };
+}
+
+function rtkUsesFetchBaseQuery(createApi: ts.CallExpression): boolean {
+  const opts = createApi.arguments[0];
+  const bq = opts && ts.isObjectLiteralExpression(opts) ? prop(opts, "baseQuery") : undefined;
+  return !!bq && ts.isCallExpression(bq) && lastName(bq.expression) === "fetchBaseQuery";
+}
+
 export function detectHttpCalls(file: ParsedFile): HttpCall[] {
   if (!file.sf) return [];
   const superagent = superagentReceivers(file.sf);
   const scope = clientScope(file);
   const out: HttpCall[] = [];
   walk(file.sf, (node) => {
+    const rtk = rtkQueryCall(file, node, scope.envConsts);
+    if (rtk) out.push(rtk);
     if (!ts.isCallExpression(node)) return;
     const shape = configCall(node, scope) ?? httpCallShape(node, superagent, scope);
     const call = shape && callOf(file, node, shape, scope.envConsts);
@@ -464,6 +509,20 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
   const env = envConsts(file.sf);
   const out: HttpClient[] = [];
   walk(file.sf, (node) => {
+    // v0.2a §4: `const api = createApi({ baseQuery: fetchBaseQuery({ baseUrl }) , … })` is a client named `api`.
+    if (ts.isCallExpression(node) && lastName(node.expression) === "createApi" && rtkUsesFetchBaseQuery(node)
+      && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name)) {
+      const baseNode = rtkBaseUrl(node);
+      const literal = baseNode && stringValue(baseNode);
+      const baseHost = literal !== undefined ? absoluteHost(literal) : undefined;
+      out.push({
+        name: node.parent.name.text, file: file.rel, line: lineOf(node), factory: "rtk-query",
+        ...(baseNode && literal === undefined ? { baseExpr: env.get(baseNode.getText()) ?? baseNode.getText() } : {}),
+        ...(literal !== undefined ? { baseLiteral: normalizePath(literal) } : {}),
+        ...(baseHost !== undefined ? { baseHost } : {}),
+      });
+      return;
+    }
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
     const receiver = resolveClientReceiver(node.expression.expression, aliases);
     if (!receiver) return;
