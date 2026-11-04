@@ -1,9 +1,55 @@
 import { describe, expect, it } from "vitest";
+import type { KnowledgeGraph } from "@codeloom/core";
+import { finalizeEndpoints, runAdapters } from "../src/adapters/run.js";
 import { buildFileCodeIndex } from "../src/linker/code-index.js";
 import type { RepoCodeIndex } from "../src/linker/code-index.js";
+import { linkUi } from "../src/linker/link.js";
 import { createCallResolver, walkCallers } from "../src/linker/resolve-calls.js";
 import type { CallResolver, SymbolRef } from "../src/linker/resolve-calls.js";
-import { parsed } from "./adapter-helpers.js";
+import { resolveImport } from "../src/indexer/resolve-imports.js";
+import type { RepoData, WorkspaceData } from "../src/store/read.js";
+import type { EndpointsFile, HttpMethod, UiPage } from "../src/store/schemas.js";
+import { ctxWith, parsed } from "./adapter-helpers.js";
+
+function graphStub(): KnowledgeGraph {
+  return {
+    version: "1",
+    project: { name: "x", languages: [], frameworks: [], description: "", analyzedAt: "", gitCommitHash: "" },
+    nodes: [], edges: [], layers: [], tour: [],
+  };
+}
+
+/** Two repos in memory: `uiFiles` (a web app with one page, `CustomersPage` in src/pages/CustomersPage.tsx)
+ * and an API with `routes`. Returns each UI call as [call, route, page paths "symbol(confidence)[@line]"]. */
+function linkTwoRepos(uiFiles: Record<string, string>, routes: Array<[HttpMethod, string]>): string[][] {
+  const ctx = ctxWith("axios", "react", "react-router-dom");
+  const rels = Object.keys(uiFiles).sort();
+  const files = new Set(rels);
+  const ep = finalizeEndpoints("ui", rels.map((rel) => runAdapters(rel, uiFiles[rel]!, ctx)), (from, spec) => resolveImport(from, spec, files, []));
+  const index: RepoCodeIndex = new Map(rels.map((rel) => [rel, buildFileCodeIndex(parsed(rel, uiFiles[rel]!))]));
+  const pages: UiPage[] = [{
+    route: "/customers", file: "src/pages/CustomersPage.tsx", line: 2, framework: "react-router", component: { name: "CustomersPage" },
+  }];
+  const ui: RepoData = { ref: { id: "ui", path: "ui", role: "ui" }, abs: "/ws/ui", graph: graphStub(), endpoints: { ...ep, pages } };
+  const apiRoutes: EndpointsFile["routes"] = routes.map(([method, path]) => ({
+    method, path, handler: `${method} ${path}`, inline: true, framework: "express",
+    at: { file: "src/app.ts", line: 1, symbol: `${method} ${path}` },
+  }));
+  const api: RepoData = {
+    ref: { id: "api", path: "api", role: "api", apiBase: ["VITE_API_URL"] }, abs: "/ws/api", graph: graphStub(),
+    endpoints: {
+      version: 2, repo: "api", pages: [], httpCalls: [], httpClients: [], mounts: [], dbAccess: [], tables: [], models: [], queues: [],
+      routes: apiRoutes,
+    },
+  };
+  const ws: WorkspaceData = { root: "/ws", name: "ws", repos: [ui, api], links: [] };
+  const resolvers = new Map([["ui", createCallResolver({ repo: "ui", index, files, aliases: [] })]]);
+  return linkUi({ ws, resolvers }).map((l) => [
+    `${l.call.method} ${l.call.path}`,
+    l.target.kind === "route" ? `${l.target.route.repo}:${l.target.route.route.method} ${l.target.route.effectivePath}` : l.target.kind,
+    ...l.pages.map((p) => p.path.map((s) => `${s.symbol}(${s.confidence})${s.line !== undefined ? `@${s.line}` : ""}`).join(">")),
+  ]);
+}
 
 // v0.2a §2: more shapes the UI reverse walk follows. All at best "param"; anything else stays unresolved.
 
@@ -221,5 +267,48 @@ describe("namespaced hooks (import * as hooks)", () => {
       ].join("\n"), "import * as ns from '../hooks/useCustomer';"),
     });
     expect(r.callsFrom(ref(PAGE, "CustomersPage")).filter((c) => c.site.kind === "jsx-ref")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Two repos: a page reaches an API route only through each shape.
+// ---------------------------------------------------------------------------------------------------
+
+const client = [
+  "import axios from 'axios';",
+  "const client = axios.create({ baseURL: import.meta.env.VITE_API_URL });",
+  "export default client;",
+].join("\n");
+const customersApi = [
+  "import client from './client';",
+  "export async function saveCustomer(d: unknown) { return client.post('/customers', d); }",
+  "export async function loadCustomers() { return client.get('/customers'); }",
+  "export async function payInvoice(id: string) { return client.post(`/invoices/${id}/pay`); }",
+].join("\n");
+const pageOnly = (imports: string, body: string) =>
+  `${imports}\nexport default function CustomersPage() {\n${body}\n}\n`;
+
+describe("linkUi: the page reaches a route only through the inline arrow a hook returns", () => {
+  it("the hook stop carries the arrow's own first line", () => {
+    const rows = linkTwoRepos({
+      "src/api/client.ts": client,
+      "src/api/customers.ts": customersApi,
+      "src/hooks/useCustomer.ts": [
+        "import { saveCustomer } from '../api/customers';",
+        "export function useCustomer() {",
+        "  const ready = true;",
+        "  return {",
+        "    save: async (d: unknown) => {",
+        "      await saveCustomer(d);",
+        "    },",
+        "  };",
+        "}",
+      ].join("\n"),
+      [PAGE]: pageOnly("import { useCustomer } from '../hooks/useCustomer';",
+        "  const { save } = useCustomer();\n  return <button onClick={save} />;"),
+    }, [["POST", "/customers"]]);
+    expect(rows.find((r) => r[0] === "POST /customers")).toEqual([
+      "POST /customers", "api:POST /customers", "CustomersPage(exact)>useCustomer(exact)@5>saveCustomer(exact)",
+    ]);
   });
 });

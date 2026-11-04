@@ -22,7 +22,11 @@ export interface LinkInput {
 
 /** One walk hop: the symbol plus the confidence of its call towards the next symbol on the way to the
  * HTTP call site (the call-site symbol itself, which makes no further hop, is "exact"). */
-export type ReachStep = SymbolRef & { confidence: Confidence };
+export type ReachStep = SymbolRef & {
+  confidence: Confidence;
+  /** Set when the step is a hook reached through an inline function it returns: that function's first line. */
+  line?: number;
+};
 
 export interface PageReach {
   page: UiPage;
@@ -86,6 +90,16 @@ function pageSymbolRef(input: LinkInput, repoId: string, page: UiPage): SymbolRe
   return bySite ? { repo: repoId, file: page.file, symbol: bySite.name } : undefined;
 }
 
+/** When `from` hands over an inline function that `to` (a hook) returns, and that inline function holds
+ * `outLine` (the line where `to` makes its next hop, or the HTTP call itself): the inline function's first
+ * line, so the stop shows the arrow rather than the hook's first line (v0.2a). Undefined otherwise. */
+function inlineHandlerLine(resolver: CallResolver, from: SymbolRef, to: SymbolRef, outLine: number): number | undefined {
+  const lines = resolver.callsFrom(from)
+    .filter((c) => c.lines && c.target.file === to.file && c.target.symbol === to.symbol && within(outLine, c.lines))
+    .map((c) => c.lines![0]);
+  return lines.length > 0 ? Math.max(...lines) : undefined;
+}
+
 /** Every UiPage that reaches `call` by a reverse walk over resolved calls, ≤6 hops. */
 function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageReach[] {
   const resolver = input.resolvers.get(repoId);
@@ -101,7 +115,10 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
     const pageRef = pageSymbolRef(input, repoId, page);
     if (!pageRef || !byKey.has(stepKey(pageRef))) continue;
     const path = chainTowardStart(steps, stepKey(pageRef), startKey);
-    const hops: ReachStep[] = path.map((s) => ({ ...s.ref, confidence: s.via?.confidence ?? "exact" }));
+    const hops: ReachStep[] = path.map((s, i) => {
+      const line = i > 0 ? inlineHandlerLine(resolver, path[i - 1]!.ref, s.ref, s.via?.site.line ?? call.at.line) : undefined;
+      return { ...s.ref, confidence: s.via?.confidence ?? "exact", ...(line !== undefined ? { line } : {}) };
+    });
     reaches.push({ page, path: hops, confidence: hops.reduce<Confidence>((acc, h) => worse(acc, h.confidence), "exact") });
   }
   reaches.sort((a, b) => compare(a.page.file, b.page.file) || a.page.line - b.page.line || compare(a.page.route, b.page.route));
