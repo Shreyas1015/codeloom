@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
 import { absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, stringValue, walk } from "./ast.js";
-import type { HttpCallDraft, HttpClientDraft, ParsedFile } from "./types.js";
+import type { HttpCallDraft, HttpClientDraft, ParsedFile, ReExportDraft } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
@@ -286,6 +286,36 @@ export function importedBindings(sf: ts.SourceFile): Map<string, { from: string;
   return out;
 }
 
+/** Namespace imports of repo modules (`import * as net from "./net"`): local name -> module specifier.
+ * Known HTTP libraries and type-only imports are skipped. */
+function namespaceImports(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const clause = stmt.importClause;
+    if (!clause || clause.isTypeOnly || KNOWN_HTTP_LIB_PACKAGES.has(stmt.moduleSpecifier.text)) continue;
+    if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) out.set(clause.namedBindings.name.text, stmt.moduleSpecifier.text);
+  }
+  return out;
+}
+
+/** Re-exports a file makes (`export * from` / `export { a as b } from`), type-only ones skipped. */
+export function detectReExports(file: ParsedFile): ReExportDraft[] {
+  if (!file.sf) return [];
+  const out: ReExportDraft[] = [];
+  for (const stmt of file.sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const from = stmt.moduleSpecifier.text;
+    if (!stmt.exportClause) out.push({ file: file.rel, kind: "all", from });
+    else if (ts.isNamedExports(stmt.exportClause)) {
+      for (const el of stmt.exportClause.elements) {
+        if (!el.isTypeOnly) out.push({ file: file.rel, kind: "named", exported: el.name.text, imported: (el.propertyName ?? el.name).text, from });
+      }
+    }
+  }
+  return out;
+}
+
 /** True when `name` is re-declared (a parameter, a variable, a function) in a function or block around `node`. */
 function shadowed(node: ts.Node, name: string): boolean {
   const declares = (n: ts.BindingName): boolean =>
@@ -311,7 +341,8 @@ function shadowed(node: ts.Node, name: string): boolean {
 export function detectImportedClientCalls(file: ParsedFile): HttpCallDraft[] {
   if (!file.sf) return [];
   const imports = importedBindings(file.sf);
-  if (imports.size === 0) return [];
+  const namespaces = namespaceImports(file.sf);
+  if (imports.size === 0 && namespaces.size === 0) return [];
   const superagent = superagentReceivers(file.sf);
   const scope = clientScope(file);
   const env = scope.envConsts;
@@ -319,15 +350,30 @@ export function detectImportedClientCalls(file: ParsedFile): HttpCallDraft[] {
   walk(file.sf, (node) => {
     if (!ts.isCallExpression(node) || !node.arguments[0]) return;
     const callee = node.expression;
-    const local = ts.isIdentifier(callee) ? callee.text
+    let local = ts.isIdentifier(callee) ? callee.text
       : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) ? callee.expression.text : undefined;
-    const imp = local !== undefined ? imports.get(local) : undefined;
-    if (!imp || local === undefined || shadowed(node, local)) return;
+    let imp = local !== undefined ? imports.get(local) : undefined;
+    let shadowName = local;
+    if (!imp) {
+      // `net.backend.get(url)` / `net.backend(config)` / `net.backend.request(config)` on `import * as net` (v0.2a).
+      const member = ts.isPropertyAccessExpression(callee) && ts.isPropertyAccessExpression(callee.expression) ? callee.expression
+        : ts.isPropertyAccessExpression(callee) ? callee : undefined;
+      const ns = member && ts.isIdentifier(member.expression) ? namespaces.get(member.expression.text) : undefined;
+      if (member && ns !== undefined) {
+        imp = { from: ns, name: member.name.text };
+        shadowName = (member.expression as ts.Identifier).text;
+        local = `${shadowName}.${member.name.text}`;
+        // `net.backend(config)` calls the member itself; `net.backend.get(url)` calls a method on it.
+        if (callee !== member && !(ts.isPropertyAccessExpression(callee) && callee.expression === member)) return;
+      }
+    }
+    if (!imp || local === undefined || shadowName === undefined || shadowed(node, shadowName)) return;
     if (configCall(node, scope) ?? httpCallShape(node, superagent, scope)) return;
     const first = node.arguments[0];
     let shape: AnyShape | undefined;
     const configLike = ts.isObjectLiteralExpression(first) || ts.isIdentifier(first);
-    if (configLike && (ts.isIdentifier(callee) || (ts.isPropertyAccessExpression(callee) && callee.name.text === "request"))) {
+    const callsClient = ts.isIdentifier(callee) || (ts.isPropertyAccessExpression(callee) && local === `${callee.expression.getText()}.${callee.name.text}`);
+    if (configLike && (callsClient || (ts.isPropertyAccessExpression(callee) && callee.name.text === "request"))) {
       shape = { ...readConfig(first, node), client: local };
     } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text]) {
       shape = { method: METHODS[callee.name.text], urlExpr: first, client: local, methodStyle: true };

@@ -312,3 +312,56 @@ describe("linkUi: the page reaches a route only through the inline arrow a hook 
     ]);
   });
 });
+
+describe("linkUi: HTTP clients re-exported through barrels and namespace imports", () => {
+  const backend = [
+    "import axios from 'axios';",
+    "export const backend = axios.create({ baseURL: import.meta.env.VITE_API_URL });",
+    "const other = axios.create({ baseURL: import.meta.env.VITE_API_URL });",
+    "export default other;",
+  ].join("\n");
+
+  it("a client imported from a barrel (export * / export { default as x })", () => {
+    const rows = linkTwoRepos({
+      "src/net/backend.ts": backend,
+      "src/net/index.ts": "export * from './backend';\nexport { default as billing } from './backend';",
+      [PAGE]: pageOnly("import { backend, billing } from '../net';", [
+        "  const load = () => backend.get('/customers');",
+        "  const pay = () => billing.post('/invoices/1/pay');",
+        "  return <button onClick={load} onReset={pay} />;",
+      ].join("\n")),
+    }, [["GET", "/customers"], ["POST", "/invoices/:id/pay"]]);
+    expect(rows).toEqual([
+      ["GET /customers", "api:GET /customers", "CustomersPage(param)>load(exact)"],
+      ["POST /invoices/1/pay", "api:POST /invoices/:id/pay", "CustomersPage(param)>pay(exact)"],
+    ]);
+  });
+
+  it("a client read off a namespace import (import * as net)", () => {
+    const rows = linkTwoRepos({
+      "src/net/backend.ts": backend,
+      [PAGE]: pageOnly("import * as net from '../net/backend';", [
+        "  const load = () => net.backend.get('/customers');",
+        "  const save = () => net.backend({ method: 'POST', url: '/customers' });",
+        "  return <button onClick={load} onReset={save} />;",
+      ].join("\n")),
+    }, [["GET", "/customers"], ["POST", "/customers"]]);
+    expect(rows).toEqual([
+      ["GET /customers", "api:GET /customers", "CustomersPage(param)>load(exact)"],
+      ["POST /customers", "api:POST /customers", "CustomersPage(param)>save(exact)"],
+    ]);
+  });
+
+  it("stays out: a namespace member that is not a client, a barrel name nobody exports", () => {
+    const rows = linkTwoRepos({
+      "src/net/backend.ts": backend + "\nexport const cache = new Map();",
+      "src/net/index.ts": "export * from './backend';",
+      [PAGE]: pageOnly("import * as net from '../net/backend';\nimport { missing } from '../net';", [
+        "  const a = () => net.cache.get('/customers');",
+        "  const b = () => missing.get('/customers');",
+        "  return <button onClick={a} onReset={b} />;",
+      ].join("\n")),
+    }, [["GET", "/customers"]]);
+    expect(rows).toEqual([]);
+  });
+});

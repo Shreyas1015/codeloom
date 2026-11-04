@@ -4,11 +4,11 @@ import type { DbAccess, EndpointsFile, HttpCall, HttpClient, Mount, QueueOp, Rou
 import { compare } from "../util.js";
 import { JS_EXT, parseSource, pascal } from "./ast.js";
 import { detectDb } from "./db.js";
-import { detectHttpCalls, detectHttpClientDrafts, detectImportedClientCalls } from "./http-calls.js";
+import { detectHttpCalls, detectHttpClientDrafts, detectImportedClientCalls, detectReExports } from "./http-calls.js";
 import { detectPages } from "./pages.js";
 import { detectQueues } from "./queues.js";
 import { detectMounts, detectRouters, detectRoutes } from "./routes.js";
-import { type AdapterContext, type DbAccessDraft, type EndpointsPart, emptyPart, type HttpCallDraft, type HttpClientDraft, type MountDraft, type ParsedFile, type RepoContext, type RouteDraft } from "./types.js";
+import { type AdapterContext, type DbAccessDraft, type EndpointsPart, emptyPart, type HttpCallDraft, type HttpClientDraft, type MountDraft, type ParsedFile, type ReExportDraft, type RepoContext, type RouteDraft } from "./types.js";
 
 function readDeps(abs: string): Set<string> {
   const deps = new Set<string>();
@@ -61,6 +61,7 @@ export function runAdapters(rel: string, content: string, ctx: AdapterContext): 
   part.pages.push(...detectPages(file, ctx));
   part.httpCalls.push(...detectHttpCalls(file), ...detectImportedClientCalls(file));
   part.httpClients.push(...detectHttpClientDrafts(file));
+  part.reExports.push(...detectReExports(file));
   part.routes.push(...detectRoutes(file, ctx));
   part.mounts.push(...detectMounts(file, ctx));
   part.routers.push(...detectRouters(file, ctx));
@@ -134,13 +135,35 @@ function uniqueTables(models: Array<{ model: string; table: string }>, key: (mod
 /** Keep a call on an imported binding only when that binding is an HTTP client instance exported by the
  * module it comes from; the call then carries the instance's own name (so its baseURL applies). Plain
  * calls pass through without their draft field. */
-function resolveImportedClient(call: HttpCallDraft, clients: HttpClientDraft[], resolve?: ImportResolver): HttpCall | undefined {
+function resolveImportedClient(
+  call: HttpCallDraft, clients: HttpClientDraft[], reExports: ReExportDraft[], resolve?: ImportResolver,
+): HttpCall | undefined {
   const { clientImport, ...plain } = call;
   if (!clientImport) return plain;
   const file = resolve?.(call.at.file, clientImport.from);
-  if (!file) return undefined;
-  const client = clients.find((c) => c.file === file && c.exportNames?.includes(clientImport.name));
+  if (!file || !resolve) return undefined;
+  const client = exportedClient(file, clientImport.name, clients, reExports, resolve, 0);
   return client ? { ...plain, client: client.name } : undefined;
+}
+
+const CLIENT_BARREL_MAX_HOPS = 3;
+
+/** The HTTP client instance `file` exports under `name`: declared there, else followed through its
+ * re-exports (`export *` never forwards "default"), up to CLIENT_BARREL_MAX_HOPS files further (v0.2a). */
+function exportedClient(
+  file: string, name: string, clients: HttpClientDraft[], reExports: ReExportDraft[], resolve: ImportResolver, hops: number,
+): HttpClientDraft | undefined {
+  const own = clients.find((c) => c.file === file && c.exportNames?.includes(name));
+  if (own || hops >= CLIENT_BARREL_MAX_HOPS) return own;
+  for (const re of reExports) {
+    if (re.file !== file) continue;
+    const next = re.kind === "all" ? (name === "default" ? undefined : name) : re.exported === name ? re.imported : undefined;
+    if (next === undefined) continue;
+    const target = resolve(file, re.from);
+    const hit = target ? exportedClient(target, next, clients, reExports, resolve, hops + 1) : undefined;
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 function stripClientDraft(c: HttpClientDraft): HttpClient {
@@ -191,7 +214,7 @@ export function finalizeEndpoints(repo: string, parts: EndpointsPart[], resolveI
     version: 2,
     repo,
     pages: all.pages.sort((a, b) => compare(a.route, b.route) || compare(a.file, b.file)),
-    httpCalls: all.httpCalls.map((c) => resolveImportedClient(c, all.httpClients, resolveImport))
+    httpCalls: all.httpCalls.map((c) => resolveImportedClient(c, all.httpClients, all.reExports, resolveImport))
       .filter((c): c is HttpCall => c !== undefined).sort(byLoc),
     httpClients: all.httpClients.map(stripClientDraft).sort(byHttpClient),
     routes: all.routes.map((r) => resolveHandler(r, resolveImport)).sort(byLoc),
