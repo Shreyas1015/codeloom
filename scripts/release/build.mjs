@@ -6,6 +6,8 @@
 //   4. dashboard                  packages/dashboard/dist → dist/dashboard
 //   5. LICENSE, NOTICE, CHANGELOG.md   repo root → packages/cli (git-ignored copies)
 // The tsc per-file output stays in dist/ for the tests; package.json "files" ships only the bundle.
+// The packed package.json drops devDependencies and dev scripts through the beforePacking hook in the
+// repo-root .pnpmfile.cjs (so pack/publish with pnpm; packages/cli/package.json on disk is not changed).
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";

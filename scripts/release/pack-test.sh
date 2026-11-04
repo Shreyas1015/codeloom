@@ -50,7 +50,7 @@ if [ -z "$TARBALL" ]; then
   (cd "$REPO_ROOT" && pnpm release:build >"$WORK/build.log" 2>&1) || { tail -40 "$WORK/build.log" >&2; die "pnpm release:build failed"; }
   ok "pnpm release:build"
 
-  step "pnpm pack (runs the prepack guard; rewrites workspace: specifiers)"
+  step "pnpm pack (runs the prepack guard; rewrites workspace: specifiers; .pnpmfile.cjs strips dev fields)"
   mkdir -p "$WORK/pack"
   (cd "$REPO_ROOT/packages/cli" && pnpm pack --pack-destination "$WORK/pack" >"$WORK/pack.log" 2>&1) || { cat "$WORK/pack.log" >&2; die "pnpm pack failed"; }
   TARBALL="$(ls "$WORK"/pack/*.tgz)"
@@ -84,6 +84,16 @@ ok "dist/bin.js is the release bundle ($(sed -n 2p "$PKG/dist/bin.js" | sed 's#^
 
 if grep -q '"workspace:' "$PKG/package.json"; then die "packed package.json still has a workspace: specifier"; fi
 ok "packed package.json has no workspace: specifier"
+
+# .pnpmfile.cjs (beforePacking) drops devDependencies and dev scripts from the packed manifest.
+MANIFEST_EXTRA=$(node -e '
+  const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const bad = [];
+  if (m.devDependencies !== undefined) bad.push("devDependencies");
+  for (const s of Object.keys(m.scripts ?? {})) bad.push("scripts." + s);
+  console.log(bad.join(", "));' "$PKG/package.json")
+[ -z "$MANIFEST_EXTRA" ] || die "packed package.json still has: $MANIFEST_EXTRA (is .pnpmfile.cjs loaded?)"
+ok "packed package.json has no devDependencies and no scripts"
 
 # README.md (packages/cli/README.md, generated from the root README) and CHANGELOG.md (root, copied by the
 # release build) must ship. Until the v0.1 docs (release Task 4) merge, a doc whose source is not in the
