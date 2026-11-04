@@ -71,6 +71,10 @@ const ChainRow = z
   })
   .strict();
 
+/** One stop in a cut get_journey's compact lanes summary (hG). */
+const LaneRow = z.object({ label: str, repo: str, at: str.regex(/:\d+$/) }).strict();
+const LaneRows = z.array(LaneRow).max(50);
+
 /** The full row: list_chains `detail: true`, get_journey's chains. */
 const ChainView = ChainRow.extend({ stops: z.array(StopView), unresolved: z.array(UnresolvedSchema.strict()) }).strict();
 
@@ -214,7 +218,13 @@ const RawSchemas: Record<string, z.ZodObject> = {
     .object({
       journey: JourneySchema.strict().nullable(),
       chains: z.array(ChainView),
-      lanes: z.object({ ui: z.array(StopView), api: z.array(StopView), code: z.array(StopView), db: z.array(StopView), queue: z.array(StopView) }).strict(),
+      lanes: z.union([
+        z.object({ ui: z.array(StopView), api: z.array(StopView), code: z.array(StopView), db: z.array(StopView), queue: z.array(StopView) }).strict(),
+        // hG: a cut journey keeps a compact summary of ALL chains' stops, at most 50 per lane
+        z.object({ ui: LaneRows, api: LaneRows, code: LaneRows, db: LaneRows, queue: LaneRows }).strict(),
+      ]),
+      laneTotals: LaneCounts.optional(),
+      omittedChainIds: z.array(str).optional(),
       files: z.array(str),
       tables: z.array(str),
       queues: z.array(str),
@@ -566,6 +576,10 @@ describe("H5: every tool response stays under 1 MB on a 5000-chain map", { timeo
     expect(j.truncated).toBe(true);
     expect(j.chains.length).toBeLessThan(5000);
     expect(j.truncatedNote).toMatch(/get_journey/);
+    // hG: the cut keeps the lanes summary and names every left-out chain
+    const cut = j as unknown as { lanes: Record<string, unknown[]>; omittedChainIds: string[] };
+    expect(j.chains.length + cut.omittedChainIds.length).toBeGreaterThanOrEqual(5000);
+    expect(Object.values(cut.lanes).some((l) => l.length > 0)).toBe(true);
   });
 
   it("check_chains: 20 items per kind by default; kinds + limit + offset page the rest", async () => {

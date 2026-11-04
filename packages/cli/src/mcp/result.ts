@@ -29,6 +29,8 @@ export function fail(err: unknown): CallToolResult {
 export const MAX_RESPONSE_BYTES = 1_000_000;
 /** Room left for the JSON-RPC envelope around a tool result. */
 const ENVELOPE_BYTES = 2_048;
+/** The most a tool result may weigh (responseBytes) so its response fits under MAX_RESPONSE_BYTES. */
+export const RESULT_BUDGET = MAX_RESPONSE_BYTES - ENVELOPE_BYTES;
 /** How many cut lists/strings the note names. */
 const NOTE_CUTS = 10;
 
@@ -40,11 +42,12 @@ export function responseBytes(result: Record<string, unknown>): number {
 type Slot = { holder: Record<string, unknown>; key: string; path: string; size: number };
 
 /** Every array (or string) reachable from `root` through plain objects (not through arrays), biggest first. */
-function slots(root: Record<string, unknown>, want: "array" | "string"): Slot[] {
+function slots(root: Record<string, unknown>, want: "array" | "string", protect: ReadonlySet<string>): Slot[] {
   const out: Slot[] = [];
   const visit = (obj: Record<string, unknown>, prefix: string, depth: number) => {
     for (const [key, v] of Object.entries(obj)) {
       const path = prefix ? `${prefix}.${key}` : key;
+      if (protect.has(path)) continue;
       if (want === "array" && Array.isArray(v) && v.length > 0) out.push({ holder: obj, key, path, size: JSON.stringify(v).length });
       else if (want === "string" && typeof v === "string" && v.length > 0) out.push({ holder: obj, key, path, size: v.length });
       else if (v !== null && typeof v === "object" && !Array.isArray(v) && depth < 6) visit(v as Record<string, unknown>, path, depth + 1);
@@ -69,11 +72,13 @@ function largestFitting(max: number, fits: (n: number) => boolean): number {
 /** A result whose tool response would pass `maxBytes` is cut to fit: the biggest lists first (keeping
  * their head, in order), then the longest strings. The cut copy says so with `truncated: true` and a
  * `truncatedNote` naming what was cut and `narrow`, the tool's own advice on which params narrow the
- * request. A result that fits is returned as is; the input is never mutated. */
+ * request. Paths in `protect` (e.g. "lanes") are never cut. A result that fits is returned as is; the input
+ * is never mutated. */
 export function fitResponse(
   result: Record<string, unknown>,
   narrow: string,
-  maxBytes: number = MAX_RESPONSE_BYTES - ENVELOPE_BYTES,
+  maxBytes: number = RESULT_BUDGET,
+  protect: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   if (responseBytes(result) <= maxBytes) return result;
   const out = structuredClone(result);
@@ -84,7 +89,7 @@ export function fitResponse(
   const fits = () => responseBytes(out) <= budget;
   const cuts: string[] = [];
 
-  for (const s of slots(out, "array")) {
+  for (const s of slots(out, "array", protect)) {
     if (fits()) break;
     const full = s.holder[s.key] as unknown[];
     const keep = largestFitting(full.length - 1, (n) => {
@@ -94,7 +99,7 @@ export function fitResponse(
     s.holder[s.key] = full.slice(0, keep);
     cuts.push(`${s.path}: kept ${keep} of ${full.length}`);
   }
-  for (const s of fits() ? [] : slots(out, "string")) {
+  for (const s of fits() ? [] : slots(out, "string", protect)) {
     if (fits()) break;
     if (s.key === "truncatedNote" && s.holder === out) continue;
     const full = s.holder[s.key] as string;

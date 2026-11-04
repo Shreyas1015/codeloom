@@ -5,7 +5,7 @@ import { matchPath, methodMatches } from "../../linker/paths.js";
 import { type JourneyOp, saveJourneys } from "../../store/journeys-edit.js";
 import { type Chain, type ChainStop, type HttpMethod, HttpMethodSchema, type Lane } from "../../store/schemas.js";
 import { compare } from "../../util.js";
-import { withErrors } from "../result.js";
+import { fitResponse, RESULT_BUDGET, responseBytes, withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
 import {
   chainLookup, chainsTouchingNode, findNode, formatNodeRef, journeysByChain, loadMapState, type MapState, parseNodeRef,
@@ -142,7 +142,7 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
     }
   }
   const journeys = journeyIndex(state);
-  return {
+  return fitJourney({
     journey,
     chains: chains.map((c) => chainView(c, journeys)),
     lanes,
@@ -152,7 +152,123 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
     unresolved: chains.flatMap((c) => c.unresolved.map((u) => ({ chainId: c.id, ...u }))),
     missingChainIds,
     movedChainIds,
-  };
+  });
+}
+
+/** How many stops per lane the compact lanes summary of a cut journey lists. */
+const LANE_CAP = 50;
+/** How many left-out chain ids the cut note names (all of them are in omittedChainIds). */
+const NOTE_IDS = 20;
+const GET_JOURNEY_NARROW = "Call get_journey with one of its chain ids (ch_…) to see that chain in full.";
+
+type StopRow = { kind?: unknown; lane?: unknown; repo?: unknown; file?: unknown; line?: unknown; label?: unknown; symbol?: unknown };
+type ChainRowView = Record<string, unknown> & { id: string; stops?: StopRow[] };
+
+/** Which chains a cut journey keeps first: 0 a chain with a UI page stop, 1 one entered at a UI call,
+ * 2 a route-only chain, 3 a queue consumer (or anything else). */
+function chainPriority(c: ChainRowView): number {
+  const stops = c.stops ?? [];
+  if (stops.some((s) => s.kind === "page")) return 0;
+  const first = stops[0]?.kind;
+  if (first === "call") return 1;
+  if (first === "route") return 2;
+  return 3;
+}
+
+/** The lanes summary a cut journey keeps for ALL its chains: per lane, unique stops as {label, repo,
+ * at: "file:line"}, at most LANE_CAP each; laneTotals has every lane's full count. */
+function compactLanes(lanes: Record<string, StopRow[]>): { lanes: Record<string, unknown[]>; laneTotals: Record<string, number> } {
+  const out: Record<string, unknown[]> = {};
+  const totals: Record<string, number> = {};
+  for (const [lane, stops] of Object.entries(lanes)) {
+    const seen = new Set<string>();
+    const rows: Array<{ label: string; repo: string; at: string }> = [];
+    for (const s of stops) {
+      const row = { label: String(s.label ?? s.symbol ?? ""), repo: String(s.repo), at: `${String(s.file)}:${String(s.line)}` };
+      const key = JSON.stringify(row);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+    totals[lane] = rows.length;
+    out[lane] = rows.slice(0, LANE_CAP);
+  }
+  return { lanes: out, laneTotals: totals };
+}
+
+/** A get_journey result whose response would pass `maxBytes` is cut journey-aware (hG): chains are
+ * kept in priority order (UI page chains, then call-entry, then route-only, then consumer; smaller first
+ * within each) for as long as they fit, the lanes become a compact summary of ALL chains (never cut), and
+ * the note names the left-out chain ids (all in omittedChainIds) and how to get each. Whatever still does
+ * not fit is cut by fitResponse, lanes kept. A result that fits is returned as is; the input is never mutated. */
+export function fitJourney(result: Record<string, unknown>, maxBytes: number = RESULT_BUDGET): Record<string, unknown> {
+  if (responseBytes(result) <= maxBytes) return result;
+  const views = result.chains as ChainRowView[];
+  const size = new Map(views.map((c) => [c.id, JSON.stringify(c).length]));
+  const ordered = [...views].sort((a, b) =>
+    chainPriority(a) - chainPriority(b) || size.get(a.id)! - size.get(b.id)! || compare(a.id, b.id));
+  const { lanes, laneTotals } = compactLanes(result.lanes as Record<string, StopRow[]>);
+  const out: Record<string, unknown> = { ...structuredClone(result), chains: [], lanes, laneTotals,
+    // Sized for the worst case (every chain left out) while chains are added; set to the real list below.
+    omittedChainIds: ordered.map((c) => c.id) };
+  out.truncated = true;
+  out.truncatedNote = "";
+  // Room for the note: up to NOTE_IDS ids plus fitResponse's own cut note, escaped and sent twice.
+  const noteRoom = 4 * (NOTE_IDS * 20 + 400);
+  const budget = maxBytes - noteRoom;
+
+  // Add chains in priority order while they fit (a strict prefix: a chain that does not fit ends the list).
+  const base = responseBytes(out);
+  const empty = responseBytes({ c: [] });
+  let used = base;
+  let n = 0;
+  for (const c of ordered) {
+    const cost = responseBytes({ c: [c] }) - empty + 8;
+    if (used + cost > budget) break;
+    used += cost;
+    n++;
+  }
+  const kept = ordered.slice(0, n).map((c) => structuredClone(c));
+  out.chains = kept;
+  while (kept.length > 0 && responseBytes(out) > budget) kept.pop();
+  let stopsCut = "";
+  if (kept.length === 0 && ordered.length > 0) {
+    // Not even the top chain fits whole: keep its first stops.
+    const top = structuredClone(ordered[0]!);
+    const stops = top.stops ?? [];
+    let lo = 0;
+    let hi = stops.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      top.stops = stops.slice(0, mid);
+      out.chains = [top];
+      if (responseBytes(out) <= budget) lo = mid;
+      else hi = mid - 1;
+    }
+    top.stops = stops.slice(0, lo);
+    kept.push(top);
+    out.chains = kept;
+    stopsCut = ` Chain ${top.id} shows its first ${lo} of ${stops.length} stops.`;
+  }
+  const keptIds = new Set(kept.map((c) => c.id));
+  const omitted = ordered.filter((c) => !keptIds.has(c.id)).map((c) => c.id);
+  out.omittedChainIds = omitted;
+
+  const named = omitted.slice(0, NOTE_IDS).join(", ");
+  const more = omitted.length > NOTE_IDS ? ` and ${omitted.length - NOTE_IDS} more (all in omittedChainIds)` : "";
+  const note =
+    `Response cut to fit the 1 MB limit: kept ${kept.length} of ${views.length} chains (UI page chains first, then ` +
+    `call-entry, route-only and consumer chains, smaller first); lanes summarise all chains (at most ${LANE_CAP} stops per ` +
+    `lane, laneTotals has the full counts).${stopsCut}` +
+    (omitted.length > 0 ? ` Left out: ${named}${more}. Call get_journey with a chain id (ch_…) to see that chain in full.` : "");
+
+  let fitted = out;
+  if (responseBytes(out) > budget) {
+    fitted = fitResponse(out, GET_JOURNEY_NARROW, budget + noteRoom / 2,
+      new Set(["lanes", "laneTotals", "omittedChainIds", "chains", "truncatedNote"]));
+  }
+  const extra = typeof fitted.truncatedNote === "string" && fitted !== out ? ` ${fitted.truncatedNote}` : "";
+  return { ...fitted, truncated: true, truncatedNote: note + extra };
 }
 
 // ---- trace_route -------------------------------------------------------------------------------
@@ -357,7 +473,7 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
     },
     withErrors(
       (args: { id: string }) => getJourney(opts.start, args.id),
-      "Call get_journey with one of its chain ids (ch_…) to see that chain in full.",
+      GET_JOURNEY_NARROW,
     ),
   );
 
