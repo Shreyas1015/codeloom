@@ -110,7 +110,7 @@ function reachingPages(input: LinkInput, repoId: string, call: HttpCall): PageRe
   const start: SymbolRef = { repo: repoId, file: call.at.file, symbol: call.at.symbol };
   const startKey = stepKey(start);
   // walkCallers always includes `start` itself at depth 0, so byKey.get(startKey) is never undefined.
-  const steps = walkCallers(resolver, start, 6);
+  const steps = walkCallers(resolver, start, 6, undefined, call.at.line);
   const byKey = new Map(steps.map((s) => [stepKey(s.ref), s] as const));
   const reaches: PageReach[] = [];
   for (const page of repo.endpoints.pages) {

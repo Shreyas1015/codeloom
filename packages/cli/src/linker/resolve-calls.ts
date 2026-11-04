@@ -3,6 +3,7 @@ import { resolveImport } from "../indexer/resolve-imports.js";
 import type { Confidence } from "../store/schemas.js";
 import { compare } from "../util.js";
 import type { Callee, CallSite, CodeSymbol, FileCodeIndex, ImportBinding, RepoCodeIndex } from "./code-index.js";
+import { rtkHookEndpoint } from "./code-index.js";
 
 export interface SymbolRef {
   repo: string;
@@ -14,9 +15,13 @@ export interface ResolvedCall {
   site: CallSite;
   target: SymbolRef;
   /** "exact" for import/new/this/DI/object; "guess" for the unique-method fallback; "param" for a
-   * JSX reference (`via: "jsx-ref"`), a function handed over as a call argument (`via: "fn-arg"`), and for a handler read off a hook's result (`via: "hook"`, H10). */
+   * JSX reference (`via: "jsx-ref"`), a function handed over as a call argument (`via: "fn-arg"`), and for a handler read off a hook's result (`via: "hook"`, H10).
+   * v0.2a §4, all "param": a class component's lifecycle method (`via: "lifecycle"`), a prop the component is given
+   * at its JSX sites (`via: "jsx-prop"`), a connect()ed component's mapDispatchToProps entry (`via: "redux"`), an RTK
+   * Query generated hook (`via: "rtk-hook"`), and any call to a createAsyncThunk payload creator. */
   confidence: Confidence;
-  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "fn-arg" | "hook";
+  via: "local" | "import" | "barrel" | "new" | "this" | "di" | "object" | "unique-method" | "jsx-ref" | "fn-arg" | "hook"
+    | "lifecycle" | "jsx-prop" | "redux" | "rtk-hook";
   /** Set when the target is an inline function a hook returns (H10): `target` is the hook, these are the
    * function's own lines inside it. */
   lines?: [number, number];
@@ -66,6 +71,11 @@ interface Ctx extends RepoResolveInput {
   /** Method-name suffix -> the single method/object-method carrying it, or null when ambiguous. */
   methods: Map<string, { file: string; symbol: string } | null>;
   exportMemo: Map<string, ExportHit | null>;
+  /** v0.2a §4: JSX attribute sites on component tags, by attribute name (built on first use). */
+  jsxProps?: Map<string, Array<{ file: string; site: CallSite }>>;
+  /** v0.2a §4: `<file>#<component>|<prop>` -> what the component is given as that prop (null: nothing / ambiguous;
+   * also the in-progress mark that stops a prop handed on in a cycle). */
+  propMemo: Map<string, SymbolRef | null>;
 }
 
 function splitDotted(name: string): { base: string; rest: string } {
@@ -104,7 +114,8 @@ function exportedMember(fi: FileCodeIndex, base: string, rest: string): CodeSymb
     const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === ob + rest);
     if (m) return m;
   }
-  return undefined;
+  // v0.2a §4: `customersApi.useGetCustomerQuery` on an imported RTK Query api.
+  return rest.indexOf(".", 1) < 0 ? rtkEndpointSymbol(fi, base, rest.slice(1)) : undefined;
 }
 
 /** A non-dotted export: a function/class exported under exactly that name (`export { a as b }` /
@@ -113,13 +124,31 @@ function exportedMember(fi: FileCodeIndex, base: string, rest: string): CodeSymb
  * `module.exports = obj` (`obj.name`). */
 function exportedPlain(fi: FileCodeIndex, exportedName: string): CodeSymbol | undefined {
   const plain = fi.symbols.find((s) => exportedUnder(s, exportedName));
-  if (plain || exportedName === "default") return plain;
+  if (plain) return plain;
+  // v0.2a §4: `export default connect(…)(Customer)` stands for Customer.
+  if (exportedName === "default") {
+    const w = fi.defaultWraps;
+    return w === undefined ? undefined : fi.symbols.find((s) => s.name === w && s.binding && (s.kind === "class" || s.kind === "function"));
+  }
+  // v0.2a §4: `export const { useGetCustomerQuery } = api` -> the endpoint's query function.
+  const hook = fi.rtkHooks?.find((h) => h.exported && h.local === exportedName);
+  if (hook) {
+    const ep = rtkEndpointSymbol(fi, hook.api, hook.key ?? hook.local);
+    if (ep) return ep;
+  }
   const bases = fi.defaultObject !== undefined ? ["exports", fi.defaultObject] : ["exports"];
   for (const b of bases) {
     const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === `${b}.${exportedName}`);
     if (m) return m;
   }
   return undefined;
+}
+
+/** v0.2a §4: the `query` function of the RTK Query endpoint that generated hook `hook` of api `api` stands for. */
+function rtkEndpointSymbol(fi: FileCodeIndex, api: string, hook: string): CodeSymbol | undefined {
+  const want = rtkHookEndpoint(hook);
+  if (!want || !fi.rtkEndpoints?.some((e) => e.api === api && e.endpoint === want.endpoint && e.kind === want.kind)) return undefined;
+  return fi.symbols.find((s) => s.name === `${api}.${want.endpoint}` && s.factory === "rtk-query");
 }
 
 /** Follow `exportedName` (possibly dotted, e.g. "CustomerService.create") through `export *` / named
@@ -282,13 +311,29 @@ function resolveIdent(ctx: Ctx, file: string, site: CallSite, callee: Extract<Ca
   if (callee.hook) return resolveHookKey(ctx, file, site, callee.hook.hook, callee.hook.key);
   const local = fi.symbols.find((s) => s.name === callee.name && s.kind === "function" && s.binding);
   if (local) return exact(ctx, site, { file, symbol: local.name, hops: 0 }, "local");
+  const hook = fi.rtkHooks?.find((h) => h.local === callee.name);
+  const ep = hook ? rtkEndpointSymbol(fi, hook.api, hook.key ?? hook.local) : undefined;
+  if (ep) return rtkHop(ctx, site, { file, symbol: ep.name, hops: 0 });
   const imp = fi.imports.find((i) => i.local === callee.name && i.kind !== "namespace");
   if (imp) {
     const target = resolveImport(file, imp.from, ctx.files, ctx.aliases);
     const hit = target ? resolveExportIn(ctx, target, importedName(imp), 0) : null;
-    if (hit) return exact(ctx, site, hit, hit.hops > 0 ? "barrel" : "import");
+    if (hit) return isRtkEndpoint(ctx, hit) ? rtkHop(ctx, site, hit) : exact(ctx, site, hit, hit.hops > 0 ? "barrel" : "import");
   }
   return null;
+}
+
+function targetSymbol(ctx: Ctx, hit: { file: string; symbol: string }): CodeSymbol | undefined {
+  return ctx.index.get(hit.file)?.symbols.find((s) => s.name === hit.symbol);
+}
+
+function isRtkEndpoint(ctx: Ctx, hit: ExportHit): boolean {
+  return targetSymbol(ctx, hit)?.factory === "rtk-query";
+}
+
+/** A generated RTK Query hook used by a component stands for the endpoint's HTTP call (at best "param"). */
+function rtkHop(ctx: Ctx, site: CallSite, hit: ExportHit): ResolvedCall {
+  return { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: "param", via: "rtk-hook" };
 }
 
 /** What a plain name means in `file`: the one function declared there under that name (a name declared
@@ -318,7 +363,15 @@ function functionByName(ctx: Ctx, file: string, name: string): ExportHit | null 
  * over and may never run. An unknown hook, key or name stays unresolved. */
 function resolveHookKey(ctx: Ctx, file: string, site: CallSite, hook: string, key: string): ResolvedCall | null {
   const hookHit = functionByName(ctx, file, hook);
-  if (!hookHit) return null;
+  if (!hookHit || isRtkEndpoint(ctx, hookHit)) {
+    // v0.2a §4: `const [addCustomer] = useAddCustomerMutation()` / `useLazyGetCustomerQuery()`: the trigger.
+    const own = hook.slice(hook.lastIndexOf(".") + 1);
+    const rtk = rtkHookEndpoint(own);
+    if (key !== "[0]" || !rtk || (rtk.kind === "query" && !own.startsWith("useLazy"))) return null;
+    if (hookHit) return rtkHop(ctx, site, hookHit);
+    const ep = resolveCallee(ctx, file, { ...site, callee: rtkHookCallee(hook) });
+    return ep && ep.via === "rtk-hook" ? { ...ep, site } : null;
+  }
   const ret = ctx.index.get(hookHit.file)?.hookReturns?.find((r) => r.hook === hookHit.symbol && r.key === key);
   if (!ret) return null;
   if (ret.target.kind === "inline") {
@@ -328,9 +381,23 @@ function resolveHookKey(ctx: Ctx, file: string, site: CallSite, hook: string, ke
   return hit ? { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: "param", via: "hook" } : null;
 }
 
+/** The callee a hook call `useX()` / `ns.useX()` has, to resolve the hook name itself. */
+function rtkHookCallee(hook: string): Callee {
+  const dot = hook.indexOf(".");
+  return dot < 0 ? { kind: "ident", name: hook } : { kind: "member", object: hook.slice(0, dot), prop: hook.slice(dot + 1) };
+}
+
 function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "member" }>): ResolvedCall | null {
   const fi = ctx.index.get(file);
   if (!fi) return null;
+  // `props.onRemove()` in a function component: what the component is given as `onRemove`.
+  if (callee.props !== undefined) {
+    const given = resolveProp(ctx, file, site, callee.props, callee.prop);
+    if (given) return given;
+  }
+  // `customersApi.useGetCustomerQuery()` on an api of this file.
+  const ownHook = rtkEndpointSymbol(fi, callee.object, callee.prop);
+  if (ownHook) return rtkHop(ctx, site, { file, symbol: ownHook.name, hops: 0 });
   // `form.handleSubmit` with `const form = useCustomerForm()`: the hook's key, never a guess.
   if (callee.hook !== undefined) {
     return resolveHookKey(ctx, file, site, callee.hook, callee.hookKey !== undefined ? `${callee.hookKey}.${callee.prop}` : callee.prop);
@@ -340,7 +407,7 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   if (ns) {
     const target = resolveImport(file, ns.from, ctx.files, ctx.aliases);
     const hit = target ? resolveExportIn(ctx, target, callee.prop, 0) : null;
-    if (hit) return exact(ctx, site, hit, "import");
+    if (hit) return isRtkEndpoint(ctx, hit) ? rtkHop(ctx, site, hit) : exact(ctx, site, hit, "import");
   }
 
   // The caller's own `const x = new C()` first; else a module-level singleton used inside a function.
@@ -353,6 +420,7 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   }
 
   const obj = resolveObjectLiteral(ctx, file, callee.object, callee.prop);
+  if (obj && isRtkEndpoint(ctx, obj)) return rtkHop(ctx, site, obj);
   if (obj) {
     // A static call on a class (`Util.make()`) is labelled like any other import ("barrel" when a
     // re-export was crossed; "local" when declared in this file); "object" stays for object literals.
@@ -366,6 +434,9 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
 
   // A receiver known to be a literal, a built-in, or a library type: its method is not a repo method.
   if (callee.recvType !== undefined && isExternalType(ctx, file, callee.recvType)) return null;
+  // `Promise.all()`, `JSON.parse()`, `window.open()`: a global object the file does not declare or import (v0.2a §4).
+  if (callee.recvType === undefined && GLOBAL_OBJECTS.has(callee.object)
+    && !fi.imports.some((i) => i.local === callee.object) && !fi.symbols.some((s) => s.name === callee.object)) return null;
   return guessUniqueMethod(ctx, site, callee.prop);
 }
 
@@ -375,6 +446,12 @@ const GLOBAL_CLASSES = new Set([
   "Headers", "Intl", "Map", "Object", "Promise", "Proxy", "ReadableStream", "RegExp", "Request", "Response", "Set",
   "String", "Number", "TextDecoder", "TextEncoder", "URL", "URLSearchParams", "WeakMap", "WeakRef", "WeakSet",
   "WritableStream", "Boolean", "AbortController", "BroadcastChannel", "MessageChannel", "Worker", "WebSocket",
+]);
+
+/** Global objects a member call may be made on without a declaration: built-in classes plus namespaces/hosts. */
+const GLOBAL_OBJECTS = new Set([
+  ...GLOBAL_CLASSES, "JSON", "Math", "Reflect", "Atomics", "Intl", "console", "window", "document", "globalThis",
+  "localStorage", "sessionStorage", "navigator", "location", "history",
 ]);
 
 /** Is the type `name` (as written in `file`) known to live outside the repo? An import from a module that
@@ -416,6 +493,11 @@ function resolveThis(ctx: Ctx, file: string, site: CallSite, callee: Extract<Cal
 function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "this-field" }>): ResolvedCall | null {
   const fi = ctx.index.get(file);
   const cls = classOfCaller(site.caller);
+  // `this.props.onRemove()` in a class component: what the class is given as `onRemove`.
+  if (cls && callee.field === "props" && fi?.symbols.some((s) => s.name === cls && s.kind === "class")) {
+    const given = resolveProp(ctx, file, site, cls, callee.prop);
+    if (given) return given;
+  }
   if (fi && cls) {
     const field = fi.classFields.find((f) => f.className === cls && f.field === callee.field);
     if (field) {
@@ -426,6 +508,74 @@ function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extrac
     }
   }
   return guessUniqueMethod(ctx, site, callee.prop);
+}
+
+
+/** v0.2a §4: what component `component` (declared in `file`) is given as prop `prop`, at best "param":
+ * - when the file `connect()`s it, its mapDispatchToProps entry (`via: "redux"`): a key a mapDispatchToProps
+ *   function returns (an inline arrow stands for that function, with its lines), or a plain name in an object form;
+ * - otherwise the one function every resolvable JSX site of the component passes as that attribute
+ *   (`<CustomerRow onRemove={this.remove} />`, `via: "jsx-prop"`). Two different functions, or none, give null. */
+function resolveProp(ctx: Ctx, file: string, site: CallSite, component: string, prop: string): ResolvedCall | null {
+  const fi = ctx.index.get(file);
+  if (!fi) return null;
+  for (const c of fi.reduxConnects ?? []) {
+    if (c.component !== component) continue;
+    if (c.dispatch.kind === "fn") {
+      const rc = resolveHookKey(ctx, file, site, c.dispatch.name, prop);
+      if (rc) return { ...rc, confidence: "param", via: "redux" };
+    } else {
+      const entry = c.dispatch.props.find((p) => p.key === prop);
+      const hit = entry ? functionByName(ctx, file, entry.name) : null;
+      if (hit) return { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: "param", via: "redux" };
+    }
+  }
+  const target = givenProp(ctx, file, component, prop);
+  return target ? { site, target, confidence: "param", via: "jsx-prop" } : null;
+}
+
+function givenProp(ctx: Ctx, file: string, component: string, prop: string): SymbolRef | null {
+  const key = `${file}#${component}|${prop}`;
+  if (ctx.propMemo.has(key)) return ctx.propMemo.get(key)!;
+  ctx.propMemo.set(key, null); // in progress: a cycle resolves to nothing
+  ctx.jsxProps ??= jsxPropSites(ctx.index);
+  const targets = new Map<string, SymbolRef>();
+  for (const { file: f, site } of ctx.jsxProps.get(prop) ?? []) {
+    const tag = resolveTag(ctx, f, site.jsxProp!.tag);
+    if (!tag || tag.file !== file || tag.symbol !== component) continue;
+    const rc = resolveOne(ctx, f, site);
+    if (rc) targets.set(`${rc.target.file}#${rc.target.symbol}`, rc.target);
+  }
+  const result = targets.size === 1 ? [...targets.values()][0]! : null;
+  ctx.propMemo.set(key, result);
+  return result;
+}
+
+/** Every jsx-ref site that is an attribute on a component tag, by attribute name. */
+function jsxPropSites(index: RepoCodeIndex): Map<string, Array<{ file: string; site: CallSite }>> {
+  const out = new Map<string, Array<{ file: string; site: CallSite }>>();
+  for (const [file, fi] of index) {
+    if (isTestFile(file)) continue;
+    for (const site of fi.calls) {
+      if (!site.jsxProp) continue;
+      const arr = out.get(site.jsxProp.attr) ?? [];
+      arr.push({ file, site });
+      out.set(site.jsxProp.attr, arr);
+    }
+  }
+  return out;
+}
+
+/** The component a JSX tag name means in `file`: a local function/class, or an import (a HOC-wrapped default
+ * export stands for the component it wraps). */
+function resolveTag(ctx: Ctx, file: string, tag: string): { file: string; symbol: string } | null {
+  const fi = ctx.index.get(file);
+  if (!fi) return null;
+  const local = fi.symbols.find((s) => s.name === tag && (s.kind === "function" || s.kind === "class") && s.binding);
+  if (local) return { file, symbol: local.name };
+  const imp = fi.imports.find((i) => i.local === tag && i.kind !== "namespace");
+  const target = imp ? resolveImport(file, imp.from, ctx.files, ctx.aliases) : null;
+  return imp && target ? resolveExportIn(ctx, target, importedName(imp), 0) : null;
 }
 
 /** Where the object a receiver name stands for lives: a local named object literal (`const agent =
@@ -473,15 +623,22 @@ function resolveOther(ctx: Ctx, file: string, site: CallSite, callee: Extract<Ca
  * is only handed over, so the hop is at best "param"; a guessed target is dropped (precision first:
  * `className={styles.button}` must never land on some `x.button` method). */
 function resolveOne(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {
-  const rc = resolveCallee(ctx, file, site);
+  let rc = resolveCallee(ctx, file, site);
   // Production code never resolves into a test/fixture/mock file.
   if (rc && isTestFile(rc.target.file) && !isTestFile(file)) return null;
+  // A createAsyncThunk payload creator / RTK Query endpoint runs only through Redux: at best "param".
+  if (rc && rc.confidence === "exact" && targetSymbol(ctx, rc.target)?.factory !== undefined) rc = { ...rc, confidence: "param" };
   if (!rc || site.kind === undefined) return rc;
   return rc.confidence === "guess" ? null : { ...rc, confidence: "param", via: rc.via === "hook" ? "hook" : site.kind };
 }
 
 function resolveCallee(ctx: Ctx, file: string, site: CallSite): ResolvedCall | null {
   const callee = site.callee;
+  if (site.kind === "lifecycle") {
+    // React runs `<Class>.<method>`: the caller is the class itself, the method declared in this file.
+    const hit = callee.kind === "this" ? resolveClassMethod(ctx, file, site.caller, callee.prop) : null;
+    return hit && hit.file === file ? exact(ctx, site, hit, "lifecycle") : null;
+  }
   switch (callee.kind) {
     case "ident": return resolveIdent(ctx, file, site, callee);
     case "member": return resolveMember(ctx, file, site, callee);
@@ -501,7 +658,7 @@ function compareCallers(a: Caller, b: Caller): number {
 }
 
 export function createCallResolver(input: RepoResolveInput): CallResolver {
-  const ctx: Ctx = { ...input, methods: buildMethodMap(input.index), exportMemo: new Map() };
+  const ctx: Ctx = { ...input, methods: buildMethodMap(input.index), exportMemo: new Map(), propMemo: new Map() };
   let reverse: Map<string, Caller[]> | null = null;
 
   function buildReverse(): Map<string, Caller[]> {
@@ -563,7 +720,7 @@ function stepKey(ref: SymbolRef): string {
 }
 
 function walk(
-  neighbors: (ref: SymbolRef) => Array<{ target: SymbolRef; call: ResolvedCall }>,
+  neighbors: (step: WalkStep) => Array<{ target: SymbolRef; call: ResolvedCall }>,
   start: SymbolRef,
   maxDepth: number,
 ): WalkStep[] {
@@ -574,7 +731,7 @@ function walk(
   while (queue.length > 0) {
     const cur = queue.shift()!;
     if (cur.depth >= maxDepth) continue;
-    for (const { target, call } of neighbors(cur.ref)) {
+    for (const { target, call } of neighbors(cur)) {
       const k = stepKey(target);
       if (seen.has(k)) continue;
       seen.add(k);
@@ -587,12 +744,21 @@ function walk(
 }
 
 export function walkCalls(resolver: CallResolver, start: SymbolRef, maxDepth = MAX_DEPTH): WalkStep[] {
-  return walk((ref) => resolver.callsFrom(ref).map((call) => ({ target: call.target, call })), start, maxDepth);
+  return walk((step) => resolver.callsFrom(step.ref).map((call) => ({ target: call.target, call })), start, maxDepth);
 }
 
-/** `follow` (default: every edge) decides which caller edges the walk may cross. */
+/** `follow` (default: every edge) decides which caller edges the walk may cross. A caller edge onto an inline
+ * function inside a symbol (a hook's or mapDispatchToProps' returned arrow: the call carries `lines`) is crossed
+ * only when the symbol makes its next hop from inside those lines (v0.2a §4) — the line of its call towards the
+ * start, or `startLine` (e.g. the HTTP call's own line) for the start symbol itself. */
 export function walkCallers(
   resolver: CallResolver, start: SymbolRef, maxDepth = MAX_DEPTH, follow: (call: ResolvedCall) => boolean = () => true,
+  startLine?: number,
 ): WalkStep[] {
-  return walk((ref) => resolver.callersOf(ref).filter(({ call }) => follow(call)).map(({ from, call }) => ({ target: from, call })), start, maxDepth);
+  return walk((step) => {
+    const outLine = step.via ? step.via.site.line : startLine;
+    return resolver.callersOf(step.ref)
+      .filter(({ call }) => follow(call) && (!call.lines || outLine === undefined || (outLine >= call.lines[0] && outLine <= call.lines[1])))
+      .map(({ from, call }) => ({ target: from, call }));
+  }, start, maxDepth);
 }

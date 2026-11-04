@@ -583,6 +583,9 @@ export function buildChainsAndLinks(
     });
   };
   const pageRoutes = new Set<string>();
+  /** UI links whose call stop made it into some page chain (a page chain is one per (page, route), so a second
+   * call to the same route from the same page is dropped there). */
+  const inPageChain = new Set<UiLink>();
 
   for (const uiLink of links.ui) {
     if (uiLink.target.kind !== "route") continue;
@@ -595,16 +598,21 @@ export function buildChainsAndLinks(
       const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
       const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
       pageRoutes.add(routeIdentity(target.route));
-      add(makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
+      const chain = makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u)));
+      if (!byId.has(chain.id)) inPageChain.add(uiLink);
+      add(chain);
     }
   }
 
-  // Call-entry chains: UI-side calls that match a route but that no page reaches.
+  // Call-entry chains: UI-side calls that match a route but that no page reaches — and (v0.2a §4) reached calls
+  // whose call stop no page chain kept (another call to the same route took that page's chain), so every UI
+  // call keeps a chain of its own.
   const unreached = new Set(links.uiReach.filter((f) => !f.reached).map(uiReachKey));
   for (const uiLink of links.ui) {
-    if (uiLink.target.kind !== "route" || uiLink.pages.length > 0) continue;
+    if (uiLink.target.kind !== "route" || inPageChain.has(uiLink)) continue;
     const at = uiLink.call.at;
-    if (!unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
+    if (uiLink.pages.length === 0
+      && !unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
     const target: RouteTarget = uiLink.target;
     const backend = backendByIdentity.get(routeIdentity(target.route));
     const ui = uiStops(ctx, uiLink, undefined);

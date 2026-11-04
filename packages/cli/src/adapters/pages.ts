@@ -95,7 +95,8 @@ function jsxRouteInfo(node: ts.JsxOpeningLikeElement): RouteInfo | undefined {
     if (name === "element" && attr.initializer && ts.isJsxExpression(attr.initializer)) {
       component = jsxTagName(attr.initializer.expression);
     }
-    if (name === "Component" && attr.initializer && ts.isJsxExpression(attr.initializer)) {
+    // `Component={X}` (v6.4+) and `component={X}` (v4/v5, v0.2a §4).
+    if ((name === "Component" || name === "component") && attr.initializer && ts.isJsxExpression(attr.initializer)) {
       const e = attr.initializer.expression;
       if (e && ts.isIdentifier(e)) component = e.text;
     }

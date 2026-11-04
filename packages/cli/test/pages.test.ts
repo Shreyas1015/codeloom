@@ -158,6 +158,23 @@ describe("detectPages", () => {
     ]);
   });
 
+  it("React Router v4/v5: <Route component={X} /> names the page component (v0.2a §4)", () => {
+    const ctx = ctxWith("react-router-dom");
+    const code = `
+      import Customers from "../components/Customers";
+      export const App = () => (
+        <Switch>
+          <Route exact path="/customers" component={Customers} />
+          <Route path="/raw" component={() => <div />} />
+        </Switch>
+      );`;
+    const pages = detectPages(parsed("src/App.js", code), ctx);
+    expect(pages.map((p) => [p.route, p.component])).toEqual([
+      ["/customers", { name: "Customers", importSource: "../components/Customers" }],
+      ["/raw", undefined],
+    ]);
+  });
+
   it("unwraps a single-child wrapper in an object route's element (regression)", () => {
     const ctx = ctxWith("react-router-dom");
     const code = `

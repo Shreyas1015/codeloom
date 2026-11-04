@@ -185,7 +185,7 @@ export function functionLikeName(cur: ts.Node): string | undefined {
   if (isMethodLike(cur)) {
     if (ts.isClassLike(cur.parent)) return `${className(cur.parent)}.${memberName(cur.name)}`;
     const obj = objectName(cur.parent);
-    return obj ? `${obj}.${memberName(cur.name)}` : undefined;
+    if (obj) return `${obj}.${memberName(cur.name)}`;
   }
   if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && cur.parent) {
     const p = cur.parent;
@@ -201,9 +201,111 @@ export function functionLikeName(cur: ts.Node): string | undefined {
     if (cjs !== undefined) return cjs === "default" && ts.isFunctionExpression(cur) && cur.name ? cur.name.text : cjs;
     // `export default () => {}` / `export = function () {}`.
     if (ts.isExportAssignment(p)) return ts.isFunctionExpression(cur) && cur.name ? cur.name.text : "default";
+    // v0.2a §4: `this.handleX = (…) => {…}` in a class constructor -> "Class.handleX".
+    const ctorField = constructorFieldOf(cur);
+    if (ctorField) return `${className(ctorField.cls)}.${ctorField.field}`;
+    // v0.2a §4: `const fetchX = createAsyncThunk("x", async (…) => {…})` -> "fetchX".
+    const thunk = asyncThunkOf(cur);
+    if (thunk) return thunk.name;
     if (ts.isFunctionExpression(cur) && cur.name) return cur.name.text;
   }
+  const rtk = rtkEndpointOf(cur);
+  if (rtk) return `${rtk.api}.${rtk.endpoint}`;
   return undefined;
+}
+
+/** `this.<field> = <fn>` as a statement directly in a class constructor's body: the class and the field. */
+export function constructorFieldOf(fn: ts.Node): { cls: ts.ClassLikeDeclaration; field: string } | undefined {
+  const p = fn.parent;
+  if (!p || !ts.isBinaryExpression(p) || p.right !== fn || p.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return undefined;
+  if (!ts.isPropertyAccessExpression(p.left) || p.left.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
+  const stmt = p.parent;
+  const block = stmt?.parent;
+  const ctor = block?.parent;
+  if (!stmt || !ts.isExpressionStatement(stmt) || !block || !ts.isBlock(block) || !ctor || !ts.isConstructorDeclaration(ctor)) return undefined;
+  return ts.isClassLike(ctor.parent) ? { cls: ctor.parent, field: p.left.name.text } : undefined;
+}
+
+/** `createAsyncThunk(type, <fn>)` (Redux Toolkit) assigned to `const <name>`: the variable declaration and name. */
+export function asyncThunkOf(fn: ts.Node): { decl: ts.VariableDeclaration; name: string } | undefined {
+  const call = fn.parent;
+  if (!call || !ts.isCallExpression(call) || call.arguments[1] !== fn || lastName(call.expression) !== "createAsyncThunk") return undefined;
+  const decl = call.parent;
+  return decl && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name) ? { decl, name: decl.name.text } : undefined;
+}
+
+export interface RtkEndpoint {
+  /** The variable the `createApi(…)` result is assigned to. */
+  api: string;
+  endpoint: string;
+  kind: "query" | "mutation";
+  createApi: ts.CallExpression;
+}
+
+/** The object an arrow/function returns: its expression body, or the single `return <expr>` of its block. */
+function returnedObject(fn: ts.Node): ts.ObjectLiteralExpression | undefined {
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn) && !ts.isMethodDeclaration(fn)) return undefined;
+  let e: ts.Node | undefined = fn.body;
+  if (e && ts.isBlock(e)) {
+    const rets = e.statements.filter(ts.isReturnStatement);
+    e = e.statements.length === 1 && rets.length === 1 ? rets[0]!.expression : undefined;
+  }
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+  return e && ts.isObjectLiteralExpression(e) ? e : undefined;
+}
+
+/** A property of an object literal (assignment or method) named `key`. */
+function objectMember(obj: ts.Node, key: string): ts.Node | undefined {
+  if (!ts.isObjectLiteralExpression(obj)) return undefined;
+  return obj.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p)) && memberName(p.name) === key);
+}
+
+/** RTK Query (v0.2a §4): `fn` is the `query` function of endpoint `x` in
+ * `const api = createApi({ …, endpoints: (b) => ({ x: b.query({ query: (id) => … }) }) })` (or `b.mutation`, or a
+ * `query(id) {…}` method). The builder must be the `endpoints` function's own first parameter. */
+export function rtkEndpointOf(fn: ts.Node): RtkEndpoint | undefined {
+  let prop: ts.Node;
+  if (ts.isMethodDeclaration(fn)) prop = fn;
+  else if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && fn.parent && ts.isPropertyAssignment(fn.parent)) prop = fn.parent;
+  else return undefined;
+  if (!ts.isPropertyAssignment(prop) && !ts.isMethodDeclaration(prop)) return undefined;
+  if (memberName(prop.name) !== "query") return undefined;
+  const def = prop.parent.parent;
+  if (!def || !ts.isCallExpression(def) || def.arguments[0] !== prop.parent || !ts.isPropertyAccessExpression(def.expression)) return undefined;
+  const kind = def.expression.name.text;
+  if (kind !== "query" && kind !== "mutation") return undefined;
+  const builder = def.expression.expression;
+  const endpointProp = def.parent;
+  if (!endpointProp || !ts.isPropertyAssignment(endpointProp) || endpointProp.initializer !== def) return undefined;
+  const endpoint = memberName(endpointProp.name);
+  // Up from the endpoints object to the function returning it.
+  let up: ts.Node | undefined = endpointProp.parent.parent;
+  while (up && (ts.isParenthesizedExpression(up) || ts.isReturnStatement(up) || ts.isBlock(up))) up = up.parent;
+  if (!up || returnedObject(up) !== endpointProp.parent) return undefined;
+  const endpointsFn = up as ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration;
+  const param = endpointsFn.parameters[0];
+  if (!param || !ts.isIdentifier(param.name) || !ts.isIdentifier(builder) || builder.text !== param.name.text) return undefined;
+  const endpointsProp = ts.isMethodDeclaration(endpointsFn) ? endpointsFn : endpointsFn.parent;
+  if (!endpointsProp || (!ts.isPropertyAssignment(endpointsProp) && !ts.isMethodDeclaration(endpointsProp))) return undefined;
+  if (memberName(endpointsProp.name) !== "endpoints") return undefined;
+  const createApi = endpointsProp.parent.parent;
+  if (!createApi || !ts.isCallExpression(createApi) || createApi.arguments[0] !== endpointsProp.parent || lastName(createApi.expression) !== "createApi") {
+    return undefined;
+  }
+  const decl = createApi.parent;
+  if (!decl || !ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) return undefined;
+  return { api: decl.name.text, endpoint, kind, createApi };
+}
+
+/** RTK Query: the `baseQuery: fetchBaseQuery({ baseUrl })` option of a `createApi({…})` call, as the expression. */
+export function rtkBaseUrl(createApi: ts.CallExpression): ts.Expression | undefined {
+  const opts = createApi.arguments[0];
+  const bq = opts && objectMember(opts, "baseQuery");
+  const init = bq && ts.isPropertyAssignment(bq) ? bq.initializer : undefined;
+  if (!init || !ts.isCallExpression(init) || lastName(init.expression) !== "fetchBaseQuery") return undefined;
+  const arg = init.arguments[0];
+  const url = arg && objectMember(arg, "baseUrl");
+  return url && ts.isPropertyAssignment(url) ? url.initializer : undefined;
 }
 
 export function enclosingSymbol(node: ts.Node): string {
