@@ -1,4 +1,10 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { runIndex } from "../src/commands/index-cmd.js";
+import { ChainsFileSchema } from "../src/store/schemas.js";
+import { makeRepo } from "./helpers.js";
 import type { KnowledgeGraph } from "@codeloom/core";
 import { finalizeEndpoints, runAdapters } from "../src/adapters/run.js";
 import { buildFileCodeIndex } from "../src/linker/code-index.js";
@@ -363,5 +369,144 @@ describe("linkUi: HTTP clients re-exported through barrels and namespace imports
       ].join("\n")),
     }, [["GET", "/customers"]]);
     expect(rows).toEqual([]);
+  });
+});
+
+describe("linkUi: the page reaches a route only through each hook/argument shape", () => {
+  const base = { "src/api/client.ts": client, "src/api/customers.ts": customersApi };
+  const routes: Array<[HttpMethod, string]> = [["GET", "/customers"], ["POST", "/customers"], ["POST", "/invoices/:id/pay"]];
+  const reached = (rows: string[][], call: string) => rows.find((r) => r[0] === call)?.slice(2) ?? [];
+
+  it("a function passed to useMutation / an object argument", () => {
+    const rows = linkTwoRepos({
+      ...base,
+      [PAGE]: pageOnly("import { useMutation, useQuery } from '@tanstack/react-query';\nimport { saveCustomer, loadCustomers } from '../api/customers';",
+        "  useMutation(saveCustomer);\n  useQuery({ queryFn: loadCustomers });\n  return null;"),
+    }, routes);
+    expect(reached(rows, "POST /customers")).toEqual(["CustomersPage(param)>saveCustomer(exact)"]);
+    expect(reached(rows, "GET /customers")).toEqual(["CustomersPage(param)>loadCustomers(exact)"]);
+    expect(reached(rows, "POST /invoices/:id/pay")).toEqual([]);
+  });
+
+  it("an array-returning hook", () => {
+    const rows = linkTwoRepos({
+      ...base,
+      "src/hooks/useCustomer.ts": "import { saveCustomer } from '../api/customers';\nexport function useCustomer() {\n  const save = (d: unknown) => saveCustomer(d);\n  return [save, false];\n}",
+      [PAGE]: pageOnly("import { useCustomer } from '../hooks/useCustomer';", "  const [save] = useCustomer();\n  return <button onClick={save} />;"),
+    }, routes);
+    expect(reached(rows, "POST /customers")).toEqual(["CustomersPage(param)>save(exact)>saveCustomer(exact)"]);
+  });
+
+  it("nested destructuring of a hook's result", () => {
+    const rows = linkTwoRepos({
+      ...base,
+      "src/hooks/useCustomer.ts": "import { payInvoice } from '../api/customers';\nexport function useCustomer() {\n  function pay() { return payInvoice('1'); }\n  return { invoice: { pay } };\n}",
+      [PAGE]: pageOnly("import { useCustomer } from '../hooks/useCustomer';", "  const { invoice: { pay } } = useCustomer();\n  return <button onClick={pay} />;"),
+    }, routes);
+    expect(reached(rows, "POST /invoices/:id/pay")).toEqual(["CustomersPage(param)>pay(exact)>payInvoice(exact)"]);
+  });
+
+  it("a namespaced hook", () => {
+    const rows = linkTwoRepos({
+      ...base,
+      "src/hooks/useCustomer.ts": "import { loadCustomers } from '../api/customers';\nexport function useCustomer() {\n  const reload = () => loadCustomers();\n  return { reload };\n}",
+      [PAGE]: pageOnly("import * as hooks from '../hooks/useCustomer';", "  const { reload } = hooks.useCustomer();\n  return <button onClick={reload} />;"),
+    }, routes);
+    expect(reached(rows, "GET /customers")).toEqual(["CustomersPage(param)>reload(exact)>loadCustomers(exact)"]);
+  });
+});
+
+describe("codeloom index: two repos, every v0.2a §2 shape at once", () => {
+  function workspace(): string {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-v02a-shapes-"));
+    makeRepo({
+      "package.json": JSON.stringify({ name: "web", dependencies: { axios: "^1", react: "^18", "react-router-dom": "^6", "@tanstack/react-query": "^5" } }),
+      "src/net/backend.ts": [
+        "import axios from 'axios';",
+        "export const backend = axios.create({ baseURL: import.meta.env.VITE_API_URL });",
+        "",
+      ].join("\n"),
+      "src/net/index.ts": "export * from './backend';\n",
+      "src/api/customers.ts": [
+        "import { backend } from '../net';",
+        "import * as net from '../net/backend';",
+        "export async function saveCustomer(d: unknown) { return backend.post('/customers', d); }",
+        "export async function loadCustomers() { return net.backend.get('/customers'); }",
+        "export async function payInvoice(id: string) { return backend.post(`/invoices/${id}/pay`); }",
+        "export async function removeCustomer(id: string) { return backend.delete(`/customers/${id}`); }",
+        "",
+      ].join("\n"),
+      "src/hooks/useCustomer.ts": [
+        "import { payInvoice, removeCustomer } from '../api/customers';",
+        "export function useCustomer() {",
+        "  function pay() { return payInvoice('1'); }",
+        "  return { invoice: { pay } };",
+        "}",
+        "export function useRemove() {",
+        "  return [",
+        "    (id: string) => removeCustomer(id),",
+        "  ];",
+        "}",
+        "",
+      ].join("\n"),
+      "src/pages/CustomersPage.tsx": [
+        "import { useMutation, useQuery } from '@tanstack/react-query';",
+        "import * as hooks from '../hooks/useCustomer';",
+        "import { saveCustomer, loadCustomers } from '../api/customers';",
+        "export default function CustomersPage() {",
+        "  useMutation(saveCustomer);",
+        "  useQuery({ queryFn: loadCustomers });",
+        "  const { invoice: { pay } } = hooks.useCustomer();",
+        "  const [remove] = hooks.useRemove();",
+        "  return <button onClick={pay} onReset={remove} />;",
+        "}",
+        "",
+      ].join("\n"),
+      "src/App.tsx": [
+        "import { Route, Routes } from 'react-router-dom';",
+        "import CustomersPage from './pages/CustomersPage';",
+        "export const App = () => <Routes><Route path=\"/customers\" element={<CustomersPage />} /></Routes>;",
+        "",
+      ].join("\n"),
+    }, join(root, "web"));
+    makeRepo({
+      "package.json": JSON.stringify({ name: "api", dependencies: { express: "^4" } }),
+      "src/app.ts": [
+        "import express from 'express';",
+        "const app = express();",
+        "app.get('/customers', (req, res) => { res.json([]); });",
+        "app.post('/customers', (req, res) => { res.json({}); });",
+        "app.delete('/customers/:id', (req, res) => { res.json({}); });",
+        "app.post('/invoices/:id/pay', (req, res) => { res.json({}); });",
+        "",
+      ].join("\n"),
+    }, join(root, "api"));
+    writeFileSync(join(root, "codeloom.workspace.json"), JSON.stringify({
+      version: 1, name: "shapes",
+      repos: [{ id: "api", path: "api", role: "api", apiBase: ["VITE_API_URL"] }, { id: "web", path: "web", role: "ui" }],
+      links: [],
+    }));
+    return root;
+  }
+
+  it("reaches every call from the page, shows the inline arrow's line, and re-runs byte-identical", async () => {
+    const root = workspace();
+    await runIndex(root);
+    const path = join(root, ".codeloom", "chains.json");
+    const first = readFileSync(path, "utf8");
+    const file = ChainsFileSchema.parse(JSON.parse(first));
+    expect(file.uiReach!.map((f) => [f.symbol, f.method, f.path, f.reached])).toEqual([
+      ["saveCustomer", "POST", "/customers", true],
+      ["loadCustomers", "GET", "/customers", true],
+      ["payInvoice", "POST", "/invoices/:id/pay", true],
+      ["removeCustomer", "DELETE", "/customers/:id", true],
+    ]);
+    const del = file.chains.find((c) => c.entry.startsWith("page:") && c.routeKey?.includes("DELETE /customers/:id"));
+    expect(del?.stops.filter((s) => s.repo === "web").map((s) => `${s.kind}:${s.symbol}:${s.line}:${s.hop.confidence}`)).toEqual([
+      "page:CustomersPage:3:exact", "function:useRemove:8:exact", "function:removeCustomer:6:exact", "call:removeCustomer:6:exact",
+    ]);
+    expect(file.chains.filter((c) => c.entry.startsWith("page:")).every((c) => c.stops.some((s) => s.repo === "api" && s.kind === "route"))).toBe(true);
+    expect((await runIndex(root)).linker.wrote).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(first);
   });
 });
