@@ -111,6 +111,28 @@ describe("pickRoute", () => {
     });
   });
 
+  it("breaks an equal-rank tie by the left-most literal segment: that route wins at param", () => {
+    const candidates = [cand("/:kind/summary"), cand("/invoices/:id")];
+    expect(pickRoute("GET", "/invoices/summary", candidates)).toEqual({
+      item: "GET /invoices/:id",
+      match: { confidence: "param", literals: 1, reason: "literal segment preferred over a parameter" },
+    });
+    // Three-way: the literal at position 1 decides between the two that share position 0.
+    const three = [cand("/api/:a/:b"), cand("/api/customers/:id"), cand("/api/:x/active")];
+    expect(pickRoute("GET", "/api/customers/active", three)).toEqual({
+      item: "GET /api/customers/:id",
+      match: { confidence: "param", literals: 2, reason: "literal segment preferred over a parameter" },
+    });
+  });
+
+  it("keeps a real tie a guess: same literal positions, or a splat route in the tie", () => {
+    expect(pickRoute("GET", "/invoices/42", [cand("/invoices/:id"), cand("/invoices/:ref")])!.match.confidence).toBe("guess");
+    const splat = [cand("/files/*"), cand("/:kind/readme")];
+    expect(pickRoute("GET", "/files/readme", splat)!.match).toEqual({
+      confidence: "guess", literals: 1, reason: "tie between equally specific routes",
+    });
+  });
+
   it("breaks an equal-literal tie by match confidence: exact :slug beats guess /feed", () => {
     const candidates = [cand("/api/articles/feed"), cand("/api/articles/:slug")];
     expect(pickRoute("GET", "/api/articles/:slug", candidates)).toEqual({

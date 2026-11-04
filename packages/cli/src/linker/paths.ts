@@ -107,6 +107,26 @@ export interface RouteCandidate<T> {
   mountsKnown: boolean;
 }
 
+/** Equal-rank tie-break (radix-router style, left to right): the route whose literal segment equals the
+ * call's literal at the first position where the tied routes differ wins. Returns the winner's index, or
+ * undefined when no single route wins (same literal positions) or a route has a splat (positions are
+ * then ambiguous). */
+function leftmostLiteralWinner(callPath: string, routePaths: string[]): number | undefined {
+  const call = parsePath(callPath);
+  const routes = routePaths.map(parsePath);
+  if (routes.some((r) => r.length !== call.length || r.some((s) => s.kind === "splat"))) return undefined;
+  let alive = routes.map((_, i) => i);
+  for (let pos = 0; pos < call.length && alive.length > 1; pos++) {
+    const c = call[pos]!;
+    const lit = alive.filter((i) => {
+      const s = routes[i]![pos]!;
+      return c.kind === "literal" && s.kind === "literal" && s.value === c.value;
+    });
+    if (lit.length > 0 && lit.length < alive.length) alive = lit;
+  }
+  return alive.length === 1 ? alive[0] : undefined;
+}
+
 export function pickRoute<T>(
   method: HttpMethod,
   callPath: string,
@@ -132,6 +152,13 @@ export function pickRoute<T>(
     const best = known[0]!;
     const tied = known.filter((k) => k.match.literals === best.match.literals && k.match.confidence === best.match.confidence);
     if (tied.length > 1) {
+      const winner = leftmostLiteralWinner(callPath, tied.map((t) => t.candidate.path));
+      if (winner !== undefined && best.match.confidence !== "guess") {
+        const w = tied[winner]!;
+        return { item: w.candidate.item, match: {
+          confidence: worse(w.match.confidence, "param"), literals: w.match.literals, reason: "literal segment preferred over a parameter",
+        } };
+      }
       return { item: best.candidate.item, match: { confidence: "guess", literals: best.match.literals, reason: "tie between equally specific routes" } };
     }
     if (best.match.confidence === "guess" && known.length > 1) return null;
