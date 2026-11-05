@@ -58,3 +58,18 @@ chains (`call:`) and no call was reached from a page. v0.2a §4 (2026-11-04) fol
 ui-api stays 22/22, 100% precision and recall. The one call still unreached, `Comments.delete`, sits 7 calls
 below its page (Article → render → CommentContainer → CommentList → Comment → DeleteButton → del), past the
 6-hop walk limit.
+
+## graph.json size
+
+v0.2a adds method nodes and checked `calls` edges to `graph.json`. Total `graph.json` bytes over all repos of each
+app, before (no method nodes or call checking) and after (v0.2a, 2026-11-05):
+
+| App | before | after | change |
+|---|---|---|---|
+| demo-shop | 19,277 | 27,018 | +40% |
+| prisma-rest-nextjs | 15,616 | 16,578 | +6% |
+| realworld | 95,568 | 174,439 | +83% |
+| realworld-nest | 19,026 | 32,101 | +69% |
+
+prisma-rest-nextjs is mostly plain functions (already in the file map), so it grows least.
+

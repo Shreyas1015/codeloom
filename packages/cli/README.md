@@ -59,6 +59,27 @@ The file map (folders, files, functions) uses the tree-sitter parsers from
 [Understand Anything](https://github.com/Egonex-AI/Understand-Anything), so it covers more languages than JS/TS.
 Journeys need JS/TS.
 
+What `graph.json` holds (v0.2a):
+
+- **Method nodes.** Each class method and object-literal method is a `function` node (`function:<file>:<Class.method>`,
+  tag `method`). For a TypeScript overload, the node covers the implementation, not the signatures.
+- **Checked `calls` edges.** For JS/TS files, codeloom's own call resolver decides every `calls` edge. Each one has
+  a confidence in `description`: `exact` (weight 1) or `param` (weight 0.6; likely: passed or wired, not a direct
+  call). A tree-sitter call edge the resolver does not confirm is dropped. In other languages tree-sitter's edges
+  stay, marked `unverified` (weight 0.3), and the dashboard and MCP tools show them dashed and labelled.
+- **Nameless classes** (`const Customer = class { … }`) get the id `<anonymous@L12>` from the line they start on.
+  The id changes when lines above the class are added or removed.
+- **Skipped files.** Bundled or minified JavaScript (`*.min.js`, `*.bundle.js`, `*-bundle.js` — `.js`, `.cjs`,
+  `.mjs` only — or bundler output) stays on the map as a file but is not analysed: no methods, calls or
+  endpoints. `.claude/` and `.cursor/` folders are ignored by default.
+- **Wrapped default exports.** `export default connect(…)(Customer)` stands for `Customer`. Known wrappers
+  (`connect(…)(X)`, `memo`, `React.memo`, `forwardRef`, `withRouter`, `observer`, `inject(…)(X)`, `compose(…)(X)`,
+  and any `with…` such as `withAuth`) keep the link `exact`. Any other wrapper (`makeHandler(fn)`) gives `param`.
+  A wrapped value that is not a local function or class is not followed.
+
+`graph.json` grows with these: up to 1.8× on the test apps (see "graph.json size" in
+[fixtures/evals](https://github.com/Shreyas1015/codeloom/blob/main/fixtures/evals/README.md)).
+
 ### What it finds
 
 | Part | Supported |
