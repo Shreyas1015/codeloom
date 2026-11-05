@@ -7,6 +7,7 @@ import { useNeighbors, useNode } from "@/api/queries";
 import type { GraphFile, GraphFolder, GraphLevel, Neighbor } from "@/api/types";
 import { Breakable } from "@/lib/breakable";
 import { cn } from "@/lib/utils";
+import { CALL_TAG } from "@/screens/journey/words";
 import { fileOfRef } from "./layout";
 
 export interface InspectorProps {
@@ -206,13 +207,16 @@ function NodeDetails({ repo, selectedRef, file, onJump }: InspectorProps & { sel
 function NeighborRow({ n, onJump }: { n: Neighbor; onJump: (ref: string) => void }) {
   const Arrow = n.via.direction === "out" ? ArrowRight : ArrowLeft;
   const how = n.via.direction === "out" ? n.via.type : `${n.via.type} it`;
-  // v0.2a: a resolved call says how sure it is, in the same words as the Journey inspector
-  const sure = n.via.confidence ? ` · ${n.via.confidence === "param" ? "path param" : "exact"}` : "";
+  // v0.2a: a call edge says how sure it is, in the same words as the Journey inspector
+  const sure = n.via.confidence ? ` · ${CALL_TAG[n.via.confidence]}` : "";
   const body = (
     <>
       <Arrow aria-hidden className="size-3.5 flex-none text-muted-foreground" />
       <span className="truncate font-mono text-[12.5px]">{n.name}</span>
-      <span data-confidence={n.via.confidence} className="ml-auto flex-none text-[11.5px] text-muted-foreground">
+      <span
+        data-confidence={n.via.confidence}
+        className={`ml-auto flex-none text-[11.5px] text-muted-foreground${n.via.confidence === "unverified" ? " underline decoration-dashed underline-offset-3" : ""}`}
+      >
         {how}
         {sure}
       </span>

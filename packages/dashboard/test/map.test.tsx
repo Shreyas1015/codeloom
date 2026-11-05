@@ -160,6 +160,7 @@ const neighbors: NeighborsResult = {
     // v0.2a: method nodes reached by resolved calls edges
     { ref: "api::function:app/billing.ts:Billing.charge", name: "Billing.charge", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "exact" } },
     { ref: "api::function:app/routes.ts:Routes.show", name: "Routes.show", type: "function", depth: 1, via: { type: "calls", direction: "in", confidence: "param" } },
+    { ref: "api::function:app/legacy.ts:Legacy.run", name: "Legacy.run", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "unverified" } },
   ],
   truncated: false,
 };
@@ -312,7 +313,11 @@ describe("Map screen", () => {
     // v0.2a: a resolved call says how sure it is
     const rows = within(near).getAllByRole("listitem").map((li) => li.textContent);
     expect(rows).toContain("Billing.chargecalls · exact");
-    expect(rows).toContain("Routes.showcalls it · path param");
+    // param on a call edge is a likely call, never "path param" (that wording is for route matches)
+    expect(rows).toContain("Routes.showcalls it · likely (passed or wired, not a direct call)");
+    // a tree-sitter edge the resolver could not check: labelled and dashed
+    expect(rows).toContain("Legacy.runcalls · unverified");
+    expect(within(near).getByText("calls · unverified")).toHaveClass("decoration-dashed");
     expect(rows).toContain("customer.tsimports");
   });
 

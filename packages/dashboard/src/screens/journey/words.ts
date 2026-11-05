@@ -1,4 +1,4 @@
-import type { Confidence } from "@/api/types";
+import type { CallConfidence, Confidence } from "@/api/types";
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 
@@ -28,3 +28,11 @@ export const HOP_WORD: Record<Confidence, string> = {
 };
 
 export const fileLine =(file: string, line: number) => `${file}:${line}`;
+
+/** A call edge's confidence, in brackets (Journey inspector) or after a dot (Map inspector). `param` is a function
+ * handed over or wired up — "path param" is only for route matches. */
+export const CALL_TAG: Record<CallConfidence, string> = {
+  exact: "exact",
+  param: "likely (passed or wired, not a direct call)",
+  unverified: "unverified",
+};

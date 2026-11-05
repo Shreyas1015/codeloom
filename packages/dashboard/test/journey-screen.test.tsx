@@ -36,6 +36,7 @@ const storeNeighbors: NeighborsResult = {
     { ref: "api::function:start/routes.ts:routes", name: "routes", type: "function", depth: 1, via: { type: "calls", direction: "in" } },
     { ref: "api::function:app/services/invoice.ts:InvoiceService.create", name: "InvoiceService.create", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "exact" } },
     { ref: "api::function:app/services/invoice.ts:InvoiceService.forCustomer", name: "InvoiceService.forCustomer", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "param" } },
+    { ref: "api::function:app/legacy.ts:Legacy.run", name: "Legacy.run", type: "function", depth: 1, via: { type: "calls", direction: "out", confidence: "unverified" } },
     { ref: "api::file:app/models/invoice.ts", name: "invoice.ts", type: "file", depth: 1, via: { type: "imports", direction: "out" } },
   ],
   truncated: false,
@@ -231,15 +232,19 @@ describe("Journey screen", () => {
     renderAt("/journeys/j_invoice?stop=4");
     const inspector = await screen.findByRole("complementary", { name: "Stop inspector" });
     const calls = await within(inspector).findByRole("list", { name: "Calls" });
-    const [exact, param] = within(calls).getAllByRole("listitem");
+    const [exact, param, unverified] = within(calls).getAllByRole("listitem");
     expect(exact!.textContent).toBe("InvoiceService.create (exact)");
     expect(within(exact!).getByRole("img", { name: "Exact link" })).toHaveAttribute("data-stroke", "solid");
     expect(within(exact!).getByRole("link", { name: "InvoiceService.create" })).toHaveAttribute(
       "href",
       "/map?repo=api&node=api%3A%3Afunction%3Aapp%2Fservices%2Finvoice.ts%3AInvoiceService.create",
     );
-    expect(param!.textContent).toBe("InvoiceService.forCustomer (path param)");
-    expect(within(param!).getByRole("img", { name: "Matched with a path parameter" })).toHaveAttribute("data-stroke", "thin");
+    // param on a call edge is a likely call; "path param" is only for route matches
+    expect(param!.textContent).toBe("InvoiceService.forCustomer (likely — passed or wired, not a direct call)");
+    expect(within(param!).getByRole("img", { name: "Likely call (passed or wired, not a direct call)" })).toHaveAttribute("data-stroke", "thin");
+    // a tree-sitter edge the resolver could not check: dashed and labelled
+    expect(unverified!.textContent).toBe("Legacy.run (unverified)");
+    expect(within(unverified!).getByRole("img", { name: /^Unverified call/ })).toHaveAttribute("data-stroke", "dashed");
     // a calls edge with no recorded confidence (tree-sitter's own) gets no wire and no tag
     const calledBy = within(inspector).getByRole("list", { name: "Called by" });
     expect(calledBy.textContent).toBe("routes");

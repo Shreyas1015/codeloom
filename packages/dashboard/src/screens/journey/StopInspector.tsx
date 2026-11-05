@@ -6,9 +6,9 @@ import { CodeBlock } from "@/components/code/CodeBlock";
 import { ConfidenceLine } from "@/components/gallery/ConfidenceLine";
 import { StopRoundel } from "@/components/gallery/StopRoundel";
 import { Breakable } from "@/lib/breakable";
-import type { Confidence } from "@/api/types";
+import type { CallConfidence, Confidence } from "@/api/types";
 import { type JourneyModel, type JourneyStop, stopTitle } from "./model";
-import { fileLine, KIND_WORD } from "./words";
+import { CALL_TAG, fileLine, KIND_WORD } from "./words";
 
 const CONTEXT = 12;
 const MAX_LINKS = 8;
@@ -20,8 +20,12 @@ const quiet = "text-[13px] text-muted-foreground";
 const link =
   "rounded-sm underline-offset-3 outline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring";
 
-/** One hop's confidence, in brackets after the stop it reaches. */
+/** One hop's confidence, in brackets after the stop it reaches. `param` reads "path param" only when the hop
+ * arrives at a route (a route match); elsewhere the hop is a call edge and reads like CALL_TAG.param. */
 const HOP_TAG: Record<Confidence, string> = { exact: "exact", param: "path param", guess: "guess" };
+/** CALL_TAG for text already in brackets: "likely — passed or wired, not a direct call". */
+const callTag = (c: CallConfidence) => CALL_TAG[c].replace(/ \((.*)\)$/, " — $1");
+const hopTag = (c: Confidence, toKind: string | undefined) => (c === "param" && toKind !== "route" ? callTag("param") : HOP_TAG[c]);
 
 interface InspectorProps {
   stop: JourneyStop | undefined;
@@ -153,7 +157,7 @@ function HopList({
                 data-confidence={h.confidence}
                 className={guess ? "text-muted-foreground underline decoration-dashed underline-offset-3" : "text-muted-foreground"}
               >
-                ({HOP_TAG[h.confidence]})
+                ({hopTag(h.confidence, to?.view.kind)})
               </span>
               {guess && h.reason ? <span className={`block ${quiet}`}>{h.reason}</span> : null}
             </li>
@@ -254,14 +258,17 @@ function CallList({
         const at = stopOf(n.ref);
         return (
           <li key={n.ref} className="flex min-w-0 items-center gap-1.5 text-xs">
-            {c ? <ConfidenceLine confidence={c} orientation="horizontal" className="w-3.5" /> : <span aria-hidden className="w-3.5 flex-none" />}
+            {c ? <ConfidenceLine confidence={c} call orientation="horizontal" className="w-3.5" /> : <span aria-hidden className="w-3.5 flex-none" />}
             <Link to="/map" search={{ repo: n.ref.split("::")[0], node: n.ref }} className={`${link} min-w-0 truncate font-mono`}>
               {n.name}
             </Link>
             {c ? (
-              <span data-confidence={c} className="flex-none text-muted-foreground">
+              <span
+                data-confidence={c}
+                className={`flex-none text-muted-foreground${c === "unverified" ? " underline decoration-dashed underline-offset-3" : ""}`}
+              >
                 {" "}
-                ({HOP_TAG[c]})
+                ({callTag(c)})
               </span>
             ) : null}
             {at !== undefined ? (
