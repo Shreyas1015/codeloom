@@ -63,6 +63,8 @@ interface ExportHit {
   symbol: string;
   /** Number of export-* / export{}-from hops crossed to find this symbol (0 = declared in the start file). */
   hops: number;
+  /** Reached through a default export wrapped by a call that is not a known HOC: at best "param". */
+  param?: true;
 }
 
 /** Per-resolver state: the repo input plus caches built once (method-name map) or filled lazily
@@ -171,7 +173,10 @@ function resolveExportUncached(ctx: Ctx, file: string, exportedName: string, hop
   if (!fi) return null;
   const { base, rest } = splitDotted(exportedName);
   const direct = rest ? exportedMember(fi, base, rest) : exportedPlain(fi, exportedName);
-  if (direct) return { file, symbol: direct.name, hops };
+  if (direct) {
+    const viaUnknownWrap = exportedName === "default" && fi.defaultWrapsConfidence === "param" && !exportedUnder(direct, "default");
+    return viaUnknownWrap ? { file, symbol: direct.name, hops, param: true } : { file, symbol: direct.name, hops };
+  }
   if (hops >= BARREL_MAX_HOPS) return null;
   for (const re of fi.reExports) {
     if (re.kind === "all") {
@@ -297,7 +302,7 @@ function guessUniqueMethod(ctx: Ctx, site: CallSite, method: string): ResolvedCa
 }
 
 function exact(ctx: Ctx, site: CallSite, hit: ExportHit, via: ResolvedCall["via"]): ResolvedCall {
-  return { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: "exact", via };
+  return { site, target: { repo: ctx.repo, file: hit.file, symbol: hit.symbol }, confidence: hit.param ? "param" : "exact", via };
 }
 
 /** Bare identifier calls (`helper()`, `fetch()`) resolve to a local function or an import, or not at

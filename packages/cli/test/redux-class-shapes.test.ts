@@ -329,3 +329,27 @@ describe("Redux", () => {
     expect(callsOf(r, PAGE, "P")).toEqual([]);
   });
 });
+
+describe("HOC default-export unwrap confidence (final review §1)", () => {
+  const USE = "src/run.ts";
+  const callsFromRun = (impl: string): string[] =>
+    callsOf(resolverOf({ "src/customer.ts": impl, [USE]: "import h from './customer';\nexport function run() { h(); }\n" }), USE, "run");
+
+  it("an unknown wrapper unwraps at param, never exact", () => {
+    expect(callsFromRun("function validator() {}\nexport default makeValidatedHandler(validator);\n"))
+      .toEqual(["2:call->src/customer.ts#validator (param/import)"]);
+  });
+
+  it("known HOCs (with*, connect, memo, React.memo, forwardRef, compose, observer, inject) unwrap at exact", () => {
+    for (const wrap of ["withAuth(Customer)", "connect(a, b)(Customer)", "memo(Customer)", "React.memo(Customer)", "forwardRef(Customer)",
+      "compose(withAuth, withRouter)(Customer)", "observer(Customer)", "inject('store')(Customer)", "withRouter(connect(a)(Customer))"]) {
+      expect(callsFromRun(`function Customer() {}\nexport default ${wrap};\n`), wrap).toEqual(["2:call->src/customer.ts#Customer (exact/import)"]);
+    }
+  });
+
+  it("a known HOC around an unknown one is param; a wrapped non-function stays unresolved", () => {
+    expect(callsFromRun("function Customer() {}\nexport default withAuth(makeInvoice(Customer));\n"))
+      .toEqual(["2:call->src/customer.ts#Customer (param/import)"]);
+    expect(callsFromRun("const invoice = 1;\nexport default withAuth(invoice);\n")).toEqual([]);
+  });
+});

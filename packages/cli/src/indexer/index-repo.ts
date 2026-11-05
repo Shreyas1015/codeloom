@@ -24,7 +24,7 @@ const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 29;
+export const CACHE_FORMAT = 30;
 
 /** The key a fingerprints cache must carry to be reused: CACHE_FORMAT, the codeloom version and the
  * repo's dependency context (loadContext(...).key). A cache with any other key is discarded. */

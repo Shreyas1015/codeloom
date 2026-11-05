@@ -160,6 +160,9 @@ export interface FileCodeIndex {
   /** v0.2a §4: `export default connect(…)(Customer)` / `withRouter(Customer)` / `module.exports = memo(Customer)`: the
    * local component a higher-order-component default export wraps. The default import stands for it. */
   defaultWraps?: string;
+  /** "param" when a wrapper in the chain is not a known HOC (`makeValidatedHandler(validator)`): the default export is
+   * only likely to stand for the wrapped function. Absent: every wrapper is a known HOC (exact). */
+  defaultWrapsConfidence?: "param";
   /** v0.2a §4: Redux `connect(mapState, mapDispatch)(Component)` in this file. `fn`: mapDispatch is a function of this
    * file (its returned keys are recorded in hookReturns under its name); `object`: an object literal of plain names. */
   reduxConnects?: ReduxConnect[];
@@ -915,15 +918,32 @@ function isReactClassComponent(cls: ts.ClassLikeDeclaration): boolean {
 /** Max higher-order-component calls unwrapped around a component (`connect(…)(withRouter(X))` is two). */
 const MAX_HOC_DEPTH = 3;
 
-/** The component a chain of single-argument HOC calls wraps: `X`, `hoc(X)`, `connect(a, b)(X)`, `React.memo(X)`. */
-function hocInner(e: ts.Expression, depth = 0): string | undefined {
+/** HOCs that hand their argument straight on as the rendered component / handler: `memo`, `forwardRef`, `withRouter`,
+ * `observer`, any `with[A-Z]…`, and the curried `connect(…)(X)`, `inject(…)(X)`, `compose(…)(X)`. */
+const KNOWN_HOCS = new Set(["memo", "forwardRef", "withRouter", "observer"]);
+const KNOWN_CURRIED_HOCS = new Set(["connect", "inject", "compose"]);
+
+function isKnownHoc(callee: ts.Expression): boolean {
+  if (ts.isCallExpression(callee)) return KNOWN_CURRIED_HOCS.has(lastName(callee.expression));
+  const name = lastName(callee);
+  return KNOWN_HOCS.has(name) || /^with[A-Z]\w*$/.test(name);
+}
+
+/** The component a chain of single-argument HOC calls wraps: `X`, `hoc(X)`, `connect(a, b)(X)`, `React.memo(X)`.
+ * `known`: every call in the chain is a known HOC (see KNOWN_HOCS); an unknown wrapper may do anything with it. */
+function hocWrap(e: ts.Expression, depth = 0): { name: string; known: boolean } | undefined {
   const x = unwrapExpr(e);
-  if (ts.isIdentifier(x)) return depth > 0 ? x.text : undefined;
+  if (ts.isIdentifier(x)) return depth > 0 ? { name: x.text, known: true } : undefined;
   if (!ts.isCallExpression(x) || x.arguments.length !== 1 || depth >= MAX_HOC_DEPTH) return undefined;
   const callee = x.expression;
   const ok = ts.isIdentifier(callee) || ts.isPropertyAccessExpression(callee)
     || (ts.isCallExpression(callee) && (ts.isIdentifier(callee.expression) || ts.isPropertyAccessExpression(callee.expression)));
-  return ok ? hocInner(x.arguments[0]!, depth + 1) : undefined;
+  const inner = ok ? hocWrap(x.arguments[0]!, depth + 1) : undefined;
+  return inner && { name: inner.name, known: inner.known && isKnownHoc(callee) };
+}
+
+function hocInner(e: ts.Expression, depth = 0): string | undefined {
+  return hocWrap(e, depth)?.name;
 }
 
 /** `connect(mapState, mapDispatch)(Component)` (Redux): the component and what mapDispatch is. Undefined when
@@ -974,7 +994,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   /** Function-like nodes of plain bound function symbols, by name (first one wins), for mapDispatchToProps. */
   const fnNodes = new Map<string, ts.FunctionLikeDeclaration>();
   /** `export default <hoc>(X)` / `module.exports = <hoc>(X)`: X, checked against the symbols after the walk. */
-  let wrapCandidate: string | undefined;
+  let wrapCandidate: { name: string; known: boolean } | undefined;
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
@@ -1027,9 +1047,9 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     }
 
     // v0.2a §4: `export default connect(…)(X)` / `module.exports = withRouter(X)`.
-    if (ts.isExportAssignment(node) && !node.isExportEquals) wrapCandidate ??= hocInner(node.expression);
+    if (ts.isExportAssignment(node) && !node.isExportEquals) wrapCandidate ??= hocWrap(node.expression);
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isModuleExports(node.left)) {
-      wrapCandidate ??= hocInner(node.right);
+      wrapCandidate ??= hocWrap(node.right);
     }
     // v0.2a §4: `connect(mapState, mapDispatch)(Component)`.
     const connect = reduxConnectOf(node);
@@ -1203,8 +1223,9 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   });
   // v0.2a §4: a HOC-wrapped default export stands for the local component it wraps.
   if (wrapCandidate !== undefined && !idx.symbols.some((s) => s.exportNames?.includes("default"))
-    && idx.symbols.some((s) => s.name === wrapCandidate && s.binding && (s.kind === "class" || s.kind === "function"))) {
-    idx.defaultWraps = wrapCandidate;
+    && idx.symbols.some((s) => s.name === wrapCandidate!.name && s.binding && (s.kind === "class" || s.kind === "function"))) {
+    idx.defaultWraps = wrapCandidate.name;
+    if (!wrapCandidate.known) idx.defaultWrapsConfidence = "param";
   }
   // v0.2a §4: the keys a connected component's mapDispatchToProps function returns (read like a hook's result).
   for (const c of idx.reduxConnects ?? []) {
