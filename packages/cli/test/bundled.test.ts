@@ -16,7 +16,9 @@ describe("isBundledFile", () => {
     for (const rel of ["public/app.min.js", "dist2/app.bundle.js", ".hooks/session-bundle.cjs", "x/vendor-bundle.mjs"]) {
       expect(isBundledFile(rel, NORMAL), rel).toBe(true);
     }
-    for (const rel of ["src/customer.ts", "src/bundle.ts", "src/bundler.js", "src/minify.js"]) expect(isBundledFile(rel, NORMAL), rel).toBe(false);
+    for (const rel of ["src/customer.ts", "src/bundle.ts", "src/bundler.js", "src/minify.js", "src/product-bundle.ts", "src/invoice.bundle.tsx"]) {
+      expect(isBundledFile(rel, NORMAL), rel).toBe(false);
+    }
   });
 
   it("skips a minified file: one very long line of code", () => {

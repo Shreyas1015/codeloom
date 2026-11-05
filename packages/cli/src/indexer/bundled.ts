@@ -10,8 +10,9 @@
 
 const MAX_LINE = 1_000;
 
-/** `*.min.js`, `*.bundle.js`, `*-bundle.*` (by the file's base name). */
-const BUNDLE_NAME_RE = /(?:\.min\.js|\.bundle\.js|-bundle\.[^/.]+)$/;
+/** `*.min.js`, `*.bundle.js`, `*-bundle.js` (by the file's base name), with `.js`, `.cjs` or `.mjs` only:
+ * a source file such as `product-bundle.ts` is a normal module. */
+const BUNDLE_NAME_RE = /(?:\.min|[.-]bundle)\.[cm]?js$/;
 
 /** Markers only bundler output carries. */
 const BUNDLER_MARKER_RE = /__webpack_require__|\/\*! For license information|\b__commonJS\(|\b__toESM\(/;
