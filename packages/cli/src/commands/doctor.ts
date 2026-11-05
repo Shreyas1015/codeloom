@@ -6,6 +6,7 @@ import { cacheContextKey } from "../indexer/index-repo.js";
 import { repoIndexStatus } from "../mcp/tools/workspace.js";
 import { DOCTOR_HINT, readJson, writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
+import { progressPath, readProgress } from "../store/progress.js";
 import { readEndpoints, readGraph } from "../store/read.js";
 import {
   ChainsFileSchema,
@@ -18,6 +19,7 @@ import {
   SummariesFileSchema,
   WorkspaceFileSchema,
 } from "../store/schemas.js";
+import { listTours, readTour, type StoreWorkspace, tourStaleStops } from "../store/tours.js";
 import { compare } from "../util.js";
 import { listFiles } from "../workspace/files.js";
 import { findWorkspaceRoot, loadWorkspace } from "../workspace/repos.js";
@@ -42,7 +44,7 @@ export interface DoctorReport { version: 1; items: DoctorItem[]; summary: { ok: 
 /** Check order: report items are sorted by this, then by repo id. */
 const CHECKS = [
   "git", "workspace", "config", "graph", "endpoints", "cache", "summaries",
-  "chains", "journeys", "hook", "gitignore", "mcp", "index",
+  "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index",
 ] as const;
 type Check = (typeof CHECKS)[number];
 
@@ -91,7 +93,7 @@ function gitAvailable(): boolean {
   }
 }
 
-interface WsInfo { root: string; repos: RepoRef[] | null }
+interface WsInfo { root: string; name: string; repos: RepoRef[] | null }
 
 /** The `workspace` check. Returns the root to check and the repos (null when the workspace file is
  * unusable, so no per-repo check can run), or null when there is neither a workspace nor a git repo. */
@@ -102,7 +104,7 @@ function checkWorkspace(d: Doctor, start: string): WsInfo | null {
       const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
       if (ws) {
         d.add("workspace", undefined, "ok", `${WORKSPACE_FILE}: ${ws.repos.length} repo${ws.repos.length === 1 ? "" : "s"}`);
-        return { root: wsRoot, repos: ws.repos };
+        return { root: wsRoot, name: ws.name, repos: ws.repos };
       }
     } catch (err) {
       d.add("workspace", undefined, "error", errText(err));
@@ -110,13 +112,13 @@ function checkWorkspace(d: Doctor, start: string): WsInfo | null {
         "workspace", undefined, "warn",
         `The per-repo checks (config, graph, endpoints, cache, summaries, hook, gitignore, index) were skipped until ${WORKSPACE_FILE} is fixed.`,
       );
-      return { root: wsRoot, repos: null };
+      return { root: wsRoot, name: "", repos: null };
     }
   }
   try {
     const ws = loadWorkspace(start);
     d.add("workspace", undefined, "warn", `No ${WORKSPACE_FILE} for this repo: run "codeloom init" to set it up.`);
-    return { root: ws.root, repos: ws.repos };
+    return { root: ws.root, name: ws.name, repos: ws.repos };
   } catch (err) {
     d.add("workspace", undefined, "error", errText(err));
     return null;
@@ -218,6 +220,42 @@ function checkChainsAndJourneys(d: Doctor, root: string): void {
   } catch (err) {
     d.add("journeys", undefined, "error", errText(err));
   }
+}
+
+/** The `progress` check: the personal progress file (outside the workspace) is valid or missing. A corrupt
+ * one is an error that --fix never repairs: it holds progress that cannot be regenerated. */
+function checkProgress(d: Doctor, ws: StoreWorkspace): void {
+  try {
+    const path = progressPath(ws);
+    const n = Object.keys(readProgress(ws).journeys).length;
+    d.add("progress", undefined, "ok", n === 0 ? `no progress yet (${path})` : `${n} journey${n === 1 ? "" : "s"} tracked in ${path}`);
+  } catch (err) {
+    d.add("progress", undefined, "error", errText(err));
+  }
+}
+
+/** The `tours` check: every .codeloom/tours/<journeyId>.json is valid; a tour with stops whose file changed
+ * since it was written is a warning (the tour still works; re-run write-tour to refresh it). */
+function checkTours(d: Doctor, ws: StoreWorkspace): void {
+  const ids = listTours(ws.root);
+  if (ids.length === 0) return d.add("tours", undefined, "ok", "no tours yet");
+  let valid = 0;
+  const stale: string[] = [];
+  for (const id of ids) {
+    try {
+      const tour = readTour(ws.root, id);
+      if (!tour) continue;
+      valid++;
+      const n = tourStaleStops(tour, ws).length;
+      if (n > 0) stale.push(`${id}: ${n} stop${n === 1 ? "" : "s"} may be out of date`);
+    } catch (err) {
+      d.add("tours", undefined, "error", errText(err));
+    }
+  }
+  if (stale.length > 0) {
+    return d.add("tours", undefined, "warn", `${stale.join("; ")} (run the write-tour prompt again to refresh)`);
+  }
+  if (valid > 0) d.add("tours", undefined, "ok", `${valid} tour${valid === 1 ? "" : "s"}`);
 }
 
 /** `bin`: the codeloom bin running doctor (codeloomBin()), which an installed or repaired hook runs.
@@ -323,6 +361,11 @@ export function runDoctor(start: string, opts: { fix?: boolean; bin?: string; pa
     checkSummaries(d, abs, ref.id);
   }
   checkChainsAndJourneys(d, ws.root);
+  if (ws.repos !== null) {
+    const store: StoreWorkspace = { root: ws.root, name: ws.name, repos: repos.map((ref) => ({ ref, abs: join(ws.root, ref.path) })) };
+    checkProgress(d, store);
+    d.guard("tours", undefined, () => checkTours(d, store));
+  }
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
   for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root, opts.bin, pathEnv));
   for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));

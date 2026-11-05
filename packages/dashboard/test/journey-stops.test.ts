@@ -3,6 +3,7 @@ import type { ChainView, JourneyResult, StopView } from "@/api/types";
 import { numberStops, stopFrom, stopKey } from "@/lib/journey-stops";
 import { buildJourneyModel } from "@/screens/journey/model";
 import { journeyStops } from "@/screens/map/layout";
+import { parseStopKey as cliParseStopKey, stopKey as cliStopKey } from "codeloom/src/store/stop-key.js";
 import { chainCounts } from "./fixtures/journey";
 
 const stop = (s: Partial<StopView> & Pick<StopView, "lane" | "repo" | "file" | "line" | "symbol">): StopView => ({
@@ -60,6 +61,13 @@ describe("journey stop numbering (shared by Journey and Map)", () => {
       expect(stopKey(m)).toBe(stopKey(j.view));
     }
     expect(onMap.map((m) => m.n).sort((a, b) => a - b)).toEqual(model.stops.map((s) => s.n));
+  });
+
+  it("keys stops exactly like the cli's shared stopKey (tours and progress key stops by it)", () => {
+    for (const s of [page, call, handler, write, route, read, { ...page, file: 'a "quoted"\\path.ts' }]) {
+      expect(stopKey(s)).toBe(cliStopKey(s));
+      expect(cliParseStopKey(stopKey(s))).toEqual({ lane: s.lane, repo: s.repo, file: s.file, line: s.line, symbol: s.symbol });
+    }
   });
 
   it("reads a stop's `from` only when it is a whole number", () => {

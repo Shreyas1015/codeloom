@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -11,6 +11,9 @@ import { HOOK_MARK, runInit, shellQuote } from "../src/commands/init.js";
 import { readJson, writeJsonAtomic } from "../src/store/json.js";
 import { loadWorkspace } from "../src/workspace/repos.js";
 import { RepoConfigSchema } from "../src/store/schemas.js";
+import { progressPath } from "../src/store/progress.js";
+import { stopKey } from "../src/store/stop-key.js";
+import { writeTour } from "../src/store/tours.js";
 import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 
 const REPOS = ["api", "billing", "web"];
@@ -64,6 +67,8 @@ function hashTree(root: string): Record<string, string> {
 }
 
 const nonOk = (r: DoctorReport) => r.items.filter((i) => i.status !== "ok");
+/** The first `tours` item of a doctor run. */
+const r0 = (root: string) => runDoctor(root, {}).items.find((i) => i.check === "tours")!;
 const statusOf = (r: DoctorReport, check: string, repo?: string) =>
   r.items.find((i) => i.check === check && i.repo === repo)?.status;
 
@@ -117,7 +122,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(r.summary.warn + r.summary.error + r.summary.fixed).toBe(0);
     // every documented check ran
     const checks = new Set(r.items.map((i) => i.check));
-    for (const c of ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "hook", "gitignore", "mcp", "index"]) {
+    for (const c of ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index"]) {
       expect(checks).toContain(c);
     }
     expect(r.items.filter((i) => i.check === "hook").map((i) => i.repo)).toEqual(IDS);
@@ -129,7 +134,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
 
   it("orders items by check order, then repo id", () => {
     const r = runDoctor(healthy, {});
-    const order = ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "hook", "gitignore", "mcp", "index"];
+    const order = ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index"];
     const keys = r.items.map((i) => [order.indexOf(i.check), i.repo ?? ""] as const);
     const sorted = [...keys].sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
     expect(keys).toEqual(sorted);
@@ -250,6 +255,48 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(r.items.find((i) => i.check === "journeys")!.message).toMatch(/duplicate journey id j_0123456789ab/);
     expect(readFileSync(path, "utf8")).toBe(text);
     expect((await cli(root, [])).code).toBe(1);
+  });
+
+  it("reports a corrupt progress file as an error and never touches it, even with --fix", () => {
+    const root = shop();
+    const ws = loadWorkspace(root);
+    const path = progressPath({ root, name: ws.name, repos: ws.repos.map((ref) => ({ ref, abs: join(root, ref.path) })) });
+    expect(statusOf(runDoctor(root, {}), "progress")).toBe("ok");
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "{ nope");
+    const r = runDoctor(root, { fix: true });
+    const item = r.items.find((i) => i.check === "progress")!;
+    expect(item.status).toBe("error");
+    expect(item.message).toContain(path);
+    expect(item.fix).toBeUndefined();
+    expect(readFileSync(path, "utf8")).toBe("{ nope");
+    rmSync(path);
+  });
+
+  it("checks tours: valid, stale stops counted, invalid files reported", () => {
+    const root = shop();
+    expect(r0(root)).toMatchObject({ status: "ok", message: "no tours yet" });
+    const ws = loadWorkspace(root);
+    const repos = ws.repos.map((ref) => ({ ref, abs: join(root, ref.path) }));
+    const key = stopKey({ lane: "code", repo: "demo-api", file: "package.json", line: 1, symbol: "x" });
+    const check = [1, 2, 3].map((n) => ({ question: `q${n}`, expected: ["p"] }));
+    writeTour(root, "j_0123456789ab", {
+      stops: [{ chainId: "ch_x", stopIndex: 0, key, explanation: "" }],
+      dataJourney: { input: "", steps: [], output: "" },
+      fileNotes: [],
+      check,
+    }, { ws: { repos } });
+    expect(r0(root)).toMatchObject({ status: "ok", message: "1 tour" });
+    writeFileSync(join(root, "api", "package.json"), readFileSync(join(root, "api", "package.json"), "utf8") + "\n");
+    const stale = r0(root);
+    expect(stale.status).toBe("warn");
+    expect(stale.message).toMatch(/j_0123456789ab: 1 stop may be out of date/);
+    writeFileSync(join(root, ".codeloom", "tours", "j_00000000beef.json"), "{}");
+    const r = runDoctor(root, { fix: true });
+    const bad = r.items.filter((i) => i.check === "tours" && i.status === "error");
+    expect(bad).toHaveLength(1);
+    expect(bad[0]!.message).toContain("j_00000000beef.json");
+    expect(readFileSync(join(root, ".codeloom", "tours", "j_00000000beef.json"), "utf8")).toBe("{}");
   });
 
   it("warns about orphaned journeys, naming them", async () => {
