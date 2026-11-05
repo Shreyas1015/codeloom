@@ -378,6 +378,21 @@ function modifierExportNames(node: ts.Node, name: string): string[] {
   return isExported(node) ? [isDefaultExport(node) ? "default" : name] : [];
 }
 
+/** A TS overload signature (`find(id: number): X;` / `function find(id: number): X;`) whose implementation — a
+ * same-named declaration with a body — sits beside it: the implementation alone is the symbol, so a method
+ * node spans the code that runs and the name stays unambiguous. A bodiless declaration with no implementation
+ * (an abstract method, an ambient `declare function`) is still a symbol. */
+function isOverloadSignature(node: ts.Node): boolean {
+  if (!(ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) || node.body || !node.name) return false;
+  const name = node.name.getText();
+  const p = node.parent;
+  const siblings: readonly ts.Node[] = ts.isClassLike(p) ? p.members
+    : ts.isObjectLiteralExpression(p) ? p.properties
+    : ts.isSourceFile(p) || ts.isModuleBlock(p) || ts.isBlock(p) ? p.statements : [];
+  return siblings.some((m) => m !== node && (ts.isMethodDeclaration(m) || ts.isFunctionDeclaration(m)) && m.body !== undefined
+    && m.name !== undefined && m.name.getText() === name);
+}
+
 /** Symbol for a function-like node already named by functionLikeName (the adapters' naming rule). */
 function functionSymbol(node: ts.Node, name: string): CodeSymbol {
   const own: [number, number] = [lineOf(node), endLineOf(node)];
@@ -998,7 +1013,7 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
-    if (fnName !== undefined) {
+    if (fnName !== undefined && !isOverloadSignature(node)) {
       const sym = functionSymbol(node, fnName);
       idx.symbols.push(sym);
       if (sym.kind === "function" && sym.binding && ts.isFunctionLike(node) && "body" in node && !fnNodes.has(fnName)) {

@@ -193,4 +193,23 @@ export function save() { return saveCustomer(); }
     }]);
     expect(JSON.stringify(enrichGraph(out, index, resolver))).toBe(JSON.stringify(out));
   });
+
+  it("a TS overloaded method's node spans its implementation, not the first signature", async () => {
+    const F = "app/services/invoice_finder.ts";
+    const { graph, index, resolver } = await setup({
+      [F]: `export class InvoiceFinder {
+  find(id: number): string;
+  find(id: string): string;
+  find(id: number | string): string {
+    return this.format(id);
+  }
+  format(id: number | string) { return String(id); }
+}
+`,
+    });
+    expect(index.get(F)!.symbols.filter((s) => s.name === "InvoiceFinder.find").map((s) => s.lines)).toEqual([[4, 6]]);
+    const out = enrichGraph(graph, index, resolver);
+    expect(out.nodes.find((n) => n.id === `function:${F}:InvoiceFinder.find`)).toMatchObject({ lineRange: [4, 6] });
+    expect(out.edges).toContainEqual(expect.objectContaining({ source: `function:${F}:InvoiceFinder.find`, target: `function:${F}:InvoiceFinder.format`, description: "exact" }));
+  });
 });
