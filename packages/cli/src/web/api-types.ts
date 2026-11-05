@@ -269,15 +269,16 @@ export interface NodeResult {
   journeys: Array<{ id: string; name: string }>;
 }
 
-/** How sure a resolved `calls` edge is: `exact` (the callee is known) or `param` (known up to a path param). */
-export type CallConfidence = "exact" | "param";
+/** How sure a `calls` edge is: `exact` (a direct call the resolver followed), `param` (likely: the function is passed
+ * or wired, not called directly), or `unverified` (tree-sitter matched it by name in a file the resolver does not index). */
+export type CallConfidence = "exact" | "param" | "unverified";
 
 export interface Neighbor {
   ref: string;
   name: string;
   type: string;
   depth: number;
-  /** `confidence` only when reached by a `calls` edge from a resolved call (v0.2a). */
+  /** `confidence` only when reached by a `calls` edge (v0.2a): exact, param, or unverified. */
   via: { type: string; direction: "in" | "out"; confidence?: CallConfidence };
 }
 

@@ -102,11 +102,12 @@ describe("enrichGraph", () => {
     const before = structuredClone(graph);
     const out = enrichGraph(graph, index, resolver);
     expect(out.nodes.slice(0, before.nodes.length)).toEqual(before.nodes);
-    expect(out.edges.slice(0, before.edges.length)).toEqual(before.edges);
+    expect(out.edges.slice(0, before.edges.length).filter((e) => e.type !== "calls")).toEqual(before.edges.filter((e) => e.type !== "calls"));
     expect(graph).toEqual(before); // input not mutated
     const H = "app/lib/helpers.ts";
     const shout = out.edges.filter((e) => e.type === "calls" && e.source === `function:${H}:shout` && e.target === `function:${H}:formatName`);
-    expect(shout).toHaveLength(1);
+    // the tree-sitter edge, confirmed by the resolver: kept in place with its confidence
+    expect(shout).toEqual([{ ...before.edges.find((e) => e.type === "calls" && e.source === `function:${H}:shout`)!, weight: 1, description: "exact" }]);
     expect(() => KnowledgeGraphSchema.parse(out)).not.toThrow();
     expect(out.layers).toEqual(before.layers);
   });
@@ -130,7 +131,7 @@ describe("enrichGraph", () => {
     };
     const fi = index.get(C)!;
     const dup = new Map(index);
-    dup.set(C, { ...fi, calls: [...fi.calls, ...fi.calls.map((s) => ({ ...s, line: s.line === 7 ? 99 : s.line }))] });
+    dup.set(C, { ...fi, calls: [...fi.calls, ...fi.calls.map((s) => ({ ...s, line: s.line === 7 ? 8 : s.line }))] });
     const out = enrichGraph(graph, dup, fake);
     const edges = out.edges.filter((e) => e.type === "calls" && e.source === `function:${C}:CustomersController.store`);
     expect(edges).toHaveLength(1);
@@ -157,5 +158,39 @@ module.exports = { Customer, Invoice };
     const calls = out.edges.filter((e) => e.type === "calls").map((e) => `${e.source} -> ${e.target}`);
     // only the first class's save calls check; the second's save calls nothing
     expect(calls).toEqual([`function:${A}:<anonymous@L1>.save -> function:${A}:<anonymous@L1>.check`]);
+  });
+
+  it("sets confidence on a tree-sitter calls edge the resolver confirms; drops JS/TS ones it does not (nested submit)", async () => {
+    const F = "app/forms/customer_form.ts";
+    const { graph, index, resolver } = await setup({
+      [F]: `function saveCustomer() { return 1; }
+function submit() { return 2; }
+export function useCustomerForm() {
+  function submit() { return saveCustomer(); }
+  return { submit };
+}
+export function save() { return saveCustomer(); }
+`,
+    });
+    // tree-sitter names the nested submit like the top-level one and gives the top-level node its edge
+    expect(graph.edges).toContainEqual(expect.objectContaining({ source: `function:${F}:submit`, target: `function:${F}:saveCustomer`, type: "calls" }));
+    const out = enrichGraph(graph, index, resolver);
+    const calls = out.edges.filter((e) => e.type === "calls");
+    expect(calls.some((e) => e.source === `function:${F}:submit`)).toBe(false);
+    expect(calls).toContainEqual({
+      source: `function:${F}:save`, target: `function:${F}:saveCustomer`, type: "calls", direction: "forward", weight: 1, description: "exact",
+    });
+    for (const e of calls) expect(["exact", "param"]).toContain(e.description);
+  });
+
+  it("keeps tree-sitter calls edges between files the resolver does not index, tagged unverified", async () => {
+    const P = "app/jobs/invoice_job.py";
+    const { graph, index, resolver } = await setup({ [P]: "def send_invoice():\n    return render_invoice()\n\ndef render_invoice():\n    return 1\n" });
+    index.delete(P);
+    const out = enrichGraph(graph, index, resolver);
+    expect(out.edges.filter((e) => e.type === "calls")).toEqual([{
+      source: `function:${P}:send_invoice`, target: `function:${P}:render_invoice`, type: "calls", direction: "forward", weight: 0.3, description: "unverified",
+    }]);
+    expect(JSON.stringify(enrichGraph(out, index, resolver))).toBe(JSON.stringify(out));
   });
 });

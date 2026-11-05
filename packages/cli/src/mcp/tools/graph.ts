@@ -175,10 +175,13 @@ function chainsAndJourneys(state: MapState, ref: { repo: string; nodeId: string 
 
 const EDGE_CAP = 100;
 
-/** v0.2a: a `calls` edge added from a resolved call carries its confidence in `description`; tree-sitter's
- * own calls edges (and every other edge type) have none. */
-function callConfidence(e: GraphEdge): { confidence?: "exact" | "param" } {
-  return e.type === "calls" && (e.description === "exact" || e.description === "param") ? { confidence: e.description } : {};
+type CallConfidence = "exact" | "param" | "unverified";
+
+/** v0.2a: a `calls` edge carries its confidence in `description`: `exact` / `param` when the resolver confirmed it,
+ * `unverified` for a tree-sitter name match in a file the resolver does not index. Other edge types have none. */
+function callConfidence(e: GraphEdge): { confidence?: CallConfidence } {
+  return e.type === "calls" && (e.description === "exact" || e.description === "param" || e.description === "unverified")
+    ? { confidence: e.description } : {};
 }
 
 /** get_node: one graph node, its saved summary, its edges (≤ 100 each way), and the chains and
@@ -220,7 +223,7 @@ interface Neighbor {
   name: string;
   type: string;
   depth: number;
-  via: { type: string; direction: "in" | "out"; confidence?: "exact" | "param" };
+  via: { type: string; direction: "in" | "out"; confidence?: CallConfidence };
 }
 
 /** Breadth-first walk over one repo's graph edges. Each node keeps the depth (and edge) it was first
@@ -229,7 +232,7 @@ interface Neighbor {
 function neighbors(repo: RepoData, rootId: string, args: Required<Omit<NeighborsArgs, "node" | "edgeTypes">> & { edgeTypes?: string[] }) {
   const types = args.edgeTypes && args.edgeTypes.length > 0 ? new Set(args.edgeTypes) : undefined;
   const nodes = new Map(repo.graph.nodes.map((n) => [n.id, n]));
-  type Step = { other: string; type: string; direction: "in" | "out"; confidence?: "exact" | "param" };
+  type Step = { other: string; type: string; direction: "in" | "out"; confidence?: CallConfidence };
   const adj = new Map<string, Step[]>();
   const push = (from: string, other: string, e: GraphEdge, direction: "in" | "out") => {
     const list = adj.get(from) ?? [];
@@ -387,7 +390,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
       title: "Get node",
       description:
         "One graph node (file, function or class): its type, name, file, lines and layer, its saved summary, its " +
-        "incoming and outgoing edges (a resolved `calls` edge carries its `confidence`: exact or param), and the request chains and journeys it takes part in.",
+        "incoming and outgoing edges (a `calls` edge carries its `confidence`: exact, param = likely (passed or wired, not a direct call), or unverified = matched by name only, not checked), and the request chains and journeys it takes part in.",
       inputSchema: { node: nodeArg },
     },
     withErrors((args: { node: string }) => getNode(opts.start, args.node), "Call get_neighbors with a limit for its edges, or list_chains for its chains."),
@@ -400,7 +403,7 @@ export function registerGraphTools(server: McpServer, opts: ServerOptions): void
       description:
         "The nodes around one node, up to `depth` hops away (1-3), following edges in `direction` " +
         '("out" = what it contains/imports/calls, "in" = what contains/imports/calls it). Optionally only some edge types. ' +
-        "A neighbor reached by a resolved `calls` edge has `via.confidence` (exact or param).",
+        "A neighbor reached by a `calls` edge has `via.confidence` (exact, param = likely, or unverified = matched by name only).",
       inputSchema: {
         node: nodeArg,
         direction: z.enum(["in", "out", "both"]).default("both"),

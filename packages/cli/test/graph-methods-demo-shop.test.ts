@@ -42,6 +42,12 @@ describe("graph.json method nodes on demo-shop (v0.2a §1)", () => {
       const g = JSON.parse(read(root, repo)) as { edges: Array<{ type: string; description?: string }> };
       expect(g.edges.filter((e) => e.type === "calls" && e.description === "guess")).toEqual([]);
     }
+    // every JS/TS calls edge carries the resolver's confidence (tree-sitter edges included)
+    for (const repo of ["api", "billing", "web"]) {
+      const g = JSON.parse(read(root, repo)) as { edges: Array<{ type: string; source: string; description?: string }> };
+      const js = g.edges.filter((e) => e.type === "calls" && /\.(m|c)?(t|j)sx?:/.test(e.source));
+      for (const e of js) expect(["exact", "param"], `${repo} ${e.source}`).toContain(e.description);
+    }
   });
 
   it("lists methods on the Map's file cards (GraphLevel.files[].functions)", async () => {

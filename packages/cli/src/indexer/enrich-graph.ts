@@ -6,6 +6,8 @@ import { compare } from "../util.js";
 /** Edge weight per resolved-call confidence. Only these two become `calls` edges: a `guess` never does. */
 const WEIGHT = { exact: 1, param: 0.6 } as const;
 type EdgeConfidence = keyof typeof WEIGHT;
+/** Weight of a tree-sitter `calls` edge the resolver cannot check (a file it does not index). */
+const UNVERIFIED_WEIGHT = 0.3;
 
 const fnId = (file: string, symbol: string) => `function:${file}:${symbol}`;
 
@@ -13,9 +15,11 @@ const fnId = (file: string, symbol: string) => `function:${file}:${symbol}`;
  * v0.2a §1: add what the linker's code index knows to a repo's graph.json — a `function` node per class
  * method / object-literal method (`function:<file>:<Class.method>`, tag "method"), `contains` edges from
  * its file (and from its class node when one exists), and a `calls` edge per caller→callee pair the
- * resolver resolves `exact` or `param` (never `guess`), between function nodes of this repo.
+ * resolver resolves `exact` or `param` (never `guess`), between function nodes of this repo. Existing tree-sitter
+ * `calls` edges are checked against the resolver: confirmed ones get its confidence, unconfirmed ones between two
+ * indexed (JS/TS) files are dropped, and ones touching an unindexed file stay as `description: "unverified"`.
  *
- * Pure: the input graph is not mutated. Existing nodes and edges keep their order and content; new nodes
+ * Pure: the input graph is not mutated. Existing nodes and non-calls edges keep their order and content; new nodes
  * and edges are appended in a fixed order (nodes by id; contains edges by target; calls edges by source,
  * target), so the output is a deterministic function of graph + code index. Idempotent: enriching an
  * enriched graph adds nothing. Layers are unchanged — they list file nodes only, and a method belongs to
@@ -46,7 +50,11 @@ export function enrichGraph(graph: KnowledgeGraph, codeIndex: RepoCodeIndex, res
     }
   }
 
-  // Best confidence per (caller, callee) pair.
+  // Best confidence per (caller, callee) pair the resolver confirms. The call must sit inside the caller node's
+  // lines: a nested `function submit()` shares its name with a top-level `submit`, and only its own node may
+  // carry its calls.
+  const rangeOf = new Map(graph.nodes.map((n) => [n.id, n.lineRange]));
+  for (const n of newNodes) rangeOf.set(n.id, n.lineRange);
   const best = new Map<string, { source: string; target: string; confidence: EdgeConfidence }>();
   for (const file of files) {
     for (const site of codeIndex.get(file)!.calls) {
@@ -55,17 +63,35 @@ export function enrichGraph(graph: KnowledgeGraph, codeIndex: RepoCodeIndex, res
       const source = fnId(file, site.caller);
       const target = fnId(rc.target.file, rc.target.symbol);
       if (!ids.has(source) || !ids.has(target)) continue;
+      const range = rangeOf.get(source);
+      if (range && (site.line < range[0] || site.line > range[1])) continue;
       const key = `calls|${source}|${target}`;
-      if (edgeKeys.has(key)) continue; // an existing calls edge (or one added before) stays as it is
       const prev = best.get(key);
       if (!prev || (prev.confidence === "param" && rc.confidence === "exact")) best.set(key, { source, target, confidence: rc.confidence });
     }
   }
-  const newCalls: GraphEdge[] = [...best.values()]
+
+  // Existing (tree-sitter) calls edges: the resolver is the authority for the files it indexes. A confirmed edge
+  // takes its confidence; an unconfirmed one between two indexed files is dropped (tree-sitter matches callers by
+  // bare name, so a nested `submit` lends its calls to a top-level `submit`); one touching a file the resolver
+  // does not index (another language) stays, tagged "unverified".
+  const fileOf = new Map(graph.nodes.map((n) => [n.id, n.filePath]));
+  const indexed = (id: string) => { const f = fileOf.get(id); return f !== undefined && codeIndex.has(f); };
+  const kept: GraphEdge[] = [];
+  for (const e of graph.edges) {
+    if (e.type !== "calls") { kept.push(e); continue; }
+    const hit = best.get(`calls|${e.source}|${e.target}`);
+    if (hit) kept.push({ ...e, weight: WEIGHT[hit.confidence], description: hit.confidence });
+    else if (!indexed(e.source) || !indexed(e.target)) kept.push({ ...e, weight: UNVERIFIED_WEIGHT, description: "unverified" });
+  }
+
+  const newCalls: GraphEdge[] = [...best.entries()]
+    .filter(([key]) => !edgeKeys.has(key))
+    .map(([, c]) => c)
     .sort((a, b) => compare(a.source, b.source) || compare(a.target, b.target))
     .map((c) => ({ source: c.source, target: c.target, type: "calls", direction: "forward", weight: WEIGHT[c.confidence], description: c.confidence }));
 
   newNodes.sort((a, b) => compare(a.id, b.id));
   newContains.sort((a, b) => compare(a.target, b.target) || compare(a.source, b.source));
-  return { ...graph, nodes: [...graph.nodes, ...newNodes], edges: [...graph.edges, ...newContains, ...newCalls] };
+  return { ...graph, nodes: [...graph.nodes, ...newNodes], edges: [...kept, ...newContains, ...newCalls] };
 }
