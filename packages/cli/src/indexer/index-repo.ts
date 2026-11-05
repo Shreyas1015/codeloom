@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
 import { JS_EXT, parseSource } from "../adapters/ast.js";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
-import type { EndpointsPart, ParsedFile } from "../adapters/types.js";
+import { emptyPart, type EndpointsPart, type ParsedFile } from "../adapters/types.js";
 import { CodeloomError } from "../errors.js";
 import { buildFileCodeIndex, type FileCodeIndex, type RepoCodeIndex } from "../linker/code-index.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
@@ -16,6 +16,7 @@ import { listFiles } from "../workspace/files.js";
 import { git } from "../workspace/git.js";
 import { gitHead } from "../workspace/repos.js";
 import { buildGraph } from "./build-graph.js";
+import { isBundledFile } from "./bundled.js";
 import { type Alias, loadAliases, resolveImport } from "./resolve-imports.js";
 import { analyzeStructure, EMPTY_STRUCTURE, type FileEntry, getPlugin, isSourceFile } from "./structure.js";
 
@@ -23,7 +24,7 @@ const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 28;
+export const CACHE_FORMAT = 29;
 
 /** The key a fingerprints cache must carry to be reused: CACHE_FORMAT, the codeloom version and the
  * repo's dependency context (loadContext(...).key). A cache with any other key is discarded. */
@@ -133,6 +134,17 @@ export async function indexRepo(
       if (hit && hit.hash === hash && hit.codeIndex) {
         record = hit;
         stats.reused++;
+      } else if (isBundledFile(rel, content)) {
+        // Bundled/minified build output: a file node from its structure, but no call, method or
+        // endpoint analysis — its packed modules would only make wrong edges (see bundled.ts).
+        record = {
+          hash,
+          structure: analyzeStructure(plugin, rel, content).structure,
+          calls: [],
+          endpoints: emptyPart(),
+          codeIndex: buildFileCodeIndex({ rel, content, sf: undefined }),
+        };
+        stats.parsed++;
       } else {
         record = {
           hash,

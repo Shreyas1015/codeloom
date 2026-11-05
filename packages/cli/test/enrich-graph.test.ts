@@ -136,4 +136,26 @@ describe("enrichGraph", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0]).toMatchObject({ description: "exact", weight: 1 });
   });
+
+  it("gives two anonymous classes in one file their own method nodes and their own calls edges", async () => {
+    const A = "app/hooks/register.js";
+    const { graph, index, resolver } = await setup({
+      [A]: `const Customer = class {
+  save() { return this.check(); }
+  check() { return 1; }
+};
+const Invoice = class {
+  save() { return 2; }
+  check() { return 3; }
+};
+module.exports = { Customer, Invoice };
+`,
+    });
+    const out = enrichGraph(graph, index, resolver);
+    const methods = out.nodes.filter((n) => n.filePath === A && n.tags.includes("method")).map((n) => n.name);
+    expect(methods).toEqual(["<anonymous@L1>.check", "<anonymous@L1>.save", "<anonymous@L5>.check", "<anonymous@L5>.save"]);
+    const calls = out.edges.filter((e) => e.type === "calls").map((e) => `${e.source} -> ${e.target}`);
+    // only the first class's save calls check; the second's save calls nothing
+    expect(calls).toEqual([`function:${A}:<anonymous@L1>.save -> function:${A}:<anonymous@L1>.check`]);
+  });
 });

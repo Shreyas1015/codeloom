@@ -84,6 +84,14 @@ describe("IgnoreFilter", () => {
       expect(filter.isIgnored(".idea/workspace.xml")).toBe(true);
       expect(filter.isIgnored(".vscode/settings.json")).toBe(true);
     });
+
+    it("ignores AI tool config folders (.claude/, .cursor/)", () => {
+      const filter = createIgnoreFilter(testDir);
+      expect(filter.isIgnored(".claude/hooks/session-start.cjs")).toBe(true);
+      expect(filter.isIgnored(".cursor/rules/customer.mdc")).toBe(true);
+      expect(filter.isIgnored("apps/web/.claude/settings.json")).toBe(true);
+      expect(filter.isIgnored("src/claude/customer.ts")).toBe(false);
+    });
   });
 
   describe("createIgnoreFilter with user .understandignore", () => {

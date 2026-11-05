@@ -220,4 +220,27 @@ describe("indexRepo in a monorepo", () => {
     expect(effs).toHaveLength(2);
     expect(effs.every((e) => e.mountsKnown)).toBe(true);
   });
+
+  it("keeps a bundled file as a file node but gives it no code index, call edges or endpoints", async () => {
+    const bundle = [
+      `var __commonJS = (cb, mod) => function () { return mod; };`,
+      `var require_app = __commonJS({ "app.js"(exports, module) {`,
+      `  const express = require("express"); const app = express();`,
+      `  app.get("/bundled", (_q, r) => r.json({}));`,
+      `  module.exports = class { save() { return this.check(); } check() { return 1; } };`,
+      `} });`,
+      `function boot() { return start(); }`,
+      `function start() { return 1; }`,
+    ].join("\n");
+    const repo = makeRepo({ ...files, "tools/run-bundle.cjs": bundle, "src/hooks.js": bundle.replaceAll("__commonJS", "commonJs") });
+    const res = await indexRepo(repo, "svc");
+    const B = "tools/run-bundle.cjs";
+    expect(res.graph.nodes.some((n) => n.id === `file:${B}`)).toBe(true);
+    expect(res.codeIndex.get(B)).toEqual({ symbols: [], imports: [], reExports: [], classFields: [], localNews: [], calls: [] });
+    expect(res.graph.edges.some((e) => e.type === "calls" && e.source.includes(B))).toBe(false);
+    expect(res.endpoints.routes.filter((r) => r.path === "/bundled").map((r) => r.at.file)).toEqual(["src/hooks.js"]);
+    expect(res.stats.skipped.some((s) => s.file === B)).toBe(false);
+    // a near-identical file without the bundler marker is analysed as normal
+    expect(res.codeIndex.get("src/hooks.js")!.symbols.length).toBeGreaterThan(0);
+  });
 });

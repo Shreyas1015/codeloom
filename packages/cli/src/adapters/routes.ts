@@ -3,7 +3,7 @@ import type { HttpMethod, Route } from "../store/schemas.js";
 import type { RouterDef } from "../store/schemas.js";
 import { compare } from "../util.js";
 import {
-  APP_FACTORY_RE, enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, routerFactoryRoot,
+  APP_FACTORY_RE, className, enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, routerFactoryRoot,
   stringValue, unwrapRouterChain, walk,
 } from "./ast.js";
 import { type AdapterContext, packageRelative, type MountDraft, type ParsedFile, type RouteDraft } from "./types.js";
@@ -334,7 +334,7 @@ function nestRoutes(cls: ts.ClassDeclaration, file: ParsedFile): Route[] {
   if (controller.arg) {
     base = stringValue(controller.arg) ?? (ts.isObjectLiteralExpression(controller.arg) ? (stringValue(prop(controller.arg, "path")) ?? "") : "");
   }
-  const clsName = cls.name?.text ?? "<anonymous>";
+  const clsName = className(cls);
   const out: Route[] = [];
   for (const member of cls.members) {
     if (!ts.isMethodDeclaration(member)) continue;

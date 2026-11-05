@@ -60,6 +60,10 @@ export const DEFAULT_IGNORE_PATTERNS: string[] = [
   ".idea/",
   ".vscode/",
 
+  // AI tool config (hooks, rules): tool setup, not app code
+  ".claude/",
+  ".cursor/",
+
   // Misc
   "LICENSE",
   ".gitignore",

@@ -472,7 +472,7 @@ module.exports.Klass = class {};
 `));
     expect(idx.symbols.map((s) => [s.name, s.binding])).toEqual([
       ["decl", true], ["arrow", true], ["fexpr", true], ["Repo", true], ["Repo.m", true],
-      ["svc.a", true], ["cjs", false], ["main", false], ["named", false], ["<anonymous>", false],
+      ["svc.a", true], ["cjs", false], ["main", false], ["named", false], ["<anonymous@L10>", false],
     ]);
     const def = buildFileCodeIndex(parsed("src/y.ts", `export default () => {};`));
     expect(def.symbols.map((s) => [s.name, s.binding])).toEqual([["default", false]]);
@@ -673,5 +673,42 @@ export default function PostDetails({ id }: { id: number }) {
 `)).calls;
     expect(calls.find((c) => c.callee.kind === "ident" && c.callee.name === "destroy")).toMatchObject({ caller: "PostDetails", line: 4 });
     expect(calls.some((c) => c.kind === "jsx-ref")).toBe(false);
+  });
+});
+
+describe("buildFileCodeIndex — anonymous classes never merge (v0.2a bundled-file fix)", () => {
+  it("names each anonymous class expression by its line, so two never share a symbol", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.js", `const Customer = class {
+  save() { return this.check(); }
+  check() { return 1; }
+};
+register(class {
+  save() { return this.check(); }
+  check() { return 2; }
+});
+module.exports = class {
+  pay() { return 3; }
+};
+`));
+    expect(idx.symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["<anonymous@L1>", "class"], ["<anonymous@L1>.save", "method"], ["<anonymous@L1>.check", "method"],
+      ["<anonymous@L5>", "class"], ["<anonymous@L5>.save", "method"], ["<anonymous@L5>.check", "method"],
+      ["<anonymous@L9>", "class"], ["<anonymous@L9>.pay", "method"],
+    ]);
+    expect(idx.symbols.find((s) => s.name === "<anonymous@L9>")).toMatchObject({ exported: true, exportedAs: "default" });
+    expect(idx.calls.filter((c) => c.callee.kind === "this").map((c) => c.caller)).toEqual(["<anonymous@L1>.save", "<anonymous@L5>.save"]);
+  });
+
+  it("adds the column when two anonymous classes start on the same line", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.js", `a(class { m() {} }); b(class { m() {} });`));
+    expect(idx.symbols.map((s) => s.name)).toEqual(["<anonymous@L1:C3>", "<anonymous@L1:C3>.m", "<anonymous@L1:C24>", "<anonymous@L1:C24>.m"]);
+  });
+
+  it("keeps <anonymous> for the module's one export default class", () => {
+    const idx = buildFileCodeIndex(parsed("src/x.ts", `export default class {
+  run() { return new (class { go() {} })(); }
+}
+`));
+    expect(idx.symbols.map((s) => s.name)).toEqual(["<anonymous>", "<anonymous>.run", "<anonymous@L2>", "<anonymous@L2>.go"]);
   });
 });

@@ -138,6 +138,15 @@ describe("listFiles", () => {
     expect(listFiles(repo)).toEqual(["src/a.ts", "src/new.ts"]);
   });
 
+  it("skips AI tool config folders (.claude/, .cursor/) by default", () => {
+    const repo = makeRepo({
+      "src/customer.ts": "export const c = 1;",
+      ".claude/hooks/session-start.cjs": "module.exports = class {};",
+      ".cursor/rules/invoice.mdc": "x",
+    });
+    expect(listFiles(repo)).toEqual(["src/customer.ts"]);
+  });
+
   it("applies extra ignore patterns", () => {
     const repo = makeRepo({ "src/a.ts": "", "scripts/b.ts": "" });
     expect(listFiles(repo, ["scripts/"])).toEqual(["src/a.ts"]);

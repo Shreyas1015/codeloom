@@ -126,8 +126,43 @@ function memberName(name: ts.Node | undefined): string {
   return name.getText();
 }
 
+/** Names for a file's nameless classes, computed once per source file (see className). */
+const anonymousNames = new WeakMap<ts.SourceFile, Map<ts.Node, string>>();
+
+/**
+ * A class's symbol name. A named class keeps its name. A nameless class gets a name unique in its file,
+ * so two of them never merge into one symbol (and one graph node with the other's calls):
+ *  - the module's `export default class {}` is "<anonymous>" (a file has at most one default export);
+ *  - every other one (`const X = class {}`, `f(class {})`, `module.exports = class {}`, a second default)
+ *    is "<anonymous@L12>" by the line it starts on, or "<anonymous@L12:C5>" (1-based column) when another
+ *    nameless class starts on the same line.
+ * The name is a pure function of the file's text, so it is the same across runs.
+ */
 export function className(cls: ts.ClassLikeDeclaration): string {
-  return cls.name?.text ?? "<anonymous>";
+  if (cls.name) return cls.name.text;
+  const sf = cls.getSourceFile();
+  let names = anonymousNames.get(sf);
+  if (!names) {
+    names = new Map();
+    const anon: ts.ClassLikeDeclaration[] = [];
+    walk(sf, (n) => {
+      if (ts.isClassLike(n) && !n.name) anon.push(n);
+    });
+    const perLine = new Map<number, number>();
+    for (const c of anon) perLine.set(lineOf(c), (perLine.get(lineOf(c)) ?? 0) + 1);
+    let defaultTaken = false;
+    for (const c of anon) {
+      if (ts.isClassDeclaration(c) && !defaultTaken) {
+        defaultTaken = true;
+        names.set(c, "<anonymous>");
+        continue;
+      }
+      const pos = sf.getLineAndCharacterOfPosition(c.getStart(sf));
+      names.set(c, perLine.get(pos.line + 1)! > 1 ? `<anonymous@L${pos.line + 1}:C${pos.character + 1}>` : `<anonymous@L${pos.line + 1}>`);
+    }
+    anonymousNames.set(sf, names);
+  }
+  return names.get(cls) ?? "<anonymous>";
 }
 
 /** Is `expr` the expression `module.exports`? */
