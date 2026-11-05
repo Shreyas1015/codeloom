@@ -998,3 +998,22 @@ describe("H4: no guesses from built-in method names or test files", () => {
     expect(siteAt(resolver, "src/__tests__/a.test.ts", "t")).toMatchObject({ target: { symbol: "makeCustomer" }, confidence: "exact" });
   });
 });
+
+describe("this inside a nested function() {} is rebound (final review §7)", () => {
+  it("this.check() in a function expression inside a method is never exact via the class; an arrow keeps the class", () => {
+    const r = resolverOf({
+      "services/customer.ts": [
+        "export class CustomerService {",
+        "  saveAll(items: unknown[]) {",
+        "    items.forEach(function (x) { this.checkInvoice(x); });",
+        "    items.forEach((x) => this.checkInvoice(x));",
+        "  }",
+        "  checkInvoice(x: unknown) { return x; }",
+        "}",
+      ].join("\n"),
+    });
+    const calls = r.callsFrom(ref("services/customer.ts", "CustomerService.saveAll")).map((c) => `${c.site.line}:${c.target.symbol} (${c.confidence})`);
+    expect(calls).toContain("4:CustomerService.checkInvoice (exact)");
+    expect(calls.filter((c) => c.startsWith("3:")).every((c) => !c.endsWith("(exact)"))).toBe(true);
+  });
+});

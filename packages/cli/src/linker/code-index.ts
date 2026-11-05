@@ -77,8 +77,10 @@ export type Callee =
     props?: string;
   }
   | { kind: "new-member"; className: string; prop: string }
-  | { kind: "this"; prop: string }
-  | { kind: "this-field"; field: string; prop: string }
+  /** `rebound`: the `this` sits in a nested `function () {}` (not an arrow) inside its caller, so it is not the
+   * caller's class or object (final review §7). */
+  | { kind: "this"; prop: string; rebound?: true }
+  | { kind: "this-field"; field: string; prop: string; rebound?: true }
   | { kind: "other"; prop?: string; receiver?: string[] };
 
 export interface CallSite {
@@ -303,6 +305,18 @@ function receiverTypeOf(id: ts.Identifier): string | undefined {
   return undefined;
 }
 
+/** `this` inside a nested `function () {}` that is not itself a symbol (`items.forEach(function () { this.x(); })`):
+ * that function binds its own `this`, so the caller's class or object is not it. Arrows are transparent; the first
+ * non-arrow function decides. A named function expression or declaration is its own caller symbol already. */
+function thisRebound(thisNode: ts.Node): boolean {
+  for (let cur = thisNode.parent; cur && !ts.isSourceFile(cur); cur = cur.parent) {
+    if (ts.isArrowFunction(cur)) continue;
+    if (ts.isFunctionExpression(cur)) return functionLikeName(cur) === undefined;
+    if (ts.isFunctionLike(cur) || ts.isClassLike(cur)) return false;
+  }
+  return false;
+}
+
 function classify(expr: ts.Expression): Callee {
   if (ts.isIdentifier(expr)) {
     const hook = hookKeyOf(expr);
@@ -311,9 +325,10 @@ function classify(expr: ts.Expression): Callee {
   if (ts.isPropertyAccessExpression(expr)) {
     const prop = expr.name.text;
     const obj = expr.expression;
-    if (obj.kind === ts.SyntaxKind.ThisKeyword) return { kind: "this", prop };
+    if (obj.kind === ts.SyntaxKind.ThisKeyword) return thisRebound(obj) ? { kind: "this", prop, rebound: true } : { kind: "this", prop };
     if (ts.isPropertyAccessExpression(obj) && obj.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      return { kind: "this-field", field: obj.name.text, prop };
+      const field = obj.name.text;
+      return thisRebound(obj.expression) ? { kind: "this-field", field, prop, rebound: true } : { kind: "this-field", field, prop };
     }
     const newClass = newExpressionClass(obj);
     if (newClass) return { kind: "new-member", className: newClass, prop };

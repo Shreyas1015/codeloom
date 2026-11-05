@@ -481,7 +481,7 @@ function resolveNewMember(ctx: Ctx, file: string, site: CallSite, callee: Extrac
 
 function resolveThis(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "this" }>): ResolvedCall | null {
   const fi = ctx.index.get(file);
-  const owner = classOfCaller(site.caller);
+  const owner = callee.rebound ? undefined : classOfCaller(site.caller);
   if (fi && owner) {
     // `this.m()` inside an object-literal method: the sibling method of the same object.
     if (fi.symbols.some((s) => s.name === site.caller && s.kind === "object-method")) {
@@ -497,7 +497,7 @@ function resolveThis(ctx: Ctx, file: string, site: CallSite, callee: Extract<Cal
 
 function resolveThisField(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "this-field" }>): ResolvedCall | null {
   const fi = ctx.index.get(file);
-  const cls = classOfCaller(site.caller);
+  const cls = callee.rebound ? undefined : classOfCaller(site.caller);
   // `this.props.onRemove()` in a class component: what the class is given as `onRemove`.
   if (cls && callee.field === "props" && fi?.symbols.some((s) => s.name === cls && s.kind === "class")) {
     const given = resolveProp(ctx, file, site, cls, callee.prop);
