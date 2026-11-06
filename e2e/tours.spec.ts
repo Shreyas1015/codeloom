@@ -142,7 +142,7 @@ test("walk a saved tour → toured; check-me pass → understood; an edited stop
   await expect(page.getByText(/good answer covers/i)).toHaveCount(0);
   expect((await toured).status()).toBe(200);
   await expect(phases.getByRole("link", { name: "Check yourself (viewed)" })).toBeVisible();
-  await expect(page.getByText("You have walked all four phases of this tour.")).toBeVisible();
+  await expect(page.getByRole("status", { name: "Tour walked" })).toContainText("Toured. Pass the check to count it as understood.");
   await page.screenshot({ path: join(SCREENSHOTS, "tour-check.png"), fullPage: true });
 
   // ---- Progress, open while the agent works: it updates live ----

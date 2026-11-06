@@ -106,7 +106,7 @@ function Empty() {
 function Body({ p }: { p: ProgressResponse }) {
   const all = stripCounts(p.totals.all);
   const left = p.totals.all.total - all.understood;
-  const repos = repoRows(p);
+  const reposLeft = repoRows(p).filter((r) => r.left > 0).length;
   const next = nextSuggested(p);
   return (
     <>
@@ -116,7 +116,8 @@ function Body({ p }: { p: ProgressResponse }) {
             You understand {fmt(all.understood)} of {plural(p.totals.all.total, "journey")}
           </h1>
           <p className="max-w-[70ch] text-[13.5px] text-muted-foreground">
-            Understood means you toured the journey and passed its check. {plural(left, "journey")} left across {plural(repos.length, "repo")}.
+            Understood means you passed the journey's check in Claude. {plural(left, "journey")} left
+            {reposLeft > 0 ? ` across ${plural(reposLeft, "repo")}` : ""}.
           </p>
           <p className="text-[12.5px] text-muted-foreground">
             Kept on this computer only: <span className="font-mono text-[11.5px] break-all">{p.path}</span>
@@ -382,7 +383,7 @@ function RecentChecks({ p }: { p: ProgressResponse }) {
                   {v.name}
                 </Link>
                 <span data-verdict={c.verdict} className={cn("shrink-0 text-[12.5px]", pass ? "text-muted-foreground" : "font-semibold text-destructive")}>
-                  {pass ? "Passed" : "Failed"} · {day(c.at)}
+                  {pass ? "Passed" : "Not passed"} · {day(c.at)}
                 </span>
               </li>
             );

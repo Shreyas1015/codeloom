@@ -90,7 +90,7 @@ export function LevelBadge({ level, changed = 0, className }: { level: DisplayLe
   return (
     <span
       data-level={level}
-      className={cn("inline-flex items-center rounded-[4px] px-1.75 py-px text-[11.5px] font-semibold", BADGE[level], className)}
+      className={cn("inline-flex items-center rounded-[4px] px-1.75 py-px text-xs font-semibold", BADGE[level], className)}
     >
       {level === "re-walk" ? `${LEVEL_WORD[level]} · ${stops(changed)} changed` : LEVEL_WORD[level]}
     </span>

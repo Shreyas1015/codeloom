@@ -51,6 +51,12 @@ typography:
     fontSize: "15px"
     fontWeight: 700
     lineHeight: 1.35
+  stop-title:
+    fontFamily: "Schibsted Grotesk, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "28px"
+    fontWeight: 700
+    lineHeight: 1.15
+    letterSpacing: "-0.02em"
   count:
     fontFamily: "Schibsted Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "24px"
@@ -215,8 +221,9 @@ colour and four lane hues.
 **The One Signature Rule.** Ochre fill means a numbered stop and nothing else. Never use it for a badge, a chart
 or a decorative accent.
 
-**The Honest Roundel Rule.** On Home, roundels are hollow and ringed in their lane hue: Home names the stops, it
-never claims you walked them. A filled roundel on Home is reserved for walked stops (v0.2 progress).
+**The Honest Roundel Rule.** A filled roundel claims something. On Home, roundels are hollow and ringed in their
+lane hue: Home names the stops, it never claims you walked them. In Tour mode's stop strip, stops you walked are
+filled, the one you stand at is haloed, and the rest stay hollow in their lane hue.
 
 **The Oxblood Rule.** Oxblood appears only for errors and broken or unresolved hops, and always with a second
 cue (a dashed edge or the word), never colour alone.
@@ -233,6 +240,8 @@ captions. The mono is a working tool for data, never a "technical" costume.
 - **Display** (700, 32px, 1.1, -0.03em): one per screen, the workspace or journey name (the nameplate).
 - **Headline** (700, 20px, -0.02em): section titles ("User journeys", "Unnamed chains").
 - **Title** (700, 15px): inspector headings, journey names in rows (15px bold), the Continue band title.
+- **Stop title** (700, 28px, 1.15, -0.02em): the stop's name at the head of a Tour Flow stop, beside the 56px
+  roundel (its numeral 22px). Only there.
 - **Count** (700, 24px, tabular): the six totals in the count strip.
 - **Body** (400, 14px, 1.45): base text. Prose blocks cap at 60 to 70ch.
 - **Caption** (400, 12.5 to 13.5px): notes under names, facts in the nameplate, empty-state lines.
@@ -264,6 +273,14 @@ and give the full text as a tooltip.
   inspector. Each folder level opens at the largest zoom between 0.9x and 1.1x at which every card fits,
   top-aligned and centred; a level that is wider starts top-left at 0.9x and pans. Cards are 232px wide in
   layer columns 56px apart, at most 10 per column and 150 per level.
+- **Tour:** a header row (journey name, the four phase tabs, "Exit tour"), the phase body, and a footer stuck to
+  the bottom edge (Previous, the stop strip, Next). Flow: the stop heading, explanation (max 68ch), the stop's
+  code and its "Remember this" traps in one column; the stop's data-journey step in a 360px column beside it
+  (from 1280px), and no side column when the stop has no step. Check yourself: questions on the left, a 470px
+  column with Check me in Claude, Last check and History.
+- **Progress:** nameplate ("You understand n of N journeys", a one-line definition, the file path) with the
+  legend; then the repo table, By area and What's left beside a 300 to 380px column (Needs a re-walk, Recent
+  checks, Next suggested, For older journeys).
 - **Density:** rows 12px vertical padding, panels 14 to 18px inner padding, hairlines between rows rather than
   gaps.
 
@@ -326,6 +343,23 @@ failure (oxblood). No border-left accent stripes.
   needs a re-walk fills two steps dashed in deep ochre on ochre wash and says "Re-walk n stops" (never ochre
   fill: that is a stop). The Journey nameplate shows the same level as a pill.
 
+### Tour Mode
+- **Phase tabs:** one segmented row of links. Current: ink fill, white text. Viewed: success wash with a check
+  and "(viewed)" in the name. The place lives in the URL (`?phase=&stop=`).
+- **Stop strip** (footer): 24px roundels joined by 14px tan connectors, per the Honest Roundel Rule; each
+  carries "Walked" or "Not walked yet" as its description. A removed stop is a hollow dashed oxblood circle.
+- **Markers:** "May be out of date" is a 12px dashed slate pill with its reason written next to it (never a
+  tooltip only). "Removed" is a dashed oxblood pill plus the word.
+- **Remember this:** the stop file's traps under its code, on ochre wash with an alert icon and ochre ink
+  (the same treatment as a trap in File notes). Notes that are not traps stay in File notes.
+- **Walked note:** on Check yourself, once all four phases are viewed, a success-wash line with a check icon:
+  "Toured. Pass the check to count it as understood." (or "Understood. You passed this journey's check.") and
+  a "See your progress" link. This is the end of the walk; say it, don't celebrate it.
+- **Check yourself shows only the questions.** The expected points are for the agent judging `check-me`; the
+  API never sends them and the page never shows them.
+- **Check results** read "Passed" or "Not passed" everywhere (Tour's Last check, Progress's Recent checks);
+  Not passed is in oxblood on Progress, always with the words.
+
 ### Confidence Line
 - Exact: 2px solid tan. Param: 1px solid tan. Guess: 1.5px dashed slate with the reason as a tooltip (focusable).
   Unresolved: dashed oxblood. Home shows the worst confidence as the same short line plus a word.
@@ -357,7 +391,9 @@ failure (oxblood). No border-left accent stripes.
 
 ### Don't:
 - **Don't** use ochre fill for anything but a stop, and don't fill Home roundels until progress exists.
-- **Don't** show placeholders or "coming soon" chrome for Tour, Progress, Views, spec badges or understood %.
+- **Don't** show placeholders or "coming soon" chrome for Views or spec badges.
+- **Don't** show a check's expected answers anywhere in the dashboard, or offer any path but a passed
+  `check-me` to "understood".
 - **Don't** use oxblood without a dashed edge or the word that says what failed.
 - **Don't** truncate a stop name to one line with an ellipsis, or break a path in the middle of a segment.
 - **Don't** set monospace on headings or UI words, or `tabular-nums` on whole sentences.

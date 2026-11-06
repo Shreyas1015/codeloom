@@ -13,7 +13,7 @@ export const PAGE = 200;
 export const NAME_JOURNEYS = "/mcp__codeloom__name-journeys";
 
 /** A roundel's ring and number in its lane's hue; the queue lane reads in the DB umber family. */
-const LANE_RING: Record<Lane, string> = {
+export const LANE_RING: Record<Lane, string> = {
   ui: "border-lane-ui text-lane-ui",
   api: "border-lane-api text-lane-api",
   code: "border-lane-code text-lane-code",

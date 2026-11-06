@@ -55,7 +55,7 @@ describe("Progress screen (/progress)", () => {
     renderAt("/progress");
     expect(await screen.findByRole("heading", { level: 1, name: "You understand 1 of 5 journeys" })).toBeInTheDocument();
     const s = screen.getByTestId("screen-progress");
-    expect(s).toHaveTextContent("4 journeys left across 3 repos");
+    expect(s).toHaveTextContent("4 journeys left across 2 repos"); // only repos with something left
     expect(within(s).getByRole("list", { name: "Legend" })).toBeInTheDocument();
     expect(s).toHaveTextContent("/home/dev/.codeloom/progress/0123456789abcdef.json");
   });
@@ -119,11 +119,11 @@ describe("Progress screen (/progress)", () => {
     const checks = await screen.findByRole("list", { name: "Recent checks" });
     const items = within(checks).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual([
-      "Admin voids an invoiceFailed · 25 Oct",
+      "Admin voids an invoiceNot passed · 25 Oct",
       "Customer signs upPassed · 22 Oct",
       "Customer creates an invoicePassed · 21 Oct",
     ]);
-    expect(within(items[0]!).getByText("Failed · 25 Oct")).toHaveAttribute("data-verdict", "fail");
+    expect(within(items[0]!).getByText("Not passed · 25 Oct")).toHaveAttribute("data-verdict", "fail");
   });
 
   it("lists what's left by area, each journey with its level, linked to it", async () => {

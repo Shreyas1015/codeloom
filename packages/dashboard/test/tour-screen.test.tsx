@@ -129,6 +129,27 @@ describe("Tour mode", () => {
     expect(screen.getByRole("button", { name: "Next: Data journey" })).toBeInTheDocument();
   });
 
+  it("Flow shows the file's traps beside the code as Remember this", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice/tour?phase=flow&stop=3");
+    expect(await stopHeading()).toHaveTextContent("InvoicesController.store");
+    const remember = screen.getByRole("note", { name: "Remember this" });
+    expect(remember).toHaveTextContent("The total is computed here, not in the model.");
+    expect(remember).not.toHaveTextContent("default currency"); // notes stay in File notes; only traps come here
+  });
+
+  it("the stop strip fills the stops you walked, halos the current one and leaves the rest hollow", async () => {
+    stubApi();
+    renderAt("/journeys/j_invoice/tour?phase=flow&stop=3");
+    await stopHeading();
+    const strip = screen.getByRole("list", { name: "Tour stops" });
+    const states = within(strip)
+      .getAllByRole("button")
+      .map((b) => b.querySelector("[data-slot]")!.getAttribute("data-walk"));
+    expect(states).toEqual(["walked", "walked", "here", "ahead", "ahead"]);
+    expect(within(strip).getByRole("button", { name: /^Stop 1:/ })).toHaveAccessibleDescription("Walked");
+  });
+
   it("clamps a stop outside the tour", async () => {
     stubApi();
     const router = renderAt("/journeys/j_invoice/tour?phase=flow&stop=40");
@@ -179,6 +200,29 @@ describe("Tour mode", () => {
     expect(screen.getByText("/mcp__codeloom__check-me j_invoice")).toBeInTheDocument();
   });
 
+  it("Check yourself: once all four phases are walked, says it counts as toured and links to Progress", async () => {
+    stubApi({ progress: progressWith({ ...invoiceProgress, level: "toured", touredAt: "2026-11-03T10:00:00.000Z" }) });
+    localStorage.setItem(tourPlaceKey("demo-shop", "j_invoice"), JSON.stringify({ phase: "check", stop: 1, viewed: ["flow", "data-journey", "file-notes", "check"] }));
+    renderAt("/journeys/j_invoice/tour?phase=check");
+    const done = await screen.findByRole("status", { name: "Tour walked" });
+    expect(done).toHaveTextContent("Toured. Pass the check to count it as understood.");
+    expect(within(done).getByRole("link", { name: "See your progress" })).toHaveAttribute("href", "/progress");
+  });
+
+  it("Check yourself: an understood journey says so", async () => {
+    stubApi({
+      progress: progressWith({
+        ...invoiceProgress,
+        level: "understood",
+        understoodAt: "2026-11-04T10:00:00.000Z",
+        lastCheck: { ...invoiceProgress.lastCheck!, verdict: "pass", at: "2026-11-04T10:00:00.000Z" },
+      }),
+    });
+    localStorage.setItem(tourPlaceKey("demo-shop", "j_invoice"), JSON.stringify({ phase: "check", stop: 1, viewed: ["flow", "data-journey", "file-notes", "check"] }));
+    renderAt("/journeys/j_invoice/tour?phase=check");
+    expect(await screen.findByRole("status", { name: "Tour walked" })).toHaveTextContent("Understood. You passed this journey's check.");
+  });
+
   it("Check yourself never shows what a good answer covers, even if a response carried expected points", async () => {
     const leaky = { ...tourFile, check: tourFile.check.map((q) => ({ ...q, expected: ["SECRET-POINT"] })) };
     stubApi({ tour: { ...tourResponse, tour: leaky as TourResponse["tour"] } });
@@ -223,7 +267,7 @@ describe("Tour mode", () => {
         { path: "/api/progress/toured", body: { journey: "j_invoice", phases: ["flow", "data-journey", "file-notes", "check"] } },
       ]),
     );
-    expect(await screen.findByText(/You have walked all four phases/)).toBeInTheDocument();
+    expect(await screen.findByText("Toured. Pass the check to count it as understood.")).toBeInTheDocument();
     pressKey("ArrowLeft");
     pressKey("ArrowRight");
     await screen.findByRole("list", { name: "Questions" });

@@ -1,14 +1,15 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { useJourney, useMarkSeen, useMarkToured, useOverview, useProgress, useTour } from "@/api/queries";
-import type { TourPhase } from "@/api/types";
+import type { Lane, TourFile, TourPhase } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
 import { stopLabel, StopRoundel } from "@/components/gallery/StopRoundel";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { LANE_RING } from "@/screens/home/parts";
 import { buildJourneyModel } from "@/screens/journey/model";
 import { buildTourModel, nextPlace, PHASE_IDS, phaseName, phaseViewed, placeOf, prevPlace, type TourModel, type TourPlace, type TourStopItem, TOUR_PHASES } from "./model";
 import { CheckPhase, DataJourneyPhase, FileNotesPhase, FlowPhase, RemovedRoundel } from "./phases";
@@ -149,7 +150,7 @@ export function TourScreen({ id, phase, stop }: { id: string; phase?: TourPhase;
 
       <div className="min-w-0 flex-1">
         {place.phase === "flow" && current ? (
-          <FlowPhase stop={current} index={place.stop} count={count} steps={m.steps} />
+          <FlowPhase stop={current} index={place.stop} count={count} steps={m.steps} traps={trapsFor(t.tour.fileNotes, current)} />
         ) : place.phase === "data-journey" ? (
           <DataJourneyPhase input={t.tour.dataJourney.input} output={t.tour.dataJourney.output} steps={m.steps} />
         ) : place.phase === "file-notes" ? (
@@ -166,12 +167,17 @@ export function TourScreen({ id, phase, stop }: { id: string; phase?: TourPhase;
         ) : null}
       </div>
 
-      <footer className="sticky bottom-0 -mx-9 -mb-7 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border bg-card px-9 py-3">
+      <footer className="sticky -bottom-7 -mx-9 -mb-7 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border bg-card px-9 py-3">
         <Button type="button" variant="outline" disabled={!prev} onClick={() => prev && go(prev)} aria-label={prev ? `Previous: ${placeName(prev, m)}` : "Previous"}>
           <ArrowLeft aria-hidden />
           {prev ? placeName(prev, m) : "Previous"}
         </Button>
-        <StopStrip stops={m.stops} current={place.phase === "flow" ? place.stop : undefined} onPick={(n) => go({ phase: "flow", stop: n })} />
+        <StopStrip
+          stops={m.stops}
+          current={place.phase === "flow" ? place.stop : undefined}
+          flowViewed={(viewed ?? []).includes("flow")}
+          onPick={(n) => go({ phase: "flow", stop: n })}
+        />
         {next ? (
           <Button
             type="button"
@@ -238,30 +244,65 @@ function PhaseNav({ id, current, viewed }: { id: string; current: TourPhase; vie
   );
 }
 
-/** Every Flow stop as a roundel: the current one haloed, removed ones hollow and dashed. */
-function StopStrip({ stops, current, onPick }: { stops: TourStopItem[]; current?: number; onPick: (n: number) => void }) {
+/** The traps the tour's file notes give for this stop's file: shown beside its code as "Remember this". */
+function trapsFor(notes: TourFile["fileNotes"], stop: TourStopItem) {
+  const repo = stop.view?.repo ?? stop.fields?.repo;
+  const file = stop.view?.file ?? stop.fields?.file;
+  return notes.find((f) => f.repo === repo && f.file === file)?.notes.filter((n) => n.kind === "trap") ?? [];
+}
+
+type Walk = "walked" | "here" | "ahead";
+const WALK_WORD: Record<Walk, string | undefined> = { walked: "Walked", here: undefined, ahead: "Not walked yet" };
+
+/** Every Flow stop as a roundel (the Honest Roundel Rule): stops you walked are filled ochre, the current one
+ * is haloed, the rest are hollow and ringed in their lane's hue. Removed ones are hollow and dashed. Once Flow
+ * has been viewed to its end, every stop counts as walked. */
+function StopStrip({ stops, current, flowViewed, onPick }: { stops: TourStopItem[]; current?: number; flowViewed: boolean; onPick: (n: number) => void }) {
+  const descId = useId();
   return (
+    <>
     <ol aria-label="Tour stops" className="flex min-w-0 items-center overflow-x-auto py-1.5">
       {stops.map((s, i) => {
-        const on = current === i + 1;
+        const walk: Walk = current === i + 1 ? "here" : flowViewed || (current !== undefined && i + 1 < current) ? "walked" : "ahead";
+        const lane = s.view?.lane ?? (s.fields?.lane as Lane | undefined);
+        const word = WALK_WORD[walk];
         return (
           <li key={s.key} className="flex flex-none items-center">
             {i > 0 ? <span aria-hidden className="h-0.5 w-3.5 bg-connector" /> : null}
             <button
               type="button"
               onClick={() => onPick(i + 1)}
-              aria-current={on ? "step" : undefined}
+              aria-current={walk === "here" ? "step" : undefined}
               aria-label={s.n !== undefined ? stopLabel(s.n, s.title) : `Removed stop: ${s.title}`}
+              aria-describedby={word ? `${descId}-${walk}` : undefined}
               className={cn("rounded-full", focusRing)}
             >
-              {s.n !== undefined ? <StopRoundel n={s.n} label={s.title} state={on ? "selected" : "default"} decorative /> : <RemovedRoundel on={on} />}
+              <span data-slot="tour-stop" data-walk={walk} className="flex">
+                {s.n === undefined ? (
+                  <RemovedRoundel on={walk === "here"} />
+                ) : walk === "ahead" ? (
+                  <span aria-hidden className={cn(AHEAD, LANE_RING[lane ?? "code"] ?? LANE_RING.code)}>
+                    {s.n}
+                  </span>
+                ) : (
+                  <StopRoundel n={s.n} label={s.title} state={walk === "here" ? "selected" : "default"} decorative />
+                )}
+              </span>
             </button>
           </li>
         );
       })}
     </ol>
+    <span hidden>
+      <span id={`${descId}-walked`}>{WALK_WORD.walked}</span>
+      <span id={`${descId}-ahead`}>{WALK_WORD.ahead}</span>
+    </span>
+    </>
   );
 }
+
+const AHEAD =
+  "inline-grid size-6 flex-none place-items-center rounded-full border-[1.5px] bg-card font-mono text-[11px] leading-none font-semibold tabular-nums select-none";
 
 function NoTour({ id, name }: { id: string; name: string }) {
   return (

@@ -1,4 +1,5 @@
-import { AlertTriangle, Info } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { AlertTriangle, CircleCheck, Info } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { useCode } from "@/api/queries";
 import type { JourneyProgressView, TourFile } from "@/api/types";
@@ -16,7 +17,7 @@ const h3 = "text-xs font-semibold text-muted-foreground";
 const panel = "flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card px-4 py-3.5";
 const mono = "font-mono text-xs leading-[1.6] whitespace-pre-wrap break-words";
 const quiet = "text-[13px] text-muted-foreground";
-const pill = "inline-flex items-center rounded-[4px] px-1.75 py-px text-[11.5px] font-semibold";
+const pill = "inline-flex items-center rounded-[4px] px-1.75 py-px text-xs font-semibold";
 
 const fileLine = (f: KeyFields | null) => (f ? `${f.file}:${f.line}` : "");
 
@@ -29,7 +30,7 @@ export function RemovedRoundel({ on = false, big = false }: { on?: boolean; big?
       className={cn(
         "inline-block flex-none rounded-full border-[1.5px] border-dashed border-destructive bg-card",
         big ? "size-14" : "size-6",
-        on && "shadow-[0_0_0_4px_rgb(181_72_61_/_0.2)]",
+        on && "ring-4 ring-destructive/20",
       )}
     />
   );
@@ -51,11 +52,12 @@ function Panel({ title, children, className }: { title: string; children: ReactN
 function Markers({ stop }: { stop: Pick<TourStopItem, "stale" | "removed"> }) {
   if (!stop.stale && !stop.removed) return null;
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
       {stop.stale ? (
-        <span className={cn(pill, "border border-dashed border-muted-foreground text-foreground")} title="This file changed since the tour was written. The code shown is today's.">
-          May be out of date
-        </span>
+        <>
+          <span className={cn(pill, "border border-dashed border-muted-foreground text-foreground")}>May be out of date</span>
+          <span className="text-[12.5px] text-muted-foreground">This file changed since the tour was written. The code shown is today's.</span>
+        </>
       ) : null}
       {stop.removed ? <span className={cn(pill, "border border-dashed border-destructive text-destructive")}>Removed</span> : null}
     </div>
@@ -64,13 +66,16 @@ function Markers({ stop }: { stop: Pick<TourStopItem, "stale" | "removed"> }) {
 
 // ---- Flow -----------------------------------------------------------------------------------------
 
-/** One Flow stop: the big numbered heading and its explanation, beside the stop's code (and its data step). */
-export function FlowPhase({ stop, index, count, steps }: { stop: TourStopItem; index: number; count: number; steps: DataStepItem[] }) {
+type Trap = TourFile["fileNotes"][number]["notes"][number];
+
+/** One Flow stop: the big numbered heading, its explanation, the stop's code under it and the file's traps
+ * ("Remember this"), with the stop's data-journey step beside them (mock 3). */
+export function FlowPhase({ stop, index, count, steps, traps }: { stop: TourStopItem; index: number; count: number; steps: DataStepItem[]; traps: Trap[] }) {
   const v = stop.view;
   const where = v ? `${v.repo} · ${KIND_WORD[v.kind] ?? v.kind}` : stop.fields?.repo;
   const step = steps.find((s) => s.key === stop.key);
   return (
-    <div className="grid min-w-0 grid-cols-1 items-start gap-6.5 xl:grid-cols-[minmax(0,1fr)_470px]">
+    <div className={cn("grid min-w-0 grid-cols-1 items-start gap-6.5", step && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
       <div className="flex min-w-0 flex-col gap-4.5">
         <div className="flex items-center gap-4">
           {stop.n !== undefined ? (
@@ -90,9 +95,7 @@ export function FlowPhase({ stop, index, count, steps }: { stop: TourStopItem; i
           </div>
         </div>
         <Markers stop={stop} />
-        <Markdown text={stop.explanation} className="max-w-[64ch] text-[15.5px] leading-[1.6]" />
-      </div>
-      <div className="flex min-w-0 flex-col gap-3">
+        <Markdown text={stop.explanation} className="max-w-[68ch] text-[15.5px] leading-[1.6]" />
         {v ? (
           <StopCode key={stop.key} repo={v.repo} file={v.file} line={v.line} />
         ) : (
@@ -101,13 +104,26 @@ export function FlowPhase({ stop, index, count, steps }: { stop: TourStopItem; i
             <span className="font-mono text-xs">{stop.fields ? `${stop.fields.repo}/${fileLine(stop.fields)}` : "an unknown place"}</span>.
           </p>
         )}
-        {step ? (
-          <Panel title="In the data journey">
-            <p className="text-[13.5px]">{step.note}</p>
-            {step.sql ? <pre className={mono}>{step.sql}</pre> : null}
-          </Panel>
+        {traps.length > 0 ? (
+          <div role="note" aria-label="Remember this" className="flex gap-3 rounded-[10px] bg-accent-soft px-3.5 py-3 text-[13.5px] text-accent-foreground">
+            <AlertTriangle aria-hidden className="mt-0.5 size-4.5 flex-none" />
+            <div className="flex flex-col gap-1">
+              {traps.map((t, i) => (
+                <p key={i}>
+                  {i === 0 ? <b>Remember this: </b> : null}
+                  {t.text}
+                </p>
+              ))}
+            </div>
+          </div>
         ) : null}
       </div>
+      {step ? (
+        <Panel title="In the data journey">
+          <p className="text-[13.5px]">{step.note}</p>
+          {step.sql ? <pre className={mono}>{step.sql}</pre> : null}
+        </Panel>
+      ) : null}
     </div>
   );
 }
@@ -231,6 +247,21 @@ function FileNotes({ file }: { file: TourFile["fileNotes"][number] }) {
 const day = (iso: string | undefined) =>
   iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "";
 
+/** The end of the walk, said where it happens: toured (and what makes it understood), or understood. */
+function WalkedNote({ walked, progress }: { walked: boolean; progress: JourneyProgressView | undefined }) {
+  const understood = progress?.level === "understood" && progress.needsReWalk.length === 0;
+  if (!walked && !understood) return null;
+  return (
+    <div role="status" aria-label="Tour walked" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[10px] bg-success-soft px-3.5 py-2.5 text-[13.5px]">
+      <CircleCheck aria-hidden className="size-4.5 flex-none text-success" />
+      <span className="font-semibold">{understood ? "Understood. You passed this journey's check." : "Toured. Pass the check to count it as understood."}</span>
+      <Link to="/progress" className="ml-auto rounded-sm font-semibold underline underline-offset-3 outline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring">
+        See your progress
+      </Link>
+    </div>
+  );
+}
+
 export function CheckPhase({
   id,
   check,
@@ -251,7 +282,7 @@ export function CheckPhase({
     <div className="grid min-w-0 grid-cols-1 items-start gap-6.5 xl:grid-cols-[minmax(0,1fr)_470px]">
       <div className="flex min-w-0 flex-col gap-4">
         <h2 className="text-[20px] font-bold tracking-[-0.02em]">Can you answer these?</h2>
-        {walked ? <p className="text-[13.5px] text-muted-foreground">You have walked all four phases of this tour.</p> : null}
+        <WalkedNote walked={walked} progress={progress} />
         <ol aria-label="Questions" className="flex flex-col gap-3">
           {check.map((q, i) => (
             <li key={i} className={cn(panel, "gap-2")}>
