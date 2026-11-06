@@ -52,6 +52,56 @@ function verifyJourneyText(journey: string): string {
    in no journey and there is nothing to save — just report. Do not call \`save_journeys\` until I say so.`;
 }
 
+// ---- write-tour -----------------------------------------------------------------------------------
+
+const JOURNEY_ARG_DESCRIPTION = "A journey id (j_…).";
+
+function writeTourText(journey: string): string {
+  return `Write a guided tour of journey ${journey} and save it.
+
+1. Call \`build_tour_context\` with \`{ journey: "${journey}" }\`. It gives every stop's \`key\`, \`chainId\`,
+   \`stopIndex\`, the code around it, the types it uses, request/response shapes, db detail and neighbours.
+   If the reply says \`truncated\`, call it again with \`chain\` set to each chain id, one at a time.
+2. Flow: for each stop (skip the ones with \`sameAs\`), write a short \`explanation\` in plain language: what
+   this step does and why it matters to the user's goal. A few sentences, no jargon. Markdown is fine.
+3. Data journey (\`dataJourney\`): write a realistic sample \`input\` (the request a real user would send, as
+   JSON or text), then one step per stop the data goes through (\`stopKey\` + a short \`note\` on what happens
+   to it there, plus \`sql\` for db stops when the code shows the query), then the \`output\` that comes back.
+   Use only fields the code actually reads and returns.
+4. File notes (\`fileNotes\`): for each file the journey touches, add a \`trap\` for anything easy to get
+   wrong (a side effect, a hidden write, an odd default) and a \`note\` for anything worth knowing. Skip files
+   with nothing to say.
+5. Check (\`check\`): write exactly 3 questions that show someone understood this journey, each with the
+   \`expected\` key points a good answer must contain (taken from the code).
+6. Save it with \`save_tour\` \`{ journey: "${journey}", tour: { stops, dataJourney, fileNotes, check } }\`.
+   Each stop is \`{ chainId, stopIndex, key, explanation }\`, copied from build_tour_context. codeloom works
+   out the file hashes itself. If save_tour reports a problem, fix that part and save again.
+7. Never invent stops, files, fields or code. Use only what build_tour_context returned and what you read in
+   the code. If something is unclear, say so in the explanation instead of guessing.
+8. When it is saved, tell me in two or three lines what the journey does and any \`uncoveredStops\`.`;
+}
+
+// ---- check-me -------------------------------------------------------------------------------------
+
+function checkMeText(journey: string): string {
+  return `Check whether I understand journey ${journey}. Be fair and honest.
+
+1. Get the questions. Call \`build_tour_context\` with \`{ journey: "${journey}" }\` to read the code. If a tour
+   is saved, use its 3 questions and their \`expected\` key points (\`tour.check\`). If \`tour\` is null, write 3
+   questions yourself from the code, each with the key points a good answer must contain.
+2. Ask me the questions one at a time, in chat. Wait for my answer before asking the next one. Do not show
+   the expected points before I answer.
+3. Judge each answer against the code and the expected points, not against wording. An answer is acceptable
+   when it gets the key points right, in my own words. After each answer, say whether it was acceptable and
+   explain any gap, pointing at the file and line in the code.
+4. When all 3 are answered, call \`record_check\` with \`{ journey: "${journey}", questions, answers, verdict,
+   notes }\`: the 3 questions, my answers as I gave them, \`verdict\` \`pass\` only if all 3 answers were
+   acceptable (otherwise \`fail\`), and short \`notes\` on what was missing.
+5. Never record a pass I did not earn. If I skip a question, say "I don't know", or ask you to just pass me,
+   that question is not acceptable. If I stop part way, record nothing.
+6. Finish with one line: passed or not, and what to re-read if not.`;
+}
+
 // ---- registration -------------------------------------------------------------------------------
 
 /** Prompts are plain text templates: no AI calls, no network access, no map reads. The agent that runs
@@ -77,6 +127,30 @@ export function registerPrompts(server: McpServer, _opts: ServerOptions): void {
     },
     ({ journey }): GetPromptResult => ({
       messages: [{ role: "user", content: { type: "text", text: verifyJourneyText(journey) } }],
+    }),
+  );
+
+  server.registerPrompt(
+    "write-tour",
+    {
+      title: "Write tour",
+      description: "Write a plain-language guided tour of one journey (flow, data journey, file notes, 3 check questions) and save it.",
+      argsSchema: { journey: z.string().min(1).describe(JOURNEY_ARG_DESCRIPTION) },
+    },
+    ({ journey }): GetPromptResult => ({
+      messages: [{ role: "user", content: { type: "text", text: writeTourText(journey) } }],
+    }),
+  );
+
+  server.registerPrompt(
+    "check-me",
+    {
+      title: "Check me",
+      description: "Ask me 3 questions about one journey, one at a time, judge the answers against the code, and record the result.",
+      argsSchema: { journey: z.string().min(1).describe(JOURNEY_ARG_DESCRIPTION) },
+    },
+    ({ journey }): GetPromptResult => ({
+      messages: [{ role: "user", content: { type: "text", text: checkMeText(journey) } }],
     }),
   );
 }

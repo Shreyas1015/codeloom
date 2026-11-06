@@ -7,6 +7,7 @@ import { registerPrompts } from "./prompts.js";
 import { registerCheckTools } from "./tools/check.js";
 import { registerGraphTools } from "./tools/graph.js";
 import { registerJourneyTools } from "./tools/journeys.js";
+import { registerTourTools } from "./tools/tours.js";
 import { registerWorkspaceTools } from "./tools/workspace.js";
 
 export interface ServerOptions {
@@ -28,6 +29,7 @@ export function createServer(opts: ServerOptions): McpServer {
   registerGraphTools(server, opts);
   registerJourneyTools(server, opts);
   registerCheckTools(server, opts);
+  registerTourTools(server, opts);
   registerPrompts(server, opts);
   return server;
 }
