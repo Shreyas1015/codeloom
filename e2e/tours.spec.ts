@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -196,6 +196,36 @@ test("walk a saved tour → toured; check-me pass → understood; an edited stop
   await expect(progress).toHaveURL(new RegExp(`/journeys/${signUp}/tour`));
   await expect(progress.getByText(/May be out of date/i).first()).toBeVisible();
   await expect(progress.getByRole("main").getByRole("heading", { level: 2 })).toContainText(target[0]!.symbol);
+
+  // ---- a line added at the TOP of a stop's file moves its stops down one line: "may be out of date",
+  // never "Removed"; needs re-walk lists them by their new lines and each link opens that stop ----
+  const moved = stops.filter((s) => s.file.endsWith("customer_service.ts") && !s.sameAs);
+  expect(moved.length).toBeGreaterThan(0);
+  const movedFile = join(ws.root, moved[0]!.repo, moved[0]!.file);
+  writeFileSync(movedFile, `// a new first line\n${readFileSync(movedFile, "utf8")}`);
+  await runIndex(ws.root);
+  const down = (k: string) => {
+    const [lane, repo, file, line, symbol] = JSON.parse(k) as [string, string, string, number, string];
+    return { key: JSON.stringify([lane, repo, file, line + 1, symbol]), title: `${repo}/${file}:${line + 1}` };
+  };
+  const p2 = await agent((c) => tool(c, "get_progress", {}));
+  const row2 = (p2.journeys as Array<{ journeyId: string; needsReWalk: string[] }>).find((j) => j.journeyId === signUp)!;
+  expect(row2.needsReWalk).toEqual(expect.arrayContaining(moved.map((s) => down(s.key).key)));
+
+  await progress.goto(origin() + "/progress");
+  const panel2 = progress.getByTestId("screen-progress").getByRole("region", { name: "Needs a re-walk" });
+  await expect(panel2.getByText(`${row2.needsReWalk.length} stops changed`)).toBeVisible({ timeout: 10_000 });
+  const first = moved[0]!;
+  await panel2.getByTitle(down(first.key).title).click();
+  const n = stops.findIndex((s) => s.key === first.key) + 1;
+  await expect(progress).toHaveURL(new RegExp(`/journeys/${signUp}/tour\\?phase=flow&stop=${n}\\b`));
+  const main = progress.getByRole("main");
+  await expect(main.getByRole("heading", { level: 2 })).toContainText(first.symbol);
+  await expect(main.getByText(/May be out of date/i).first()).toBeVisible();
+  await expect(main.getByText("Removed", { exact: true })).toHaveCount(0);
+  const flowList = main.getByRole("list", { name: "Tour stops" });
+  await expect(flowList.getByRole("listitem")).toHaveCount(stops.length);
+  await expect(main.locator('[data-slot="removed-roundel"]')).toHaveCount(0);
 });
 
 // Screens for the design review (no pixel diffs): a journey with no tour yet, and both screens at phone width.
