@@ -11,6 +11,9 @@ import { HomeRoute } from "@/routes/index";
 import { JourneyRoute } from "@/routes/journey";
 import { MapRoute } from "@/routes/map";
 import { ProgressRoute } from "@/routes/progress";
+import { TourRoute } from "@/routes/tour";
+import { isPhase } from "@/screens/tour/model";
+import type { TourPhase } from "@/api/types";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -67,6 +70,10 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 export interface JourneySearch {
   stop?: number;
 }
+export interface TourSearch {
+  phase?: TourPhase;
+  stop?: number;
+}
 export interface MapSearch {
   repo?: string;
   dir?: string;
@@ -88,6 +95,16 @@ const journeyRoute = createRoute({
   component: JourneyRoute,
 });
 
+const tourRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/journeys/$id/tour",
+  validateSearch: (s: Record<string, unknown>): TourSearch => {
+    const stop = Number(s.stop);
+    return { ...(isPhase(s.phase) ? { phase: s.phase } : {}), ...(Number.isInteger(stop) && stop >= 1 ? { stop } : {}) };
+  },
+  component: TourRoute,
+});
+
 const mapRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/map",
@@ -104,7 +121,7 @@ const mapRoute = createRoute({
 
 const progressRoute = createRoute({ getParentRoute: () => rootRoute, path: "/progress", component: ProgressRoute });
 
-export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, mapRoute, progressRoute]);
+export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, tourRoute, mapRoute, progressRoute]);
 
 export function createAppRouter({ queryClient, history }: { queryClient: QueryClient; history?: RouterHistory }) {
   return createRouter({ routeTree, context: { queryClient }, defaultPreload: false, ...(history ? { history } : {}) });

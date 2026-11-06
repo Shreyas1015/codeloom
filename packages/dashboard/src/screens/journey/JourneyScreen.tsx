@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
-import { useJourney, useOverview } from "@/api/queries";
+import { useJourney, useMarkSeen, useOverview } from "@/api/queries";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { stopLabel } from "@/components/gallery/StopRoundel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -67,6 +67,16 @@ export function JourneyScreen({ id, stop }: { id: string; stop?: number }) {
   useEffect(() => {
     if (workspace && loadedId) rememberLastJourney(workspace, loadedId);
   }, [workspace, loadedId]);
+
+  // opening a journey marks it seen (personal progress); a chain on its own is not a journey
+  const markSeen = useMarkSeen();
+  const journeyId = data?.journey?.id;
+  const seenFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!journeyId || seenFor.current === journeyId) return;
+    seenFor.current = journeyId;
+    markSeen.mutate(journeyId);
+  }, [journeyId, markSeen]);
 
   if (isPending) return <p className="text-[13px] text-muted-foreground">Loading journey…</p>;
 

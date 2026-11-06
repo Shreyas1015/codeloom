@@ -9,12 +9,17 @@ export function CopyButton({
   text,
   label = "Copy command",
   iconOnly = false,
+  visibleLabel = false,
+  variant = "ghost",
   className,
 }: {
   text: string;
   label?: string;
   /** Just the icon (the name still says "Copy command" / "Copied"), for commands set inside a sentence. */
   iconOnly?: boolean;
+  /** Show `label` as the button's text instead of "Copy" (a named action such as "Check me in Claude"). */
+  visibleLabel?: boolean;
+  variant?: "ghost" | "default";
   className?: string;
 }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
@@ -37,15 +42,15 @@ export function CopyButton({
     <>
       <Button
         type="button"
-        variant="ghost"
-        size={iconOnly ? "icon-xs" : "xs"}
+        variant={variant}
+        size={iconOnly ? "icon-xs" : visibleLabel ? "default" : "xs"}
         onClick={copy}
         aria-label={state === "copied" ? "Copied" : label}
         title={iconOnly ? (state === "copied" ? "Copied" : label) : undefined}
-        className={cn("text-muted-foreground hover:text-foreground", className)}
+        className={cn(variant === "ghost" && "text-muted-foreground hover:text-foreground", className)}
       >
         {state === "copied" ? <Check aria-hidden /> : <Copy aria-hidden />}
-        {!iconOnly && <span aria-hidden>{state === "copied" ? "Copied" : "Copy"}</span>}
+        {!iconOnly && <span aria-hidden>{state === "copied" ? "Copied" : visibleLabel ? label : "Copy"}</span>}
       </Button>
       <span role="status" className={cn("text-xs", state === "failed" ? "text-destructive" : "sr-only")}>
         {state === "copied" ? "Copied" : state === "failed" ? "Copy failed — select the text" : ""}
