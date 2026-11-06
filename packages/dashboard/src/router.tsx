@@ -73,6 +73,9 @@ export interface JourneySearch {
 export interface TourSearch {
   phase?: TourPhase;
   stop?: number;
+  /** The wanted Flow stop's line-free identity (`stopIdentity`); resolved to its current `stop` number by
+   * Tour mode itself, so it lands right even when `stop` (the tour file's own order) does not match. */
+  stopId?: string;
 }
 export interface MapSearch {
   repo?: string;
@@ -100,7 +103,12 @@ const tourRoute = createRoute({
   path: "/journeys/$id/tour",
   validateSearch: (s: Record<string, unknown>): TourSearch => {
     const stop = Number(s.stop);
-    return { ...(isPhase(s.phase) ? { phase: s.phase } : {}), ...(Number.isInteger(stop) && stop >= 1 ? { stop } : {}) };
+    const stopId = str(s.stopId);
+    return {
+      ...(isPhase(s.phase) ? { phase: s.phase } : {}),
+      ...(Number.isInteger(stop) && stop >= 1 ? { stop } : {}),
+      ...(stopId !== undefined ? { stopId } : {}),
+    };
   },
   component: TourRoute,
 });

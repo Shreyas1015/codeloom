@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { keyIdentity, stopIdentity } from "@/lib/journey-stops";
 import { buildJourneyModel } from "@/screens/journey/model";
-import { buildTourModel, nextPlace, phaseViewed, placeOf, prevPlace, TOUR_PHASES } from "@/screens/tour/model";
+import { buildTourModel, nextPlace, phaseViewed, placeOf, prevPlace, stopNumberFor, TOUR_PHASES } from "@/screens/tour/model";
 import { readTourPlace, rememberTourPlace, tourPlaceKey } from "@/screens/tour/position";
 import { journeyResult } from "./fixtures/journey";
 import { insertInvoiceKey, removedKey, storeKey, tourFile, tourResponse } from "./fixtures/tour";
@@ -18,6 +19,16 @@ describe("tour model", () => {
     const gone = m.stops.find((s) => s.key === removedKey)!;
     expect(gone).toMatchObject({ removed: true, stale: false, fields: { repo: "api", file: "app/services/legacy_invoice.ts", line: 3 } });
     expect(gone.view).toBeUndefined();
+  });
+
+  it("stopNumberFor: the ?stop= for a stop's identity is its position in this walking order, not in the tour file", () => {
+    const m = buildTourModel(tourResponse, journey);
+    // the tour file lists store (journey stop 4) before page (journey stop 1) and postCall (stop 2) — see
+    // fixtures/tour.ts's comment ("stored in file order, not stop number") — but stopNumberFor answers with
+    // where Tour mode actually shows it (3rd, since the walk is ordered page, postCall, store, invoices, removed)
+    expect(stopNumberFor(m, stopIdentity({ lane: "code", repo: "api", file: "app/controllers/invoices_controller.ts", symbol: "InvoicesController.store" }))).toBe(3);
+    expect(stopNumberFor(m, keyIdentity(insertInvoiceKey)!)).toBe(4);
+    expect(stopNumberFor(m, JSON.stringify(["ui", "web", "nowhere.ts", "Nope"]))).toBeUndefined();
   });
 
   it("finds stops whose line moved (a line added above them): not removed, by identity, by place when two share one", () => {

@@ -11,7 +11,20 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LANE_RING } from "@/screens/home/parts";
 import { buildJourneyModel } from "@/screens/journey/model";
-import { buildTourModel, nextPlace, PHASE_IDS, phaseName, phaseViewed, placeOf, prevPlace, type TourModel, type TourPlace, type TourStopItem, TOUR_PHASES } from "./model";
+import {
+  buildTourModel,
+  nextPlace,
+  PHASE_IDS,
+  phaseName,
+  phaseViewed,
+  placeOf,
+  prevPlace,
+  stopNumberFor,
+  type TourModel,
+  type TourPlace,
+  type TourStopItem,
+  TOUR_PHASES,
+} from "./model";
 import { CheckPhase, DataJourneyPhase, FileNotesPhase, FlowPhase, RemovedRoundel } from "./phases";
 import { readTourPlace, rememberTourPlace } from "./position";
 
@@ -34,7 +47,7 @@ function placeName(place: TourPlace, model: TourModel): string {
   return s?.n !== undefined ? `Stop ${s.n}` : "Removed stop";
 }
 
-export function TourScreen({ id, phase, stop }: { id: string; phase?: TourPhase; stop?: number }) {
+export function TourScreen({ id, phase, stop, stopId }: { id: string; phase?: TourPhase; stop?: number; stopId?: string }) {
   const tourQ = useTour(id);
   const journeyQ = useJourney(id);
   const overview = useOverview();
@@ -48,7 +61,10 @@ export function TourScreen({ id, phase, stop }: { id: string; phase?: TourPhase;
   const journeyModel = useMemo(() => (journeyQ.data ? buildJourneyModel(journeyQ.data) : undefined), [journeyQ.data]);
   const model = useMemo(() => (tour ? buildTourModel(tour, exists ? journeyModel : undefined) : undefined), [tour, exists, journeyModel]);
   const count = model?.stops.length ?? 0;
-  const place = placeOf(phase, stop, count);
+  // a ?stopId= picks the stop by identity, right even when it was built from a different stop order than
+  // Tour mode's own (?stop= is the fallback, used only while the model is not loaded yet, or it has none)
+  const resolvedStop = stopId && model ? (stopNumberFor(model, stopId) ?? stop) : stop;
+  const place = placeOf(phase, resolvedStop, count);
   const hasTour = !!tour?.tour;
   const workspace = overview.data?.name;
 

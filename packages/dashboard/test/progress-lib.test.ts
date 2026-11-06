@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { JourneyProgressView, LevelCounts, TourFile } from "@/api/types";
+import { keyIdentity } from "@/lib/journey-stops";
 import { displayLevel, nextTourStop, pickContinue, stripCounts, understoodPercent } from "@/lib/progress";
 
 const key = (file: string, line: number, symbol: string, lane = "code", repo = "api") => JSON.stringify([lane, repo, file, line, symbol]);
@@ -69,8 +70,20 @@ describe("nextTourStop", () => {
     expect(nextTourStop(tour, view({ journeyId: "j_invoice", level: "understood", needsReWalk: [K3, K2] }), undefined)).toEqual({
       phase: "flow",
       stop: 2,
+      stopId: keyIdentity(K2),
       resumed: false,
     });
+  });
+
+  it("carries the changed stop's line-free identity regardless of where it happens to sit in the tour file", () => {
+    // `stop` (the tour file's own, raw order) moves when the file is reordered — a journey with several
+    // chains, or a tour with removed stops, can list stops in an order that is not the journey's stop-number
+    // order. `stopId` does not move: it is what Tour mode (which sorts by journey number) actually uses to
+    // land on the right stop, so a link stays correct no matter how the tour file orders its stops.
+    const reordered: TourFile = { ...tour, stops: [tour.stops[2]!, tour.stops[0]!, tour.stops[1]!] };
+    const next = nextTourStop(reordered, view({ journeyId: "j_invoice", level: "understood", needsReWalk: [K3] }), undefined);
+    expect(next?.stop).toBe(1); // K3 now sits first in the (reordered) file
+    expect(next?.stopId).toBe(keyIdentity(K3)); // but its identity is unchanged, same as in the original order
   });
 
   it("resumes the place Tour mode remembered, else starts at stop 1", () => {
@@ -97,6 +110,7 @@ describe("nextTourStop", () => {
     expect(nextTourStop(tour, view({ journeyId: "j_invoice", level: "understood", needsReWalk: [K3now] }), undefined)).toEqual({
       phase: "flow",
       stop: 3,
+      stopId: keyIdentity(K3),
       resumed: false,
     });
   });

@@ -1,5 +1,5 @@
 import type { StopView, TourPhase, TourResponse } from "@/api/types";
-import { type PlacedStop, stopKey, stopMatcher } from "@/lib/journey-stops";
+import { keyIdentity, type PlacedStop, stopKey, stopMatcher } from "@/lib/journey-stops";
 import { type JourneyModel, type JourneyStop, stopTitle } from "@/screens/journey/model";
 
 /** The four phases, in walking order (the server's TourPhase ids). */
@@ -106,6 +106,15 @@ export function buildTourModel(r: TourResponse, journey: JourneyModel | undefine
 export interface TourPlace {
   phase: TourPhase;
   stop: number;
+}
+
+/** The 1-based position, in this tour's own walking order (`TourModel.stops`, `?stop=`), of the stop with
+ * this line-free identity (`stopIdentity`/`keyIdentity`); undefined when no stop of the tour has it. This
+ * is how a link built elsewhere (Progress, the Continue band) lands on the same stop Tour mode shows for
+ * that identity, even when the tour file's own stop order differs from the journey's stop numbers. */
+export function stopNumberFor(model: Pick<TourModel, "stops">, id: string): number | undefined {
+  const i = model.stops.findIndex((s) => keyIdentity(s.key) === id);
+  return i < 0 ? undefined : i + 1;
 }
 
 /** The place the URL asks for, clamped to the tour. */

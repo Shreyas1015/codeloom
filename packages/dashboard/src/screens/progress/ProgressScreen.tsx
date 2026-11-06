@@ -7,6 +7,7 @@ import { Command } from "@/components/gallery/CopyCommand";
 import { ProgressLegend, ProgressStrip } from "@/components/gallery/ProgressStrip";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { Breakable } from "@/lib/breakable";
+import { keyIdentity } from "@/lib/journey-stops";
 import { displayLevel, LEVEL_WORD, nextTourStop, stripCounts, tourStopIndex } from "@/lib/progress";
 import { cn } from "@/lib/utils";
 import { AgentHint } from "@/screens/home/parts";
@@ -313,7 +314,7 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
           <Link
             to="/journeys/$id/tour"
             params={{ id: v.journeyId }}
-            search={{ phase: first.phase, stop: first.stop }}
+            search={{ phase: first.phase, stop: first.stop, ...(first.stopId ? { stopId: first.stopId } : {}) }}
             aria-label={`Re-walk ${v.name}`}
             className={REWALK}
           >
@@ -329,6 +330,7 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
         {v.needsReWalk.map((key) => {
           const f = parseKey(key);
           const n = stopNo(key);
+          const id = keyIdentity(key);
           const text = (
             <>
               <span className="block text-[13px] font-semibold">{f?.symbol || f?.file || "A stop"}</span>
@@ -341,7 +343,7 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
                 <Link
                   to="/journeys/$id/tour"
                   params={{ id: v.journeyId }}
-                  search={{ phase: "flow", stop: n }}
+                  search={{ phase: "flow", stop: n, ...(id ? { stopId: id } : {}) }}
                   className={cn(LINK, "block")}
                   title={f ? `${f.repo}/${f.file}:${f.line}` : undefined}
                 >

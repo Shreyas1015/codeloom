@@ -4,8 +4,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { Overview } from "@/api/types";
+import { keyIdentity } from "@/lib/journey-stops";
 import { createAppRouter } from "@/router";
-import { emptyProgress, noTour, progress, tour } from "./fixtures/progress";
+import { emptyProgress, K_STORE, noTour, progress, tour } from "./fixtures/progress";
+
+// a stopId looks like JSON (it starts with `[`), so the router's default search codec re-wraps it in
+// JSON.stringify to round-trip it symmetrically through parseSearch (see @tanstack/router-core/searchParams)
+const storeStopId = encodeURIComponent(JSON.stringify(keyIdentity(K_STORE)!));
 
 const overview: Overview = {
   name: "demo-shop",
@@ -98,11 +103,11 @@ describe("Progress screen (/progress)", () => {
     expect(panel).toHaveTextContent("Customer creates an invoice");
     expect(panel).toHaveTextContent("1 stop changed");
     const stop = await within(panel).findByRole("link", { name: /InvoicesController\.store/ });
-    expect(stop).toHaveAttribute("href", "/journeys/j_invoice/tour?phase=flow&stop=2");
+    expect(stop).toHaveAttribute("href", `/journeys/j_invoice/tour?phase=flow&stop=2&stopId=${storeStopId}`);
     expect(stop).toHaveTextContent("app/controllers/invoices_controller.ts:41");
     expect(within(panel).getByRole("link", { name: "Re-walk Customer creates an invoice" })).toHaveAttribute(
       "href",
-      "/journeys/j_invoice/tour?phase=flow&stop=2",
+      `/journeys/j_invoice/tour?phase=flow&stop=2&stopId=${storeStopId}`,
     );
   });
 

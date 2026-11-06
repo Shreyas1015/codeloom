@@ -87,7 +87,11 @@ function TourBand({ workspace, data, view }: { workspace: string; data: Journeys
       : phaseName(next.phase);
   return (
     <Band name={view.name} caption={caption}>
-      <Link to="/journeys/$id/tour" params={{ id: view.journeyId }} search={{ phase: next.phase, stop: next.stop }}>
+      <Link
+        to="/journeys/$id/tour"
+        params={{ id: view.journeyId }}
+        search={{ phase: next.phase, stop: next.stop, ...(next.stopId ? { stopId: next.stopId } : {}) }}
+      >
         {rewalk ? "Re-walk" : next.resumed ? "Resume tour" : "Start tour"}
         <ArrowRight aria-hidden />
       </Link>

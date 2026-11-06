@@ -43,8 +43,15 @@ export function understoodPercent(c: LevelCounts): number | undefined {
 
 export interface NextStop {
   phase: TourPhase;
-  /** 1-based, into the tour's stops (Tour mode's `?stop=`). */
+  /** Fallback only: 1-based position in the tour file's own stop order, used when `stopId` cannot be
+   * resolved (e.g. the tour has not loaded yet). Tour mode orders stops by journey number, which a tour
+   * file's own order need not match (several chains, or stops removed since), so this alone can land on
+   * the wrong stop — `stopId` is what actually picks the stop. */
   stop: number;
+  /** The target stop's line-free identity (`stopIdentity`/`keyIdentity`); set only when a specific stop is
+   * wanted (a re-walk's first changed stop). Tour mode resolves it to whichever stop it now shows for that
+   * identity, so the link lands on the right stop regardless of tour-file order. */
+  stopId?: string;
   /** True when this is where the viewer left off (not the start, not a changed stop). */
   resumed: boolean;
 }
@@ -58,14 +65,22 @@ export function tourStopIndex(tour: Pick<TourFile, "stops">, keys: readonly stri
   return tour.stops.findIndex((s) => exact.has(s.key) || ids.has(keyIdentity(s.key) ?? ""));
 }
 
+/** The tour's own key for the first stop matching one of `keys` (exact, or by line-free identity);
+ * undefined when none does. */
+export function tourStopMatch(tour: Pick<TourFile, "stops">, keys: readonly string[]): string | undefined {
+  const i = tourStopIndex(tour, keys);
+  return i < 0 ? undefined : tour.stops[i]!.key;
+}
+
 /** Where to pick a tour up: the first changed stop when the journey needs a re-walk; else the place Tour mode
  * remembered (`readTourPlace`) while a phase is unviewed, or Check yourself once all four were viewed; else
  * stop 1 of Flow. Undefined when the journey has no tour. */
 export function nextTourStop(tour: TourFile | null | undefined, v: JourneyProgressView | undefined, saved: StoredTourPlace | undefined): NextStop | undefined {
   if (!tour || tour.stops.length === 0) return undefined;
   if (v && displayLevel(v) === "re-walk") {
-    const i = tourStopIndex(tour, v.needsReWalk);
-    return { phase: "flow", stop: i < 0 ? 1 : i + 1, resumed: false };
+    const key = tourStopMatch(tour, v.needsReWalk);
+    const i = key === undefined ? -1 : tour.stops.findIndex((s) => s.key === key);
+    return { phase: "flow", stop: i < 0 ? 1 : i + 1, stopId: key === undefined ? undefined : (keyIdentity(key) ?? undefined), resumed: false };
   }
   if (saved && PHASE_IDS.every((p) => saved.viewed.includes(p))) return { phase: "check", stop: 1, resumed: true };
   if (saved && (saved.phase !== "flow" || saved.stop <= tour.stops.length)) return { phase: saved.phase, stop: saved.stop, resumed: true };

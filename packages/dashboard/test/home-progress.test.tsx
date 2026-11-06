@@ -5,11 +5,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { JourneyRow, JourneysResponse, Overview } from "@/api/types";
+import { keyIdentity } from "@/lib/journey-stops";
 import { rememberTourPlace } from "@/screens/tour/position";
 import { createAppRouter } from "@/router";
 import { lastJourneyKey } from "@/screens/home/lastJourney";
 import { journeyResult } from "./fixtures/journey";
-import { noTour, progress, tour } from "./fixtures/progress";
+import { K_STORE, noTour, progress, tour } from "./fixtures/progress";
+
+// a stopId looks like JSON (it starts with `[`), so the router's default search codec re-wraps it in
+// JSON.stringify to round-trip it symmetrically through parseSearch (see @tanstack/router-core/searchParams)
+const storeStopId = encodeURIComponent(JSON.stringify(keyIdentity(K_STORE)!));
 
 const overview: Overview = {
   name: "demo-shop",
@@ -181,7 +186,7 @@ describe("Home: the Continue band resumes the next unfinished tour stop", () => 
     renderAt("/");
     const band = await screen.findByRole("region", { name: "Continue: Customer creates an invoice" });
     const go = await within(band).findByRole("link", { name: /Re-walk/ });
-    expect(go).toHaveAttribute("href", "/journeys/j_invoice/tour?phase=flow&stop=2");
+    expect(go).toHaveAttribute("href", `/journeys/j_invoice/tour?phase=flow&stop=2&stopId=${storeStopId}`);
     expect(band).toHaveTextContent("1 stop changed · InvoicesController.store");
   });
 

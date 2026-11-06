@@ -5,10 +5,11 @@ import { lazy, Suspense } from "react";
 const TourScreen = lazy(() => import("@/screens/tour/TourScreen").then((m) => ({ default: m.TourScreen })));
 
 /** Tour mode (`/journeys/$id/tour`, search `phase` = flow | data-journey | file-notes | check, `stop` = the
- * Flow stop's 1-based place in the tour). */
+ * Flow stop's 1-based place in the tour, `stopId` = its line-free identity, resolved to the right `stop`
+ * even when a link was built from a different stop order). */
 export function TourRoute() {
   const { id } = useParams({ from: "/journeys/$id/tour" });
-  const { phase, stop } = useSearch({ from: "/journeys/$id/tour" });
+  const { phase, stop, stopId } = useSearch({ from: "/journeys/$id/tour" });
   return (
     <section data-testid="screen-tour" className="flex min-w-0 flex-1 flex-col">
       <Suspense
@@ -18,7 +19,7 @@ export function TourRoute() {
           </p>
         }
       >
-        <TourScreen key={id} id={id} phase={phase} stop={stop} />
+        <TourScreen key={id} id={id} phase={phase} stop={stop} stopId={stopId} />
       </Suspense>
     </section>
   );
