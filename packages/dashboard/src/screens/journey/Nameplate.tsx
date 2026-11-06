@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { JourneyResult } from "@/api/types";
 import { API_ONLY_TITLE } from "@/lib/completeness";
 import { cn } from "@/lib/utils";
+import { TourButton } from "@/screens/tour/TourButton";
 import type { JourneyModel } from "./model";
 import { CONFIDENCE_WORD, plural } from "./words";
 
@@ -74,13 +75,16 @@ export function Nameplate({ result, model }: { result: JourneyResult; model: Jou
         </div>
       </div>
       {j && model.stops.length > 0 ? (
-        <Link
-          to="/map"
-          search={{ overlay: `journey:${j.id}` }}
-          className="inline-flex flex-none items-center rounded-lg border border-border bg-card px-3.5 py-2 text-[13px] font-semibold text-foreground transition-colors outline-offset-2 hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
-        >
-          Show on map
-        </Link>
+        <div className="flex flex-none items-center gap-2.5">
+          <TourButton journeyId={j.id} />
+          <Link
+            to="/map"
+            search={{ overlay: `journey:${j.id}` }}
+            className="inline-flex flex-none items-center rounded-lg border border-border bg-card px-3.5 py-2 text-[13px] font-semibold text-foreground transition-colors outline-offset-2 hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
+          >
+            Show on map
+          </Link>
+        </div>
       ) : null}
     </header>
   );
