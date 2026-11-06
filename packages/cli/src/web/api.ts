@@ -12,6 +12,7 @@ import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/wor
 import { z } from "zod";
 import { journeyStopKeys, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
+import { CODELOOM_DIR } from "../store/paths.js";
 import { JOURNEY_ID_RE, readTour, tourStaleStops } from "../store/tours.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
@@ -383,11 +384,14 @@ export function readCode(start: string, url: URL): CodeResponse {
   if (isAbsolute(file) || file.includes("\0")) throw outside;
   const abs = resolve(root, file);
   if (!inside(root, abs)) throw outside;
-  // Never show git internals or env files, even though they sit inside the repo.
-  const segments = relative(root, abs).split(sep);
-  if (segments.includes(".git") || /^\.env(\..*)?$/.test(segments[segments.length - 1]!)) {
-    throw new HttpError(400, `Bad file "${file}": codeloom does not show git internals or .env files.`);
-  }
+  // Never show git internals, env files or codeloom's own folder (tours hold the check's expected points),
+  // even though they sit inside the repo.
+  const hidden = (base: string, p: string) => {
+    const segments = relative(base, p).split(sep);
+    return segments.includes(".git") || segments.includes(CODELOOM_DIR) || /^\.env(\..*)?$/.test(segments[segments.length - 1]!);
+  };
+  const refused = new HttpError(400, `Bad file "${file}": codeloom does not show git internals, .env files or ${CODELOOM_DIR} files.`);
+  if (hidden(root, abs)) throw refused;
   let real: string;
   try {
     real = realpathSync(abs);
@@ -395,6 +399,7 @@ export function readCode(start: string, url: URL): CodeResponse {
     throw new HttpError(404, `${file} does not exist in repo "${repoId}" (the map may be stale; run codeloom index).`);
   }
   if (!inside(realpathSync(root), real)) throw outside;
+  if (hidden(realpathSync(root), real)) throw refused;
   const st = statSync(real);
   if (!st.isFile()) throw new HttpError(400, `Bad file "${file}": not a file.`);
   if (st.size > CODE_MAX_BYTES) throw new HttpError(400, `Bad file "${file}": too large to show (${st.size} bytes).`);

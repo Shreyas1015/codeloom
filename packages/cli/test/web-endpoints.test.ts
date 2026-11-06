@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { type DashboardServer, startDashboardServer } from "../src/web/server.js";
-import { materializeFixture } from "./helpers.js";
+import { makeRepo, materializeFixture } from "./helpers.js";
 
 /** A temp dashboard dist (the API tests never read it). */
 function makeAssetsDir(): string {
@@ -351,5 +351,31 @@ describe("dashboard JSON API on an un-indexed workspace", () => {
       expect(res.status, p).toBe(409);
       expect(ErrorBody.parse(res.body).code, p).toBe("not-indexed");
     }
+  });
+});
+
+describe("/api/code in a single-repo workspace (the repo is the workspace root)", () => {
+  let single: DashboardServer;
+  const TOUR = "j_00000000c0de";
+
+  beforeAll(async () => {
+    const root = makeRepo({ "src/app.ts": "export const app = 1;\n" });
+    writeFileSync(join(root, "codeloom.workspace.json"), JSON.stringify({ version: 1, name: "single", repos: [{ id: "app", path: "." }], links: [] }));
+    mkdirSync(join(root, ".codeloom", "tours"), { recursive: true });
+    writeFileSync(join(root, ".codeloom", "tours", `${TOUR}.json`), JSON.stringify({ check: [{ question: "q", expected: ["the secret answer"] }] }));
+    single = await startDashboardServer({ start: root, port: 0, assetsDir: makeAssetsDir(), token: TOKEN, watch: false });
+  }, 60_000);
+
+  afterAll(async () => {
+    await single?.close();
+  });
+
+  it("never serves .codeloom files (tours hold the check's expected points)", async () => {
+    for (const file of [`.codeloom/tours/${TOUR}.json`, `src/../.codeloom/tours/${TOUR}.json`, ".codeloom/journeys.json"]) {
+      const res = await request(single, `/api/code?repo=app&file=${encodeURIComponent(file)}`);
+      expect(res.status, file).toBe(400);
+      expect(ErrorBody.parse(res.body).error, file).toMatch(/does not show .*\.codeloom files/);
+    }
+    expect((await request(single, "/api/code?repo=app&file=src/app.ts")).status).toBe(200);
   });
 });
