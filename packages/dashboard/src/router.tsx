@@ -3,12 +3,14 @@ import { createRootRouteWithContext, createRoute, createRouter, Outlet, type Rou
 import { useEffect, useRef, useState } from "react";
 import { SessionError } from "@/api/client";
 import { useMapEvents } from "@/api/events";
-import { useOverview } from "@/api/queries";
+import { useOverview, useProgress } from "@/api/queries";
 import { Rail } from "@/components/shell/Rail";
+import { understoodPercent } from "@/lib/progress";
 import { isBlocking, MapStateScreen, StateBanners } from "@/components/shell/StateBanner";
 import { HomeRoute } from "@/routes/index";
 import { JourneyRoute } from "@/routes/journey";
 import { MapRoute } from "@/routes/map";
+import { ProgressRoute } from "@/routes/progress";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -32,6 +34,7 @@ function useSessionExpired(): boolean {
  * expired, not indexed, no workspace, bad data) replaces the screen; quiet banners sit above it. */
 function Shell() {
   const { data, error } = useOverview();
+  const progress = useProgress();
   const { paused } = useMapEvents();
   const expired = useSessionExpired();
   const blocking = expired ? new SessionError() : isBlocking(error) ? error : undefined;
@@ -44,7 +47,7 @@ function Shell() {
   });
   return (
     <div className="flex h-dvh min-h-0 bg-background">
-      <Rail overview={data} failed={!!error} livePaused={paused} />
+      <Rail overview={data} failed={!!error} livePaused={paused} understood={progress.data ? understoodPercent(progress.data.totals.all) : undefined} />
       <main className="flex min-w-0 flex-1 flex-col gap-5.5 overflow-y-auto px-9 py-7">
         {blocking ? (
           <MapStateScreen error={blocking} focusOnShow={focusState} />
@@ -99,7 +102,9 @@ const mapRoute = createRoute({
   component: MapRoute,
 });
 
-export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, mapRoute]);
+const progressRoute = createRoute({ getParentRoute: () => rootRoute, path: "/progress", component: ProgressRoute });
+
+export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, mapRoute, progressRoute]);
 
 export function createAppRouter({ queryClient, history }: { queryClient: QueryClient; history?: RouterHistory }) {
   return createRouter({ routeTree, context: { queryClient }, defaultPreload: false, ...(history ? { history } : {}) });

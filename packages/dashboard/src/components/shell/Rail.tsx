@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { House, Map as MapIcon } from "lucide-react";
+import { ChartNoAxesColumn, House, Map as MapIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Overview, RepoRole } from "@/api/types";
 import { cn } from "@/lib/utils";
@@ -23,7 +23,22 @@ const DOT: Record<RepoRole, string> = {
   lib: "bg-rail-dot-lib",
 };
 
-function NavItem({ to, icon, label, count, countLabel, current }: { to: "/" | "/map"; icon: ReactNode; label: string; count?: number; countLabel: string; current: boolean }) {
+function NavItem({
+  to,
+  icon,
+  label,
+  count,
+  countLabel,
+  current,
+}: {
+  to: "/" | "/map" | "/progress";
+  icon: ReactNode;
+  label: string;
+  /** A number (grouped) or ready text such as "34%". */
+  count?: number | string;
+  countLabel: string;
+  current: boolean;
+}) {
   return (
     <Link
       to={to}
@@ -37,7 +52,7 @@ function NavItem({ to, icon, label, count, countLabel, current }: { to: "/" | "/
       {label}
       {count !== undefined && (
         <span className={cn("ml-auto font-mono text-xs tabular", current ? "text-rail-strong" : "text-rail-muted")}>
-          {fmt(count)}
+          {typeof count === "number" ? fmt(count) : count}
           <span className="sr-only"> {countLabel}</span>
         </span>
       )}
@@ -46,9 +61,22 @@ function NavItem({ to, icon, label, count, countLabel, current }: { to: "/" | "/
 }
 
 /** The painted gallery wall: brand, workspace, nav with counts, repo list, live-updates and agent status. */
-export function Rail({ overview, failed = false, livePaused = false }: { overview: Overview | undefined; failed?: boolean; livePaused?: boolean }) {
+export function Rail({
+  overview,
+  failed = false,
+  livePaused = false,
+  understood,
+}: {
+  overview: Overview | undefined;
+  failed?: boolean;
+  livePaused?: boolean;
+  /** Understood journeys as a whole percent (Progress's count); left out until progress loads. */
+  understood?: number;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const onMap = pathname === "/map" || pathname.startsWith("/map/");
+  const under = (p: string) => pathname === p || pathname.startsWith(`${p}/`);
+  const onMap = under("/map");
+  const onProgress = under("/progress");
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
   const repoCount = overview?.repos.length ?? 0;
   const iconCls = "size-[17px] shrink-0";
@@ -78,8 +106,16 @@ export function Rail({ overview, failed = false, livePaused = false }: { overvie
       )}
 
       <nav aria-label="Main" className="flex flex-col gap-0.5">
-        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap} />
+        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress} />
         <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
+        <NavItem
+          to="/progress"
+          icon={<ChartNoAxesColumn className={iconCls} strokeWidth={1.6} />}
+          label="Progress"
+          count={understood === undefined ? undefined : `${understood}%`}
+          countLabel="understood"
+          current={onProgress}
+        />
       </nav>
 
       {overview && overview.repos.length > 0 && (
