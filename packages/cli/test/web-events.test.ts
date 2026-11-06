@@ -85,14 +85,26 @@ describe("watchMap", () => {
     expect(calls).toEqual([["journeys", "repo:api", "repo:web"]]);
   });
 
-  it("ignores fingerprints.json and temp files", async () => {
+  it("ignores temp files", async () => {
+    const root = makeWorkspace();
+    const { calls } = await collect(root);
+    writeFileSync(join(root, ".codeloom", "journeys.json.123.456.tmp"), "{}");
+    writeFileSync(join(root, "web", ".codeloom", "graph.json.1.2.tmp"), "{}");
+    writeFileSync(join(root, "api", ".codeloom", "fingerprints.json.9.9.tmp"), "{}");
+    await sleep(DEBOUNCE * 5);
+    expect(calls).toEqual([]);
+  });
+
+  // A re-index after a code edit that leaves the map itself unchanged (graph.json, chains.json byte-identical)
+  // still changes file hashes, so tours' "may be out of date" stops and progress re-walks must refresh: but
+  // only those, not the whole repo's map.
+  it("a repo's fingerprints.json change (a re-index) → [progress, tours] only", async () => {
     const root = makeWorkspace();
     const { calls } = await collect(root);
     writeFileSync(join(root, "api", ".codeloom", "fingerprints.json"), "{}");
-    writeFileSync(join(root, ".codeloom", "journeys.json.123.456.tmp"), "{}");
-    writeFileSync(join(root, "web", ".codeloom", "graph.json.1.2.tmp"), "{}");
-    await sleep(DEBOUNCE * 5);
-    expect(calls).toEqual([]);
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["progress", "tours"]]);
   });
 
   it("a workspace file change → [workspace], and the repo list is re-read", async () => {

@@ -18,7 +18,11 @@ export interface WatchMapOptions {
 }
 
 /** Files that never produce a change key: the indexer's own bookkeeping and the atomic writer's temp files. */
-const ignored = (name: string) => name === FILES.fingerprints || name.endsWith(".tmp");
+const ignored = (name: string) => name.endsWith(".tmp");
+/** A re-index rewrites the git-ignored fingerprints cache even when the map files stay byte-identical (a code
+ * edit that changes no node). File hashes may have changed, so only what is derived from them refreshes:
+ * progress (re-walks) and tours ("may be out of date"). */
+const REINDEXED: ChangeKey[] = ["progress", "tours"];
 
 /** The nearest folder at or above `start` that holds .git (a single repo with no workspace file). No git call. */
 function gitRoot(start: string): string | null {
@@ -76,8 +80,8 @@ function readRepos(start: string, previous: WatchedWorkspace | null): WatchedWor
  * (debounced). Watches the workspace root folder (for the workspace file and its .codeloom appearing), the
  * root .codeloom (chains.json → chains, journeys.json → journeys), its tours/ folder (→ tours), this
  * workspace's progress file under CODELOOM_HOME or ~/.codeloom (→ progress) and, for each repo, its folder (for
- * .codeloom appearing) and its .codeloom (any map file → repo:<id>). fingerprints.json and *.tmp are
- * ignored. A workspace file change re-reads the repo list and re-arms the watchers. Never reads the map
+ * .codeloom appearing) and its .codeloom (any map file → repo:<id>; fingerprints.json, rewritten by every
+ * re-index → progress + tours). *.tmp files are ignored. A workspace file change re-reads the repo list and re-arms the watchers. Never reads the map
  * itself and never runs git. Returns a stop function that closes every watcher. */
 export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, opts: WatchMapOptions = {}): () => void {
   const debounceMs = opts.debounceMs ?? 250;
@@ -142,6 +146,7 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
       onName: (name) => {
         if (name === null) return emit(rootDirKeys());
         if (ignored(name)) return;
+        if (name === FILES.fingerprints) return rootRepo ? emit(REINDEXED) : undefined;
         if (name === TOURS_DIR) {
           // The tours folder appeared (or went): arm its watcher.
           sync();
@@ -209,7 +214,8 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
       want.set(join(abs, CODELOOM_DIR), {
         sig: `repodata:${repo.id}`,
         onName: (name) => {
-          if (name === null || !ignored(name)) emit([key]);
+          if (name === FILES.fingerprints) emit(REINDEXED);
+          else if (name === null || !ignored(name)) emit([key]);
         },
       });
     }
