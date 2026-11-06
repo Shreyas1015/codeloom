@@ -32,6 +32,7 @@ const ProgressResponse = z.strictObject({
   journeys: z.array(JourneyProgressView),
   totals: z.strictObject({ all: LevelCounts, byRepo: z.record(z.string(), LevelCounts), byArea: z.record(z.string(), LevelCounts) }),
   olderJourneys: z.array(z.string()),
+  olderTours: z.array(z.string()),
 });
 const TourStop = z.strictObject({ chainId: z.string(), stopIndex: z.number(), key: z.string(), fileHash: z.string(), explanation: z.string() });
 const TourFile = z.strictObject({
@@ -138,8 +139,9 @@ beforeAll(async () => {
   writeTour(demo, J1, {
     stops: [
       { chainId: create.id, stopIndex: 0, key: j1Keys[0]!, explanation: "Where the customer starts." },
-      // A stop that is not in the journey (same file, a line no stop has): shown as removed.
-      { chainId: create.id, stopIndex: 99, key: stopKey({ ...first, line: 99_999 }), explanation: "Gone." },
+      // A stop that is not in the journey (same file, a symbol no stop has): shown as removed. (Only the
+      // line differing is a moved stop, not a removed one: see stop-identity.test.ts.)
+      { chainId: create.id, stopIndex: 99, key: stopKey({ ...first, line: 99_999, symbol: "Gone.stop" }), explanation: "Gone." },
     ],
     dataJourney: { input: '{"name":"Ada"}', steps: [], output: '{"id":1}' },
     fileNotes: [],
@@ -172,6 +174,9 @@ describe("GET /api/progress", () => {
     expect(Object.keys(p.totals.byRepo).sort()).toEqual(["api", "billing", "web"]);
     expect(p.path.startsWith(process.env.CODELOOM_HOME!)).toBe(true);
     expect(p.path.startsWith(demo)).toBe(false);
+    // a tour for a journey no longer in journeys.json: older, and Tour mode can open it
+    expect(p.olderJourneys).toEqual([OLD]);
+    expect(p.olderTours).toEqual([OLD]);
   });
 });
 

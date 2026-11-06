@@ -378,8 +378,10 @@ export interface ProgressResponse {
   journeys: JourneyProgressView[];
   /** byRepo lists every workspace repo (also those with no journey). */
   totals: { all: LevelCounts; byRepo: Record<string, LevelCounts>; byArea: Record<string, LevelCounts> };
-  /** Journey ids with progress that are no longer in journeys.json (renamed, merged or split), sorted. */
+  /** Journey ids with progress or a tour that are no longer in journeys.json (renamed, merged or split), sorted. */
   olderJourneys: string[];
+  /** The olderJourneys that still have a tour (Tour mode opens it), sorted. */
+  olderTours: string[];
 }
 
 export interface TourStop {

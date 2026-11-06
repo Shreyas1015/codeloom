@@ -10,10 +10,10 @@ import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEA
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
 import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/workspace.js";
 import { z } from "zod";
-import { journeyStopKeys, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
+import { journeyPlacedStops, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
 import { CODELOOM_DIR } from "../store/paths.js";
-import { JOURNEY_ID_RE, readTour, tourStaleStops } from "../store/tours.js";
+import { JOURNEY_ID_RE, readTour, tourRemovedStops, tourStaleStops } from "../store/tours.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
 import { loadWorkspace } from "../workspace/repos.js";
@@ -563,13 +563,13 @@ export function tourFor(start: string, journeyId: string): TourResponse {
     if (!journeyExists) throw new HttpError(404, `Unknown journey "${id}".`);
     return { journeyId: id, journeyExists, tour: null, staleStops: [], removedStops: [] };
   }
-  const current = new Set(journeyExists ? journeyStopKeys(state, id) : []);
+  const current = journeyExists ? journeyPlacedStops(state, id) : [];
   return {
     journeyId: id,
     journeyExists,
     tour: { ...tour, check: tour.check.map(({ question }) => ({ question })) },
     staleStops: tourStaleStops(tour, state.ws).map((s) => s.key),
-    removedStops: tour.stops.filter((s) => !current.has(s.key)).map((s) => s.key),
+    removedStops: tourRemovedStops(tour, current).map((s) => s.key),
   };
 }
 

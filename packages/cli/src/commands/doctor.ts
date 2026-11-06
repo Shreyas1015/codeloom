@@ -6,7 +6,7 @@ import { cacheContextKey } from "../indexer/index-repo.js";
 import { repoIndexStatus } from "../mcp/tools/workspace.js";
 import { DOCTOR_HINT, readJson, writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
-import { progressPath, readProgress } from "../store/progress.js";
+import { otherProgressFiles, progressPath, readProgress } from "../store/progress.js";
 import { readEndpoints, readGraph } from "../store/read.js";
 import {
   ChainsFileSchema,
@@ -229,6 +229,14 @@ function checkProgress(d: Doctor, ws: StoreWorkspace): void {
     const path = progressPath(ws);
     const n = Object.keys(readProgress(ws).journeys).length;
     d.add("progress", undefined, "ok", n === 0 ? `no progress yet (${path})` : `${n} journey${n === 1 ? "" : "s"} tracked in ${path}`);
+    const others = otherProgressFiles(ws);
+    if (others.length > 0) {
+      d.add(
+        "progress", undefined, "warn",
+        `other progress for workspace "${ws.name}" (its repo set changed since): ${others.join(", ")}. codeloom does not move it; ` +
+          `to keep that progress, copy its journeys into ${path} by hand.`,
+      );
+    }
   } catch (err) {
     d.add("progress", undefined, "error", errText(err));
   }
@@ -241,6 +249,14 @@ function checkTours(d: Doctor, ws: StoreWorkspace): void {
   if (ids.length === 0) return d.add("tours", undefined, "ok", "no tours yet");
   let valid = 0;
   const stale: string[] = [];
+  let known: Set<string> | undefined;
+  try {
+    known = new Set((readJson(join(ws.root, CODELOOM_DIR, FILES.journeys), JourneysFileSchema, { handWritten: true })?.journeys ?? []).map((j) => j.id));
+  } catch {
+    known = undefined; // the journeys check reports it
+  }
+  const gone = known ? ids.filter((id) => !known.has(id)) : [];
+  for (const id of gone) d.add("tours", undefined, "warn", `tour for a journey that no longer exists: ${id} (it stays readable in Tour mode; run write-tour on the new journey)`);
   for (const id of ids) {
     try {
       const tour = readTour(ws.root, id);
@@ -255,7 +271,7 @@ function checkTours(d: Doctor, ws: StoreWorkspace): void {
   if (stale.length > 0) {
     return d.add("tours", undefined, "warn", `${stale.join("; ")} (run the write-tour prompt again to refresh)`);
   }
-  if (valid > 0) d.add("tours", undefined, "ok", `${valid} tour${valid === 1 ? "" : "s"}`);
+  if (valid > 0 && gone.length === 0) d.add("tours", undefined, "ok", `${valid} tour${valid === 1 ? "" : "s"}`);
 }
 
 /** `bin`: the codeloom bin running doctor (codeloomBin()), which an installed or repaired hook runs.

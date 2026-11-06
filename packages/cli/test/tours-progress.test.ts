@@ -308,6 +308,21 @@ describe("progress store", () => {
     expect(v.totals.byRepo.api).toMatchObject({ total: 1, understood: 1 });
     expect(v.totals.byRepo.billing).toMatchObject({ total: 1, seen: 1 });
     expect(v.olderJourneys).toEqual(["j_0123456789ab"]);
+    expect(v.olderTours).toEqual([]);
+  });
+
+  it("a tour for a journey no longer in journeys.json is older too, and listed in olderTours", () => {
+    const OLD = "j_00000000dead";
+    const t = writeTour(demo, SIGNUP, draft(), { ws: state.ws, now: NOW });
+    writeFileSync(tourPath(demo, OLD), JSON.stringify({ ...t, journeyId: OLD }));
+    markSeen(state.ws, "j_0123456789ab", { now: NOW });
+    try {
+      const v = progressView(fresh());
+      expect(v.olderJourneys).toEqual([OLD, "j_0123456789ab"]);
+      expect(v.olderTours).toEqual([OLD]);
+    } finally {
+      rmSync(tourPath(demo, OLD));
+    }
   });
 
   it("a corrupt progress file is a clear exit-2 error and is never overwritten", () => {

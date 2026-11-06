@@ -193,6 +193,7 @@ const RawSchemas: Record<string, z.ZodObject> = {
       totals: z.object({ all: Levels, byRepo: z.record(str, Levels), byArea: z.record(str, Levels) }).strict(),
       left: z.array(z.object({ journeyId: str, name: str, area: str, level: Level, reWalkStops: int.nonnegative() }).strict()),
       olderJourneys: z.array(str),
+      olderTours: z.array(str),
     })
     .strict(),
   record_check: z

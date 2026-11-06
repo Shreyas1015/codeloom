@@ -20,6 +20,7 @@ import {
   type TourDraft,
   TourDraftSchema,
   tourPath,
+  tourRemovedStops,
   tourStaleStops,
   writeTour,
 } from "../../store/tours.js";
@@ -344,12 +345,12 @@ export function buildTourContext(start: string, journeyId: string, chainId?: str
   try {
     const t = readTour(state.ws.root, journeyId);
     if (t) {
-      const current = new Set(chains.flatMap((c) => c.stops.map(stopKey)));
+      const current = chains.flatMap((c) => c.stops.map((s, stopIndex) => ({ chainId: c.id, stopIndex, key: stopKey(s) })));
       tour = {
         writtenAt: t.writtenAt,
         stops: t.stops.length,
         staleStops: tourStaleStops(t, state.ws).map((s) => s.key),
-        removedStops: t.stops.filter((s) => !current.has(s.key)).map((s) => s.key),
+        removedStops: tourRemovedStops(t, current).map((s) => s.key),
         check: t.check,
       };
     }
@@ -441,10 +442,13 @@ export function saveTour(start: string, journeyId: string, tour: unknown): Recor
 
 const zero = (): LevelCounts => ({ total: 0, none: 0, seen: 0, toured: 0, understood: 0, needsReWalk: 0 });
 
+/** Like the dashboard: a journey that needs a re-walk is not counted as understood but as toured, until it
+ * passes check-me again (needsReWalk still counts it). */
 function countInto(c: LevelCounts, j: JourneyProgressView): void {
   c.total++;
-  c[j.level]++;
-  if (j.needsReWalk.length > 0) c.needsReWalk++;
+  const rewalk = j.needsReWalk.length > 0;
+  c[j.level === "understood" && rewalk ? "toured" : j.level]++;
+  if (rewalk) c.needsReWalk++;
 }
 
 export function getProgress(start: string, args: { repo?: string; area?: string }): Record<string, unknown> {
@@ -474,6 +478,7 @@ export function getProgress(start: string, args: { repo?: string; area?: string 
     totals: { all, byRepo, byArea: Object.fromEntries(Object.entries(byArea).sort(([a], [b]) => compare(a, b))) },
     left,
     olderJourneys: view.olderJourneys,
+    olderTours: view.olderTours,
   };
 }
 
@@ -563,7 +568,7 @@ export function registerTourTools(server: McpServer, opts: ServerOptions): void 
         "Your own progress through the journeys (kept in ~/.codeloom, never committed): per journey its level " +
         "(none, seen = opened in the dashboard, toured = all four tour phases viewed, understood = passed check-me), " +
         "the stops to re-walk because their code changed since you passed, and the last check; totals per repo and " +
-        "per area; and `left`, the journeys not yet understood (or needing a re-walk), by area. Filter by repo or area. Read only.",
+        "per area, where a journey that needs a re-walk counts as toured, not understood, until it passes again; and `left`, the journeys not yet understood (or needing a re-walk), by area. Filter by repo or area. Read only.",
       inputSchema: { repo: z.string().min(1).optional(), area: z.string().optional() },
     },
     withErrors((args: { repo?: string; area?: string }) => getProgress(opts.start, args), "Filter by repo or area."),

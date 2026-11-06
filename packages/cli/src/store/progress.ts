@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -8,8 +8,8 @@ import { chainLookup, type MapState } from "../mcp/state.js";
 import { compare } from "../util.js";
 import { gitHead } from "../workspace/repos.js";
 import { DOCTOR_HINT, writeJsonAtomic } from "./json.js";
-import { parseStopKey, stopKey } from "./stop-key.js";
-import { FileHasher, JOURNEY_ID_RE, readTour, sortKeysDeep, type StoreWorkspace } from "./tours.js";
+import { keyIdentity, parseStopKey, type PlacedStop, stopKey } from "./stop-key.js";
+import { FileHasher, JOURNEY_ID_RE, listTours, readTour, sortKeysDeep, type StoreWorkspace } from "./tours.js";
 
 /** Personal progress (spec §2): `<CODELOOM_HOME or ~/.codeloom>/progress/<workspaceId>.json`. Never
  * written under the workspace, never committed. */
@@ -49,6 +49,9 @@ export type JourneyProgress = z.infer<typeof JourneyProgressSchema>;
 
 export const ProgressFileSchema = z.object({
   version: z.literal(1),
+  /** The workspace name and repo ids the file's id was made from (written on every update), so doctor can
+   * find the progress of the same workspace after its repo set changed. Older files lack it. */
+  workspace: z.object({ name: z.string(), repos: z.array(z.string()) }).optional(),
   /** By journey id. */
   journeys: z.record(z.string(), JourneyProgressSchema),
 });
@@ -200,6 +203,7 @@ function update(ws: ProgressWorkspace, journeyId: string, fn: (p: JourneyProgres
     const entry: JourneyProgress = structuredClone(file.journeys[journeyId] ?? { checks: [] });
     fn(entry);
     file.journeys[journeyId] = entry;
+    file.workspace = { name: ws.name, repos: ws.repos.map((r) => r.ref.id).sort(compare) };
     const next = sortKeysDeep(file);
     if (JSON.stringify(next) !== before) writeJsonAtomic(path, next);
     return entry;
@@ -243,6 +247,22 @@ export function journeyStopKeys(state: Pick<MapState, "chains" | "journeys">, jo
   const keys = new Set<string>();
   for (const c of chainLookup(state.chains).resolve(j.chainIds).chains) for (const s of c.stops) keys.add(stopKey(s));
   return [...keys];
+}
+
+/** Every stop of the journey's current chains with its place (chain id, index): what a saved stop is
+ * matched against (`stopMatcher`). Unknown journey → CodeloomError (exit 2). */
+export function journeyPlacedStops(state: Pick<MapState, "chains" | "journeys">, journeyId: string): PlacedStop[] {
+  const j = findJourney(state, journeyId);
+  return chainLookup(state.chains).resolve(j.chainIds).chains.flatMap((c) => c.stops.map((s, stopIndex) => ({ chainId: c.id, stopIndex, key: stopKey(s) })));
+}
+
+/** The hash recorded for a current stop: by its exact key, else by its line-free identity (all stops with
+ * one identity share a file, so they share a hash). */
+function savedHash(stopHashes: Record<string, string> | undefined, byIdentity: Map<string, string>, key: string): string | undefined {
+  const exact = stopHashes?.[key];
+  if (exact !== undefined) return exact;
+  const id = keyIdentity(key);
+  return id === null ? undefined : byIdentity.get(id);
 }
 
 function reposOf(keys: readonly string[]): string[] {
@@ -292,8 +312,9 @@ export interface JourneyProgressView {
   /** Repos the journey's stops touch, sorted. */
   repos: string[];
   level: ProgressLevel;
-  /** For an understood journey: its current stops whose file changed since understoodAt (or that are new
-   * since), in journey stop order. Empty otherwise. */
+  /** For an understood journey: its current stops (current stopKeys) whose file changed since understoodAt
+   * (or that are new since), in journey stop order; a stop is matched to its saved hash by its line-free
+   * identity, so a moved line is not "new". Empty otherwise. */
   needsReWalk: string[];
   lastCheck: CheckRecord | null;
   seenAt?: string;
@@ -318,8 +339,10 @@ export interface ProgressView {
   /** Every journey in journeys.json, sorted by id. */
   journeys: JourneyProgressView[];
   totals: { all: LevelCounts; byRepo: Record<string, LevelCounts>; byArea: Record<string, LevelCounts> };
-  /** Journey ids with progress but no longer in journeys.json (renamed/merged/split), sorted. */
+  /** Journey ids with progress or a tour but no longer in journeys.json (renamed/merged/split), sorted. */
   olderJourneys: string[];
+  /** The olderJourneys that have a tour file (Tour mode can still open them), sorted. */
+  olderTours: string[];
 }
 
 const zero = (): LevelCounts => ({ total: 0, none: 0, seen: 0, toured: 0, understood: 0, needsReWalk: 0 });
@@ -350,12 +373,18 @@ export function progressView(state: ProgressState): ProgressView {
     const p = file.journeys[j.id];
     const keys = journeyStopKeys(state, j.id);
     const level = levelOf(p);
-    const needsReWalk = level === "understood"
-      ? keys.filter((k) => {
-          const was = p!.stopHashes?.[k];
-          return was === undefined || hasher.hashStop(k) !== was;
-        })
-      : [];
+    let needsReWalk: string[] = [];
+    if (level === "understood") {
+      const byIdentity = new Map<string, string>();
+      for (const [k, h] of Object.entries(p!.stopHashes ?? {})) {
+        const id = keyIdentity(k);
+        if (id !== null && !byIdentity.has(id)) byIdentity.set(id, h);
+      }
+      needsReWalk = keys.filter((k) => {
+        const was = savedHash(p!.stopHashes, byIdentity, k);
+        return was === undefined || hasher.hashStop(k) !== was;
+      });
+    }
     const v: JourneyProgressView = {
       journeyId: j.id,
       name: j.name,
@@ -374,12 +403,34 @@ export function progressView(state: ProgressState): ProgressView {
     count((byArea[j.area] ??= zero()), v);
   }
   const known = new Set(state.journeys.map((j) => j.id));
-  const olderJourneys = Object.keys(file.journeys).filter((id) => !known.has(id)).sort(compare);
+  const olderTours = listTours(state.ws.root).filter((id) => !known.has(id));
+  const olderJourneys = [...new Set([...Object.keys(file.journeys), ...olderTours])].filter((id) => !known.has(id)).sort(compare);
   return {
     workspaceId: workspaceId(state.ws),
     path: progressPath(state.ws),
     journeys,
     totals: { all, byRepo, byArea: sortKeysDeep(byArea) },
     olderJourneys,
+    olderTours,
   };
+}
+
+/** Other progress files whose recorded workspace name is `ws.name` but whose id differs: the same workspace
+ * before its repo set changed (the id hashes the repo ids). Unreadable files are skipped. Sorted paths. */
+export function otherProgressFiles(ws: Pick<StoreWorkspace, "root" | "name" | "repos">): string[] {
+  const path = progressPath(ws);
+  const dir = dirname(path);
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const name of readdirSync(dir).sort(compare)) {
+    const p = join(dir, name);
+    if (!name.endsWith(".json") || p === path) continue;
+    try {
+      const r = ProgressFileSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
+      if (r.success && r.data.workspace?.name === ws.name) out.push(p);
+    } catch {
+      // not ours to judge
+    }
+  }
+  return out;
 }

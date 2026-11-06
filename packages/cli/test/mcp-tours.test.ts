@@ -308,6 +308,24 @@ describe("record_check and get_progress", { timeout: 60_000 }, () => {
     expect(p.journeys.every((j: { level: string }) => j.level === "none")).toBe(true);
     expect(existsSync(progressPath(loadMapState(demo).ws))).toBe(false);
   });
+
+  it("counts a journey that needs a re-walk as not understood (like the dashboard), toured until re-checked", async () => {
+    await ok("record_check", { journey: SIGNUP, ...answers3, verdict: "pass" });
+    const s0 = signupStops()[0]!;
+    const file = join(demo, s0.repo, s0.file);
+    const before = readFileSync(file, "utf8");
+    writeFileSync(file, `${before}\n// changed after the check\n`);
+    try {
+      const p = await ok("get_progress", {});
+      const j = p.journeys.find((x: { journeyId: string }) => x.journeyId === SIGNUP);
+      expect(j.needsReWalk.length).toBeGreaterThan(0);
+      expect(p.totals.all).toMatchObject({ total: 2, understood: 0, toured: 1, needsReWalk: 1 });
+      expect(p.totals.byArea.customers).toMatchObject({ total: 1, understood: 0, toured: 1, needsReWalk: 1 });
+      expect(p.left.map((x: { journeyId: string }) => x.journeyId)).toContain(SIGNUP);
+    } finally {
+      writeFileSync(file, before);
+    }
+  });
 });
 
 // ---- prompts ---------------------------------------------------------------------------------------------

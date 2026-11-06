@@ -276,6 +276,10 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
   it("checks tours: valid, stale stops counted, invalid files reported", () => {
     const root = shop();
     expect(r0(root)).toMatchObject({ status: "ok", message: "no tours yet" });
+    writeJsonAtomic(join(root, ".codeloom", "journeys.json"), {
+      version: 1,
+      journeys: [{ id: "j_0123456789ab", name: "Checkout", area: "", note: "", chainIds: ["ch_x"], status: "ok" }],
+    });
     const ws = loadWorkspace(root);
     const repos = ws.repos.map((ref) => ({ ref, abs: join(root, ref.path) }));
     const key = stopKey({ lane: "code", repo: "demo-api", file: "package.json", line: 1, symbol: "x" });
@@ -297,6 +301,47 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(bad).toHaveLength(1);
     expect(bad[0]!.message).toContain("j_00000000beef.json");
     expect(readFileSync(join(root, ".codeloom", "tours", "j_00000000beef.json"), "utf8")).toBe("{}");
+  });
+
+  it("warns about a tour for a journey that no longer exists, naming it", () => {
+    const root = shop();
+    const ws = loadWorkspace(root);
+    const repos = ws.repos.map((ref) => ({ ref, abs: join(root, ref.path) }));
+    const key = stopKey({ lane: "code", repo: "demo-api", file: "package.json", line: 1, symbol: "x" });
+    const check = [1, 2, 3].map((n) => ({ question: `q${n}`, expected: ["p"] }));
+    writeTour(root, "j_00000000dead", {
+      stops: [{ chainId: "ch_x", stopIndex: 0, key, explanation: "" }],
+      dataJourney: { input: "", steps: [], output: "" },
+      fileNotes: [],
+      check,
+    }, { ws: { repos } });
+    const items = runDoctor(root, {}).items.filter((i) => i.check === "tours");
+    const warn = items.find((i) => i.status === "warn")!;
+    expect(warn.message).toContain("tour for a journey that no longer exists: j_00000000dead");
+    expect(warn.fix).toBeUndefined();
+  });
+
+  it("lists other progress files for the same workspace name (its repo set changed), never moving them", () => {
+    const root = shop();
+    const ws = loadWorkspace(root);
+    const path = progressPath({ root, name: ws.name, repos: ws.repos.map((ref) => ({ ref, abs: join(root, ref.path) })) });
+    const other = join(path, "..", "00000000000000aa.json");
+    mkdirSync(join(path, ".."), { recursive: true });
+    const text = JSON.stringify({ version: 1, workspace: { name: ws.name, repos: ["gone-repo"] }, journeys: {} });
+    writeFileSync(other, text);
+    writeFileSync(join(path, "..", "00000000000000bb.json"), JSON.stringify({ version: 1, workspace: { name: "another", repos: [] }, journeys: {} }));
+    try {
+      const r = runDoctor(root, { fix: true });
+      const item = r.items.find((i) => i.check === "progress" && i.status === "warn")!;
+      expect(item.message).toContain(other);
+      expect(item.message).not.toContain("00000000000000bb");
+      expect(item.message).toMatch(/repo set changed/);
+      expect(item.fix).toBeUndefined();
+      expect(readFileSync(other, "utf8")).toBe(text);
+    } finally {
+      rmSync(other);
+      rmSync(join(path, "..", "00000000000000bb.json"));
+    }
   });
 
   it("warns about orphaned journeys, naming them", async () => {

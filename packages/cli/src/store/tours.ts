@@ -7,7 +7,7 @@ import { compare } from "../util.js";
 import { gitHead } from "../workspace/repos.js";
 import { readJson, writeJsonAtomic } from "./json.js";
 import { CODELOOM_DIR } from "./paths.js";
-import { parseStopKey } from "./stop-key.js";
+import { parseStopKey, type PlacedStop, stopMatcher } from "./stop-key.js";
 
 /** `.codeloom/tours/` in the workspace root: one committed file per journey (spec §1). */
 export const TOURS_DIR = "tours";
@@ -219,7 +219,15 @@ export function writeTour(root: string, journeyId: string, draft: TourDraft, ctx
   return tour;
 }
 
-/** The tour's stops whose file changed since the tour was written (or is gone), in tour order. */
+/** The tour's stops no longer in the journey, in tour order. A stop is matched by its line-free identity
+ * (falling back to its chain id and index when two stops share one), so a moved line is not "removed". */
+export function tourRemovedStops(tour: TourFile, current: readonly PlacedStop[]): TourStop[] {
+  const match = stopMatcher(current);
+  return tour.stops.filter((s) => match(s.key, s) === undefined);
+}
+
+/** The tour's stops whose file changed since the tour was written (or is gone), in tour order. Line-free:
+ * it compares the hash of the stop's file. */
 export function tourStaleStops(tour: TourFile, ws: Pick<StoreWorkspace, "repos">): TourStop[] {
   const hasher = new FileHasher(ws);
   return tour.stops.filter((s) => hasher.hashStop(s.key) !== s.fileHash);
