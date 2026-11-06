@@ -74,6 +74,16 @@ describe("Gallery Guide tokens", () => {
     }
   });
 
+  it("defines the progress strip's three greens, darkest for understood, each step lighter", () => {
+    const steps = ["--progress-understood", "--progress-toured", "--progress-seen"].map((n) => rootValue(n)!);
+    for (const v of steps) expect(v).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(steps[0]!.toUpperCase()).toBe(rootValue("--success")!.toUpperCase());
+    const card = rootValue("--card")!;
+    expect(contrast(steps[0]!, card)).toBeGreaterThan(contrast(steps[1]!, card));
+    expect(contrast(steps[1]!, card)).toBeGreaterThan(contrast(steps[2]!, card));
+    for (const t of ["progress-understood", "progress-toured", "progress-seen"]) expect(css).toContain(`--color-${t}: var(--${t});`);
+  });
+
   it("self-hosts the fonts through @fontsource with the required weights", () => {
     for (const w of ["400", "600", "700"]) expect(css).toContain(`@fontsource/schibsted-grotesk/${w}.css`);
     for (const w of ["400", "600"]) expect(css).toContain(`@fontsource/jetbrains-mono/${w}.css`);

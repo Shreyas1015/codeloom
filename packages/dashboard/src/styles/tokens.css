@@ -32,6 +32,10 @@
   --destructive-soft: #F7E3E0;
   --success: #3E8A6E;
   --success-soft: #DDEEE6;
+  /* progress strip: understood (success green), toured, seen — lighter steps of the same green */
+  --progress-understood: #3E8A6E;
+  --progress-toured: #8FC1AC;
+  --progress-seen: #C9DED4;
 
   --border: #D9DDD8;
   --input: #D9DDD8;
@@ -99,6 +103,9 @@
   --color-destructive-soft: var(--destructive-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-progress-understood: var(--progress-understood);
+  --color-progress-toured: var(--progress-toured);
+  --color-progress-seen: var(--progress-seen);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

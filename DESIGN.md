@@ -316,6 +316,16 @@ failure (oxblood). No border-left accent stripes.
 - Six cells on a hairline grid with a 2px ink rule on top. Big tabular number, caption under it. No icons, no
   cards, no trend arrows.
 
+### Progress Strip
+- Three segments in one green family: understood (`success-green`), toured (`#8FC1AC`), seen (`#C9DED4`) on a
+  sage-mist track, 1px gaps between segments, 3px corners, 14px tall (6px in area cells). Strips in one list
+  share a baseline: each track starts at the same left edge and is as long as its total on the list's scale,
+  so a bigger repo draws a longer bar. One image whose name reads every count ("3 understood, 2 toured, 1 seen,
+  of 10 journeys"); the numbers also sit beside it in text. A legend names the three colours.
+- Per journey (Home rows): three 8px steps, filled up to the level, with the word under them. A journey that
+  needs a re-walk fills two steps dashed in deep ochre on ochre wash and says "Re-walk n stops" (never ochre
+  fill: that is a stop). The Journey nameplate shows the same level as a pill.
+
 ### Confidence Line
 - Exact: 2px solid tan. Param: 1px solid tan. Guess: 1.5px dashed slate with the reason as a tooltip (focusable).
   Unresolved: dashed oxblood. Home shows the worst confidence as the same short line plus a word.
