@@ -1,13 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { Search, TriangleAlert } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { JourneyRow } from "@/api/types";
+import type { JourneyProgressView, JourneyRow, ProgressResponse } from "@/api/types";
+import { LevelStrip } from "@/components/gallery/ProgressStrip";
+import { displayLevel } from "@/lib/progress";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { type CompleteFilter, facets, filterJourneys, type JourneyFilter, NO_FILTER, type SortKey, sortJourneys } from "./filter";
 import { CompleteMark, ConfidenceMark, LaneCounts, ShowMore, useLimit } from "./parts";
 
 const COLS = "md:grid md:grid-cols-[minmax(0,2.3fr)_minmax(0,.9fr)_minmax(0,2.2fr)_minmax(0,1fr)_minmax(0,.9fr)] md:gap-4.5";
+/** With your progress: a sixth column for it. */
+const COLS_PROGRESS =
+  "md:grid md:grid-cols-[minmax(0,2.3fr)_minmax(0,.9fr)_minmax(0,2.2fr)_minmax(0,1fr)_minmax(0,.9fr)_120px] md:gap-4.5";
 
 function isTyping(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -60,7 +65,7 @@ function Select({ id, value, onChange, options }: { id: string; value: string; o
   );
 }
 
-function Row({ r }: { r: JourneyRow }) {
+function Row({ r, level }: { r: JourneyRow; level?: JourneyProgressView | null }) {
   const orphaned = r.status === "orphaned";
   return (
     <li>
@@ -71,7 +76,7 @@ function Row({ r }: { r: JourneyRow }) {
         data-name={r.name}
         className={cn(
           "flex flex-col gap-2 px-5 py-3 transition-colors outline-none hover:bg-muted/50 focus-visible:bg-accent-soft focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring md:items-center",
-          COLS,
+          level === undefined ? COLS : COLS_PROGRESS,
         )}
       >
         <span className="flex min-w-0 flex-col">
@@ -98,13 +103,17 @@ function Row({ r }: { r: JourneyRow }) {
           <ConfidenceMark confidence={r.confidence} />
           <CompleteMark complete={r.complete} apiOnly={r.apiOnly} />
         </span>
+        {level !== undefined && (
+          <LevelStrip level={level ? displayLevel(level) : "none"} changed={level?.needsReWalk.length ?? 0} />
+        )}
       </Link>
     </li>
   );
 }
 
 /** The journey list as wall labels, with search, filters, sort, j/k and "Show more". */
-export function JourneyList({ rows }: { rows: JourneyRow[] }) {
+export function JourneyList({ rows, progress }: { rows: JourneyRow[]; progress?: ProgressResponse }) {
+  const levels = useMemo(() => (progress ? new Map(progress.journeys.map((v) => [v.journeyId, v])) : undefined), [progress]);
   const [f, setF] = useState<JourneyFilter>(NO_FILTER);
   const [sort, setSort] = useState<SortKey>("name");
   const list = useRef<HTMLUListElement>(null);
@@ -196,7 +205,7 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div aria-hidden className={cn("hidden border-b border-border bg-muted/40 px-5 py-2 text-xs font-semibold text-muted-foreground", COLS)}>
+        <div aria-hidden className={cn("hidden border-b border-border bg-muted/40 px-5 py-2 text-xs font-semibold text-muted-foreground", levels ? COLS_PROGRESS : COLS)}>
           <span>Journey</span>
           <span>Area</span>
           {/* the lane words in their roundel hues: the header doubles as the legend */}
@@ -206,13 +215,14 @@ export function JourneyList({ rows }: { rows: JourneyRow[] }) {
           </span>
           <span>Repos</span>
           <span>Confidence</span>
+          {levels && <span>Your progress</span>}
         </div>
         {shown.length === 0 ? (
           <p className="px-5 py-6 text-[13.5px] text-muted-foreground">No journeys match these filters.</p>
         ) : (
           <ul ref={list} aria-label="User journeys" className="divide-y divide-border">
             {shown.slice(0, limit).map((r) => (
-              <Row key={r.id} r={r} />
+              <Row key={r.id} r={r} level={levels ? (levels.get(r.id) ?? null) : undefined} />
             ))}
           </ul>
         )}
