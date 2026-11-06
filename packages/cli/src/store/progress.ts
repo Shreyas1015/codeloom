@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { dataError } from "../errors.js";
 import { chainLookup, type MapState } from "../mcp/state.js";
@@ -77,16 +77,33 @@ export function codeloomHome(): string {
   return env !== undefined && env !== "" ? resolve(env) : join(homedir(), ".codeloom");
 }
 
-/** The workspace's progress file. Throws (exit 2) if it would land inside the workspace: progress is
- * personal and must never be committed. */
+/** The real path of `p`: its deepest existing ancestor resolved through symlinks, plus the rest. */
+function realish(p: string): string {
+  const abs = resolve(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    const up = dirname(abs);
+    return up === abs ? abs : join(realish(up), basename(abs));
+  }
+}
+
+function isInside(base: string, p: string): boolean {
+  const rel = relative(base, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** The workspace's progress file. Throws (exit 2) if it would land inside the workspace or inside any of
+ * its repo folders (after following symlinks): progress is personal and must never be committed. */
 export function progressPath(ws: Pick<StoreWorkspace, "root" | "name" | "repos">): string {
   const path = join(codeloomHome(), PROGRESS_DIR, `${workspaceId(ws)}.json`);
-  const rel = relative(resolve(ws.root), path);
-  if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
-    throw dataError(
-      `The progress file ${path} would be inside the workspace (${ws.root}); progress is personal and never committed. ` +
-        `Point CODELOOM_HOME outside the workspace.`,
-    );
+  const real = realish(path);
+  const hint = `progress is personal and never committed. Point CODELOOM_HOME outside the workspace and its repos.`;
+  if (isInside(realish(ws.root), real)) {
+    throw dataError(`The progress file ${path} would be inside the workspace (${ws.root}); ${hint}`);
+  }
+  for (const r of ws.repos) {
+    if (isInside(realish(r.abs), real)) throw dataError(`The progress file ${path} would be inside repo "${r.ref.id}" (${r.abs}); ${hint}`);
   }
   return path;
 }
@@ -120,15 +137,73 @@ function checkJourneyId(journeyId: string): void {
   if (!JOURNEY_ID_RE.test(journeyId)) throw dataError(`Bad journey id "${journeyId}": expected j_ and 12 hex characters.`);
 }
 
-/** Read, change one journey's entry, write atomically (sorted keys). A corrupt file throws before any write. */
+/** Lock timing: wait up to `waitMs` for another writer; a lock older than `staleMs` is left over from a
+ * crashed process and is removed. */
+export const PROGRESS_LOCK = { waitMs: 5_000, staleMs: 30_000 } as const;
+
+const sleeper = new Int32Array(new SharedArrayBuffer(4));
+const sleep = (ms: number) => Atomics.wait(sleeper, 0, 0, ms);
+
+/** Run `fn` holding `<progress>.lock` (created with "wx"), so the MCP server and the dashboard server never
+ * lose each other's writes. Retries with a short backoff; gives up after PROGRESS_LOCK.waitMs (exit 2). */
+function withProgressLock<T>(path: string, fn: () => T): T {
+  const lock = `${path}.lock`;
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + PROGRESS_LOCK.waitMs;
+  let delay = 5;
+  for (;;) {
+    try {
+      const fd = openSync(lock, "wx");
+      try {
+        writeSync(fd, String(process.pid));
+      } finally {
+        closeSync(fd);
+      }
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    let age: number | undefined;
+    try {
+      age = Date.now() - statSync(lock).mtimeMs;
+    } catch {
+      continue; // released meanwhile: try again
+    }
+    if (age > PROGRESS_LOCK.staleMs) {
+      rmSync(lock, { force: true });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw dataError(
+        `Your progress file ${path} is busy: another codeloom holds ${lock}. Try again; if no codeloom is running, ` +
+          `delete ${lock}.`,
+      );
+    }
+    sleep(delay);
+    delay = Math.min(delay * 2, 100);
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
+/** Under the lock: read, change one journey's entry, and write atomically (sorted keys) only when the file
+ * changes. A corrupt file throws before any write. */
 function update(ws: ProgressWorkspace, journeyId: string, fn: (p: JourneyProgress) => void): JourneyProgress {
   checkJourneyId(journeyId);
-  const file = readProgress(ws);
-  const entry: JourneyProgress = file.journeys[journeyId] ?? { checks: [] };
-  fn(entry);
-  file.journeys[journeyId] = entry;
-  writeJsonAtomic(progressPath(ws), sortKeysDeep(file));
-  return entry;
+  const path = progressPath(ws);
+  return withProgressLock(path, () => {
+    const file = readProgress(ws);
+    const before = existsSync(path) ? JSON.stringify(sortKeysDeep(file)) : undefined;
+    const entry: JourneyProgress = structuredClone(file.journeys[journeyId] ?? { checks: [] });
+    fn(entry);
+    file.journeys[journeyId] = entry;
+    const next = sortKeysDeep(file);
+    if (JSON.stringify(next) !== before) writeJsonAtomic(path, next);
+    return entry;
+  });
 }
 
 const stamp = (c: Clock | undefined) => (c?.now ?? new Date()).toISOString();
