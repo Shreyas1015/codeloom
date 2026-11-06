@@ -81,6 +81,15 @@ function cookieValue(req: IncomingMessage, name: string): string | undefined {
   return undefined;
 }
 
+/** No Origin / Sec-Fetch-Site (a non-browser client) is allowed: the cookie still guards it. A browser's
+ * Origin must be this server (127.0.0.1 or localhost on this port), and Sec-Fetch-Site same-origin. */
+function sameOrigin(req: IncomingMessage, port: number): boolean {
+  const origin = req.headers.origin;
+  if (origin !== undefined && origin !== `http://${HOST}:${port}` && origin !== `http://localhost:${port}`) return false;
+  const site = req.headers["sec-fetch-site"];
+  return site === undefined || site === "same-origin";
+}
+
 /** The file under `root` that the raw request path names, or null when it would escape `root`, names
  * nothing, or is malformed. Works on the raw path (each segment percent-decoded on its own), so "..",
  * "%2e%2e" and encoded slashes/backslashes/NULs are all refused rather than normalised away; the
@@ -227,9 +236,10 @@ async function choosePort(server: Server, wanted: number | undefined): Promise<n
 }
 
 /** The dashboard's local web server: the built dashboard's static files (SPA fallback to index.html) and
- * the read-only /api/* JSON endpoints. Binds 127.0.0.1 only. Every /api/* request needs the session cookie,
+ * the /api/* JSON endpoints. Binds 127.0.0.1 only. Every /api/* request needs the session cookie,
  * which the first `GET /?token=<token>` sets (then redirects to the same URL without the token). The Host
- * header must be 127.0.0.1:<port> or localhost:<port> (DNS-rebinding guard). Only GET and HEAD. */
+ * header must be 127.0.0.1:<port> or localhost:<port> (DNS-rebinding guard). GET and HEAD,
+ * plus POST to the two progress writes (same-origin only; see api.ts). */
 export async function startDashboardServer(opts: DashboardServerOptions): Promise<DashboardServer> {
   const assetsDir = opts.assetsDir ?? locateDashboardAssets();
   if (!existsSync(join(assetsDir, "index.html"))) {
@@ -248,27 +258,36 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       return;
     }
     const head = req.method === "HEAD";
-    if (req.method !== "GET" && !head) {
-      res.setHeader("Allow", "GET, HEAD");
-      sendText(res, 405, "Method not allowed: the dashboard server is read-only.");
-      return;
-    }
+    const post = req.method === "POST";
     const rawUrl = req.url ?? "/";
     const q = rawUrl.indexOf("?");
     const rawPath = q < 0 ? rawUrl : rawUrl.slice(0, q);
+    const isApi = rawPath === "/api" || rawPath.startsWith("/api/");
+    // POST reaches the API only (the two progress writes; handleApi answers 405 for the rest).
+    if (req.method !== "GET" && !head && !(post && isApi)) {
+      res.setHeader("Allow", "GET, HEAD");
+      sendText(res, 405, "Method not allowed: the dashboard server only writes your progress (POST /api/progress/*).");
+      return;
+    }
     const url = new URL(rawUrl, `http://${HOST}:${port}`);
 
-    if (rawPath === "/api" || rawPath.startsWith("/api/")) {
+    if (isApi) {
+      // A write must come from this dashboard's own page: a browser sends Origin (and Sec-Fetch-Site)
+      // on POST, so a cross-site form or fetch is refused even before the cookie is looked at.
+      if (post && !sameOrigin(req, port)) {
+        sendJson(res, 403, { error: "Forbidden: writes are only accepted from the dashboard page itself." });
+        return;
+      }
       if (!sameToken(cookieValue(req, sessionCookie(port)), token)) {
         sendJson(res, 401, { error: 'Missing or wrong session token. Open the URL that "codeloom dashboard" printed.' }, head);
         return;
       }
-      if (url.pathname === "/api/events") {
+      if (url.pathname === "/api/events" && !post) {
         if (hub) hub.open(req, res, head);
         else sendJson(res, 503, { error: "The server is shutting down." }, head);
         return;
       }
-      await handleApi(res, opts.start, url, { head });
+      await handleApi(res, opts.start, url, { head, method: post ? "POST" : "GET", req });
       return;
     }
 

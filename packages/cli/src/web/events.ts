@@ -1,7 +1,9 @@
 import { existsSync, type FSWatcher, readFileSync, watch as fsWatch } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
+import { progressPath } from "../store/progress.js";
 import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
+import { TOURS_DIR } from "../store/tours.js";
 import { compare } from "../util.js";
 import { defaultRepoId, findWorkspaceRoot } from "../workspace/repos.js";
 import type { ChangeKey } from "./api-types.js";
@@ -29,29 +31,51 @@ function gitRoot(start: string): string | null {
   }
 }
 
+/** What the watcher knows of the workspace: its root, name (for the progress file's id) and repos. */
+interface WatchedWorkspace {
+  root: string;
+  name: string;
+  repos: RepoRef[];
+}
+
+/** This workspace's personal progress file (store/progress.ts), or null when there are no repos yet or
+ * the path would be inside the workspace (progressPath refuses that). */
+function progressFileFor(ws: WatchedWorkspace): string | null {
+  if (ws.repos.length === 0) return null;
+  try {
+    return progressPath({ root: ws.root, name: ws.name, repos: ws.repos.map((r) => ({ ref: { id: r.id }, abs: resolve(ws.root, r.path) })) });
+  } catch {
+    return null;
+  }
+}
+
 /** The workspace root and its repos, read without git and without throwing: a missing or bad workspace
  * file falls back to the git root as one repo (as loadWorkspace does), or to no repos. `previous` is kept
  * when the workspace file is present but unreadable (mid-edit), so a typo does not drop every watcher. */
-function readRepos(start: string, previous: { root: string; repos: RepoRef[] } | null): { root: string; repos: RepoRef[] } {
+function readRepos(start: string, previous: WatchedWorkspace | null): WatchedWorkspace {
   const wsRoot = findWorkspaceRoot(start);
   if (wsRoot) {
     try {
       const parsed = WorkspaceFileSchema.safeParse(JSON.parse(readFileSync(join(wsRoot, WORKSPACE_FILE), "utf8")));
-      if (parsed.success) return { root: wsRoot, repos: parsed.data.repos };
+      if (parsed.success) return { root: wsRoot, name: parsed.data.name, repos: parsed.data.repos };
     } catch {
       // unreadable or not JSON yet: fall through
     }
     if (previous && previous.root === wsRoot) return previous;
-    return { root: wsRoot, repos: [] };
+    return { root: wsRoot, name: "", repos: [] };
   }
   const top = gitRoot(start);
-  if (top) return { root: top, repos: [{ id: defaultRepoId(top), path: "." }] };
-  return { root: resolve(start), repos: [] };
+  if (top) {
+    const id = defaultRepoId(top);
+    return { root: top, name: id, repos: [{ id, path: "." }] };
+  }
+  return { root: resolve(start), name: "", repos: [] };
 }
 
 /** Watch a workspace's map files and call `onChange` with the sorted set of changed keys, once per burst
  * (debounced). Watches the workspace root folder (for the workspace file and its .codeloom appearing), the
- * root .codeloom (chains.json → chains, journeys.json → journeys) and, for each repo, its folder (for
+ * root .codeloom (chains.json → chains, journeys.json → journeys), its tours/ folder (→ tours), this
+ * workspace's progress file under CODELOOM_HOME or ~/.codeloom (→ progress) and, for each repo, its folder (for
  * .codeloom appearing) and its .codeloom (any map file → repo:<id>). fingerprints.json and *.tmp are
  * ignored. A workspace file change re-reads the repo list and re-arms the watchers. Never reads the map
  * itself and never runs git. Returns a stop function that closes every watcher. */
@@ -63,7 +87,7 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
   let timer: NodeJS.Timeout | undefined;
   let firstPendingAt = 0;
   let stopped = false;
-  let ws: { root: string; repos: RepoRef[] } | null = null;
+  let ws: WatchedWorkspace | null = null;
 
   const flush = () => {
     timer = undefined;
@@ -100,7 +124,7 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
     const rootRepo = repos.find((r) => resolve(root, r.path) === root);
     const want = new Map<string, Spec>();
 
-    const rootDirKeys = (): ChangeKey[] => ["chains", "journeys", ...(rootRepo ? [`repo:${rootRepo.id}` as ChangeKey] : [])];
+    const rootDirKeys = (): ChangeKey[] => ["chains", "journeys", "tours", ...(rootRepo ? [`repo:${rootRepo.id}` as ChangeKey] : [])];
     want.set(root, {
       sig: `root:${rootRepo?.id ?? ""}`,
       onName: (name) => {
@@ -118,11 +142,57 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
       onName: (name) => {
         if (name === null) return emit(rootDirKeys());
         if (ignored(name)) return;
+        if (name === TOURS_DIR) {
+          // The tours folder appeared (or went): arm its watcher.
+          sync();
+          return emit(["tours"]);
+        }
         if (name === FILES.chains) emit(["chains"]);
         else if (name === FILES.journeys) emit(["journeys"]);
         else if (rootRepo) emit([`repo:${rootRepo.id}`]);
       },
     });
+    want.set(join(root, CODELOOM_DIR, TOURS_DIR), {
+      sig: "tours",
+      onName: (name) => {
+        if (name === null || !ignored(name)) emit(["tours"]);
+      },
+    });
+    // Personal progress lives outside the workspace (CODELOOM_HOME or ~/.codeloom): watch its folder for
+    // this workspace's file only; until the folder exists, watch its nearest existing parent for the
+    // next folder down to appear (then re-arm).
+    const progressFile = progressFileFor(ws);
+    if (progressFile) {
+      const dir = dirname(progressFile);
+      const base = basename(progressFile);
+      if (existsSync(dir)) {
+        want.set(dir, {
+          sig: `progress:${base}`,
+          onName: (name) => {
+            if (name === null || name === base) emit(["progress"]);
+          },
+        });
+      } else {
+        let child = dir;
+        let parent = dirname(dir);
+        while (!existsSync(parent) && dirname(parent) !== parent) {
+          child = parent;
+          parent = dirname(parent);
+        }
+        const next = basename(child);
+        if (!want.has(parent)) {
+          want.set(parent, {
+            sig: `progress-up:${next}`,
+            onName: (name) => {
+              if (name === null || name === next) {
+                sync();
+                emit(["progress"]);
+              }
+            },
+          });
+        }
+      }
+    }
     for (const repo of repos) {
       const abs = resolve(root, repo.path);
       if (abs === root) continue;

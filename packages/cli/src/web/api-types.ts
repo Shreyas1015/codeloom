@@ -324,11 +324,122 @@ export interface CodeResponse {
   truncated: boolean;
 }
 
+// ---- /api/progress and /api/tours (v0.2b) -------------------------------------------------------
+// Written out to match src/store/progress.ts and src/store/tours.ts (api.ts returns the store's values
+// typed as these, so a drift is a type error there; test/web-progress.test.ts checks them strictly).
+
+/** The four Tour mode phases, in order; all four must be viewed to mark a journey toured. */
+export type TourPhase = "flow" | "data-journey" | "file-notes" | "check";
+export type ProgressLevel = "none" | "seen" | "toured" | "understood";
+
+/** One check-me result (recorded only through MCP record_check). `commit`: git HEAD per repo. */
+export interface CheckRecord {
+  at: string;
+  questions: string[];
+  answers: string[];
+  verdict: "pass" | "fail";
+  notes: string;
+  commit: Record<string, string>;
+}
+
+export interface JourneyProgressView {
+  journeyId: string;
+  name: string;
+  area: string;
+  /** Repos the journey's stops touch, sorted. */
+  repos: string[];
+  /** Stays "understood" while needsReWalk is non-empty (the UI shows a "needs re-walk" badge). */
+  level: ProgressLevel;
+  /** For an understood journey: its stops (stopKeys) whose file changed since, or that are new since. */
+  needsReWalk: string[];
+  lastCheck: CheckRecord | null;
+  seenAt?: string;
+  touredAt?: string;
+  understoodAt?: string;
+}
+
+/** Journeys at each exact level (none + seen + toured + understood = total); needsReWalk counts the
+ * understood ones with stops to re-walk. */
+export interface LevelCounts {
+  total: number;
+  none: number;
+  seen: number;
+  toured: number;
+  understood: number;
+  needsReWalk: number;
+}
+
+/** GET /api/progress — your personal progress for this workspace (never committed). */
+export interface ProgressResponse {
+  workspaceId: string;
+  /** The progress file (under CODELOOM_HOME or ~/.codeloom). */
+  path: string;
+  /** Every journey in journeys.json, sorted by id. */
+  journeys: JourneyProgressView[];
+  /** byRepo lists every workspace repo (also those with no journey). */
+  totals: { all: LevelCounts; byRepo: Record<string, LevelCounts>; byArea: Record<string, LevelCounts> };
+  /** Journey ids with progress that are no longer in journeys.json (renamed, merged or split), sorted. */
+  olderJourneys: string[];
+}
+
+export interface TourStop {
+  chainId: string;
+  stopIndex: number;
+  /** The shared stopKey: JSON [lane, repo, file, line, symbol]. */
+  key: string;
+  fileHash: string;
+  /** Markdown. */
+  explanation: string;
+}
+
+export interface TourFile {
+  version: 1;
+  journeyId: string;
+  writtenAt: string;
+  writtenAtCommit: Record<string, string>;
+  stops: TourStop[];
+  dataJourney: { input: string; steps: Array<{ stopKey: string; sql?: string; note: string }>; output: string };
+  fileNotes: Array<{ repo: string; file: string; notes: Array<{ kind: "trap" | "note"; text: string }> }>;
+  /** Exactly 3. */
+  check: Array<{ question: string; expected: string[] }>;
+}
+
+/** GET /api/tours/:journeyId — 404 when the journey is neither in journeys.json nor has a tour; 400 for a
+ * malformed id; 409 bad-data for a corrupt tour file. */
+export interface TourResponse {
+  journeyId: string;
+  /** false: an older journey's tour (the journey was renamed, merged or split). */
+  journeyExists: boolean;
+  /** null: no tour yet (show the write-tour empty state). */
+  tour: TourFile | null;
+  /** Tour stop keys whose file changed since the tour was written, or is gone ("may be out of date"). */
+  staleStops: string[];
+  /** Tour stop keys no longer among the journey's stops (all of them when the journey is gone). */
+  removedStops: string[];
+}
+
+/** POST /api/progress/seen (Content-Type application/json, ≤ 16 KB, no other keys). */
+export interface SeenRequest {
+  journey: string;
+}
+
+/** POST /api/progress/toured: `phases` must hold all four TourPhase values; the journey needs a tour. */
+export interface TouredRequest {
+  journey: string;
+  phases: TourPhase[];
+}
+
+/** The answer to both POSTs: the journey's progress after the write. */
+export interface ProgressWriteResponse {
+  journey: JourneyProgressView;
+}
+
 // ---- /api/events (SSE) --------------------------------------------------------------------------
 
-/** What changed: the workspace file, the workspace's chains or journeys, or one repo's map files
- * (graph, endpoints, summaries, config: `repo:<id>`). */
-export type ChangeKey = "workspace" | "chains" | "journeys" | `repo:${string}`;
+/** What changed: the workspace file, the workspace's chains or journeys, one repo's map files
+ * (graph, endpoints, summaries, config: `repo:<id>`), the workspace's tours (`.codeloom/tours/`), or
+ * your progress file for this workspace (`progress`). */
+export type ChangeKey = "workspace" | "chains" | "journeys" | "tours" | "progress" | `repo:${string}`;
 
 /** GET /api/events — a `text/event-stream`: `event: change` frames whose data is this (keys sorted), and
  * a `: ping` comment every 25 s. */

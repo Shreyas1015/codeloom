@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
@@ -9,7 +9,10 @@ import { chainLookup, formatNodeRef, journeysByChain, loadMapState, type MapStat
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
 import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/workspace.js";
+import { z } from "zod";
+import { journeyStopKeys, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
+import { JOURNEY_ID_RE, readTour, tourStaleStops } from "../store/tours.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
 import { loadWorkspace } from "../workspace/repos.js";
@@ -31,7 +34,10 @@ import type {
   NeighborsResult,
   NodeResult,
   OverviewResponse,
+  ProgressResponse,
+  ProgressWriteResponse,
   SearchResult,
+  TourResponse,
 } from "./api-types.js";
 import { sendJson } from "./http.js";
 
@@ -48,20 +54,23 @@ export class HttpError extends Error {
   }
 }
 
-/** What a route handler gets: the workspace start folder, the parsed URL (for query params) and the
- * `:name` path params, already URL-decoded. */
+/** What a route handler gets: the workspace start folder, the parsed URL (for query params), the
+ * `:name` path params, already URL-decoded, and (POST only) the parsed JSON body, not yet validated. */
 export interface ApiContext {
   start: string;
   url: URL;
   params: Record<string, string>;
+  body?: unknown;
 }
 
 export type ApiHandler = (ctx: ApiContext) => unknown | Promise<unknown>;
 
-/** One GET route: `path` is a pattern like "/api/journeys/:id" (a `:name` segment matches one
- * non-empty path segment). Every route returns JSON; the SSE stream is handled by the server. */
+/** One route: `path` is a pattern like "/api/journeys/:id" (a `:name` segment matches one non-empty
+ * path segment). `method` defaults to GET (which also answers HEAD); the only POST routes are the two
+ * progress writes. Every route returns JSON; the SSE stream is handled by the server. */
 export interface ApiRoute {
   path: string;
+  method?: "GET" | "POST";
   handler: ApiHandler;
 }
 
@@ -459,6 +468,127 @@ function journeyWithExternal(start: string, result: JourneyResult): JourneyResul
   return external.length > 0 ? { ...result, external } : result;
 }
 
+// ---- tours and progress (spec §3) ------------------------------------------------------------------
+
+/** Request bodies are tiny ({ journey, phases }); anything bigger is refused before it is parsed. */
+export const MAX_BODY_BYTES = 16 * 1024;
+
+/** Read a POST body as JSON: Content-Type must be application/json (415), at most 16 KB (413, also
+ * when chunked with no Content-Length), and valid JSON (400). */
+export function readJsonBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<unknown> {
+  const type = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+  if (type !== "application/json") {
+    req.resume();
+    return Promise.reject(new HttpError(415, "Unsupported content type: send the body as application/json."));
+  }
+  const tooBig = () => new HttpError(413, `Request body too large: at most ${max} bytes.`);
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > max) {
+    req.resume();
+    return Promise.reject(tooBig());
+  }
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    const finish = (err: HttpError | null, value?: unknown) => {
+      if (done) return;
+      done = true;
+      if (err) reject(err);
+      else resolve(value);
+    };
+    req.on("data", (c: Buffer) => {
+      if (done) return;
+      size += c.length;
+      if (size > max) {
+        // Stop buffering; the rest is drained (and dropped) so the 413 can be written.
+        chunks.length = 0;
+        finish(tooBig());
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("error", () => finish(new HttpError(400, "Bad request: the body could not be read.")));
+    req.on("end", () => {
+      if (done) return;
+      try {
+        finish(null, JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        finish(new HttpError(400, "Bad request: the body is not valid JSON."));
+      }
+    });
+  });
+}
+
+const JourneyIdSchema = z.string().regex(JOURNEY_ID_RE, "expected j_ and 12 hex characters");
+/** Strict: an unknown key (understood, verdict, stopHashes, ...) is a 400, never ignored. */
+const SeenBodySchema = z.strictObject({ journey: JourneyIdSchema });
+const TouredBodySchema = z.strictObject({
+  journey: JourneyIdSchema,
+  phases: z.array(z.enum(TOUR_PHASES)).max(TOUR_PHASES.length * 4),
+});
+
+function parseBody<T extends z.ZodType>(schema: T, body: unknown, what = "request body"): z.infer<T> {
+  const r = schema.safeParse(body);
+  if (r.success) return r.data;
+  const where = r.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+  throw new HttpError(400, `Bad ${what}: ${where}.`);
+}
+
+function knownJourney(state: MapState, journeyId: string): void {
+  if (!state.journeys.some((j) => j.id === journeyId)) throw new HttpError(404, `Unknown journey "${journeyId}".`);
+}
+
+function progressRow(state: MapState, journeyId: string): ProgressWriteResponse {
+  const row = progressView(state).journeys.find((j) => j.journeyId === journeyId);
+  if (!row) throw new HttpError(404, `Unknown journey "${journeyId}".`);
+  return { journey: row };
+}
+
+/** GET /api/tours/:journeyId: the tour (null when none yet), the stops whose file changed since it was
+ * written, and the stops no longer in the journey (all of them for a journey that is gone). A journey
+ * that is neither in journeys.json nor has a tour → 404; a malformed id → 400. */
+export function tourFor(start: string, journeyId: string): TourResponse {
+  const id = parseBody(JourneyIdSchema, journeyId, "journey id");
+  const state = loadMapState(start);
+  const journeyExists = state.journeys.some((j) => j.id === id);
+  const tour = readTour(state.ws.root, id);
+  if (!tour) {
+    if (!journeyExists) throw new HttpError(404, `Unknown journey "${id}".`);
+    return { journeyId: id, journeyExists, tour: null, staleStops: [], removedStops: [] };
+  }
+  const current = new Set(journeyExists ? journeyStopKeys(state, id) : []);
+  return {
+    journeyId: id,
+    journeyExists,
+    tour,
+    staleStops: tourStaleStops(tour, state.ws).map((s) => s.key),
+    removedStops: tour.stops.filter((s) => !current.has(s.key)).map((s) => s.key),
+  };
+}
+
+/** POST /api/progress/seen { journey }: the journey was opened. Never sets toured or understood. */
+export function postSeen(start: string, body: unknown): ProgressWriteResponse {
+  const { journey } = parseBody(SeenBodySchema, body);
+  const state = loadMapState(start);
+  knownJourney(state, journey);
+  markSeen(state.ws, journey);
+  return progressRow(state, journey);
+}
+
+/** POST /api/progress/toured { journey, phases }: every Tour mode phase was viewed. Needs all four
+ * phases (400) and a tour (404). Never sets understood. */
+export function postToured(start: string, body: unknown): ProgressWriteResponse {
+  const { journey, phases } = parseBody(TouredBodySchema, body);
+  const missing = TOUR_PHASES.filter((p) => !phases.includes(p));
+  if (missing.length > 0) throw new HttpError(400, `Bad request body: not every tour phase was viewed (missing ${missing.join(", ")}).`);
+  const state = loadMapState(start);
+  knownJourney(state, journey);
+  if (readTour(state.ws.root, journey) === null) throw new HttpError(404, `Journey ${journey} has no tour yet, so it cannot be toured.`);
+  markToured(state.ws, journey, phases);
+  return progressRow(state, journey);
+}
+
 /** The route table. Every handler reads the store fresh on each request (no cache), like the MCP tools,
  * and none runs git (overview's git calls are async). */
 export const API_ROUTES: ApiRoute[] = [
@@ -472,6 +602,11 @@ export const API_ROUTES: ApiRoute[] = [
   { path: "/api/layers", handler: ({ start, url }) => as<LayersResult>(getLayers(start, strParam(url, "repo"))) },
   { path: "/api/search", handler: ({ start, url }) => as<SearchResult>(search(start, searchArgs(url))) },
   { path: "/api/code", handler: ({ start, url }) => readCode(start, url) },
+  { path: "/api/progress", handler: ({ start }): ProgressResponse => progressView(loadMapState(start)) },
+  { path: "/api/tours/:journeyId", handler: ({ start, params }) => tourFor(start, params.journeyId!) },
+  // The only writes anywhere: personal progress (never journeys, tours or "understood").
+  { path: "/api/progress/seen", method: "POST", handler: ({ start, body }) => postSeen(start, body) },
+  { path: "/api/progress/toured", method: "POST", handler: ({ start, body }) => postToured(start, body) },
 ];
 
 /** The route matching `pathname` and its decoded params, or null. A param that does not decode → no match. */
@@ -523,23 +658,38 @@ export function errorResponse(err: unknown): { status: number; body: { error: st
   return { status: 500, body: { error: `codeloom hit an unexpected error: ${message}` } };
 }
 
-/** Answer one (already authenticated) /api/* GET from the route table. Unknown path → 404. */
+/** Answer one (already authenticated) /api/* request from the route table. Unknown path → 404; a
+ * method the route does not take → 405 with Allow. A POST route reads its JSON body from `req` (see
+ * readJsonBody) only after the route and method matched. */
 export async function handleApi(
   res: ServerResponse,
   start: string,
   url: URL,
-  opts: { head?: boolean; routes?: ApiRoute[] } = {},
+  opts: { head?: boolean; routes?: ApiRoute[]; method?: "GET" | "POST"; req?: IncomingMessage } = {},
 ): Promise<void> {
   const found = matchRoute(opts.routes ?? API_ROUTES, url.pathname);
   if (!found) {
     sendJson(res, 404, { error: `Unknown API path ${url.pathname}` }, opts.head);
     return;
   }
+  const wants = found.route.method ?? "GET";
+  if ((opts.method ?? "GET") !== wants) {
+    res.setHeader("Allow", wants === "POST" ? "POST" : "GET, HEAD");
+    sendJson(res, 405, { error: `Method not allowed: ${url.pathname} takes ${wants === "POST" ? "POST" : "GET"} only.` }, opts.head);
+    return;
+  }
   try {
-    const body = await found.route.handler({ start, url, params: found.params });
+    let reqBody: unknown;
+    if (wants === "POST") {
+      if (!opts.req) throw new HttpError(400, "Bad request: no body.");
+      reqBody = await readJsonBody(opts.req);
+    }
+    const body = await found.route.handler({ start, url, params: found.params, ...(wants === "POST" ? { body: reqBody } : {}) });
     sendJson(res, 200, body, opts.head);
   } catch (err) {
     const { status, body } = errorResponse(err);
+    // An oversized body is not drained: answer and drop the connection.
+    if (status === 413) res.setHeader("Connection", "close");
     sendJson(res, status, body, opts.head);
   }
 }

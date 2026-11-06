@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeJsonAtomic } from "../src/store/json.js";
+import { progressPath } from "../src/store/progress.js";
 import { type ChangeKey, watchMap } from "../src/web/events.js";
 
 const DEBOUNCE = 120;
@@ -171,6 +172,74 @@ describe("watchMap", () => {
     stop();
     await sleep(DEBOUNCE * 4);
     expect(calls).toEqual([]);
+  });
+
+  it("a tour written to .codeloom/tours/ → [tours] (temp files ignored)", async () => {
+    const root = makeWorkspace();
+    mkdirSync(join(root, ".codeloom", "tours"));
+    const { calls } = await collect(root);
+    writeJsonAtomic(join(root, ".codeloom", "tours", "j_000000000001.json"), { version: 1 });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["tours"]]);
+  });
+
+  it("the tours folder created after start is picked up", async () => {
+    const root = makeWorkspace();
+    const { calls } = await collect(root);
+    writeJsonAtomic(join(root, ".codeloom", "tours", "j_000000000001.json"), { version: 1 });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls.flat()).toContain("tours");
+    calls.length = 0;
+    writeJsonAtomic(join(root, ".codeloom", "tours", "j_000000000002.json"), { version: 1 });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["tours"]]);
+  });
+
+  describe("progress (the personal file under CODELOOM_HOME)", () => {
+    const saved = process.env.CODELOOM_HOME;
+    afterEach(() => {
+      process.env.CODELOOM_HOME = saved;
+    });
+    /** A fresh CODELOOM_HOME (`create`: also its progress folder) and this workspace's progress file in it. */
+    function home(root: string, create: boolean) {
+      const h = mkdtempSync(join(tmpdir(), "codeloom-home-ev-"));
+      process.env.CODELOOM_HOME = h;
+      if (create) mkdirSync(join(h, "progress"));
+      const file = progressPath({ root, name: "ws", repos: [{ ref: { id: "api" }, abs: join(root, "api") }, { ref: { id: "web" }, abs: join(root, "web") }] });
+      return { home: h, file };
+    }
+
+    it("this workspace's progress file → [progress]; another workspace's file is ignored", async () => {
+      const root = makeWorkspace();
+      const { home: h, file } = home(root, true);
+      const { calls } = await collect(root);
+      writeJsonAtomic(join(h, "progress", "0000000000000000.json"), { version: 1, journeys: {} });
+      await sleep(DEBOUNCE * 3);
+      expect(calls).toEqual([]);
+      writeJsonAtomic(file, { version: 1, journeys: {} });
+      await waitFor(calls);
+      await sleep(DEBOUNCE * 3);
+      expect(calls).toEqual([["progress"]]);
+    });
+
+    it("a progress folder (and home) created after start is picked up", async () => {
+      const root = makeWorkspace();
+      const { home: h, file } = home(root, false);
+      rmSync(h, { recursive: true });
+      const { calls } = await collect(root);
+      writeJsonAtomic(file, { version: 1, journeys: {} });
+      await waitFor(calls);
+      await sleep(DEBOUNCE * 3);
+      expect(calls.flat()).toContain("progress");
+      calls.length = 0;
+      writeJsonAtomic(file, { version: 1, journeys: { a: 1 } });
+      await waitFor(calls);
+      await sleep(DEBOUNCE * 3);
+      expect(calls).toEqual([["progress"]]);
+    });
   });
 
   it("works on a folder with no workspace file yet (watches for one to appear)", async () => {
