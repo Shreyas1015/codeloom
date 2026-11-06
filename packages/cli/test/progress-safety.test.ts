@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
@@ -14,8 +14,9 @@ import { materializeFixture } from "./helpers.js";
 // write, and a write that changes nothing is skipped (spec §2, v0.2b final review).
 
 const SIGNUP = "j_00000000c0de";
-const SRC = fileURLToPath(new URL("../src", import.meta.url));
-const JITI = fileURLToPath(new URL("../node_modules/.bin/jiti", import.meta.url));
+// The child processes run the compiled code (`pnpm --filter codeloom build`, which CI runs before the tests):
+// a TypeScript runner may not be installed where the tests run.
+const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 
 let demo: string;
 let state: MapState;
@@ -42,11 +43,11 @@ beforeAll(async () => {
 
 /** A child process that records `n` failed checks on SIGNUP and marks `n` distinct journeys seen, interleaved. */
 function hammer(tag: string, n: number): Promise<void> {
-  const script = join(mkdtempSync(join(tmpdir(), "codeloom-hammer-")), "hammer.ts");
+  const script = join(mkdtempSync(join(tmpdir(), "codeloom-hammer-")), "hammer.mjs");
   writeFileSync(
     script,
-    `import { loadMapState } from ${JSON.stringify(join(SRC, "mcp/state.ts"))};
-import { markSeen, recordCheck } from ${JSON.stringify(join(SRC, "store/progress.ts"))};
+    `import { loadMapState } from ${JSON.stringify(pathToFileURL(join(DIST, "mcp/state.js")).href)};
+import { markSeen, recordCheck } from ${JSON.stringify(pathToFileURL(join(DIST, "store/progress.js")).href)};
 const state = loadMapState(${JSON.stringify(demo)});
 for (let i = 0; i < ${n}; i++) {
   recordCheck(state, ${JSON.stringify(SIGNUP)}, { questions: ["q"], answers: ["${tag}" + i], verdict: "fail", notes: "" });
@@ -55,7 +56,11 @@ for (let i = 0; i < ${n}; i++) {
 `,
   );
   return new Promise((resolve, reject) => {
-    const child = spawn(JITI, [script], { env: { ...process.env }, stdio: ["ignore", "ignore", "pipe"] });
+    if (!existsSync(join(DIST, "store/progress.js"))) {
+      reject(new Error(`${DIST} is missing: run "pnpm --filter codeloom build" first`));
+      return;
+    }
+    const child = spawn(process.execPath, [script], { env: { ...process.env }, stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
     child.stderr.on("data", (d) => (err += String(d)));
     child.on("error", reject);

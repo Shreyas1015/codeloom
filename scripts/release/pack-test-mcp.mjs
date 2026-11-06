@@ -2,25 +2,29 @@
 // Pack test, MCP step: drive the INSTALLED `codeloom serve` over stdio with the MCP SDK client that npm
 // installed next to it (pack-test.sh copies this file into the temp install folder, so the bare import
 // below resolves to <install>/node_modules/@modelcontextprotocol/sdk, not the monorepo's copy).
-// Checks: tools/list is exactly the v0.1 catalogue, and workspace_overview answers with the 3 demo-shop repos.
+// Checks: tools/list is exactly the catalogue (v0.2: 19 tools), and workspace_overview answers with the 3 demo-shop repos.
 // Usage: node pack-test-mcp.mjs <codeloom bin> <workspace dir>
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 // Same list as packages/cli/test/mcp-catalogue.ts.
 const CATALOGUE = [
+  "build_tour_context",
   "check_chains",
   "explain_context",
   "get_journey",
   "get_layers",
   "get_neighbors",
   "get_node",
+  "get_progress",
   "impact_of_diff",
   "index_status",
   "list_chains",
+  "record_check",
   "reindex",
   "save_journeys",
   "save_summary",
+  "save_tour",
   "search",
   "trace_route",
   "workspace_overview",
