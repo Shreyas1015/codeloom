@@ -175,6 +175,8 @@ describe("save_tour", { timeout: 60_000 }, () => {
     // the tour then shows up in build_tour_context
     const ctx = await ok("build_tour_context", { journey: SIGNUP });
     expect(ctx.tour).toMatchObject({ staleStops: [], removedStops: [] });
+    // check-me reads the questions with their expected points from here (the dashboard never gets them).
+    expect(ctx.tour.check).toEqual((d.check as unknown[]));
   });
 
   it("lists the journey stops the tour leaves out", async () => {

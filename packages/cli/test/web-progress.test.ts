@@ -41,7 +41,8 @@ const TourFile = z.strictObject({
     steps: z.array(z.strictObject({ stopKey: z.string(), sql: z.string().optional(), note: z.string() })),
   }),
   fileNotes: z.array(z.strictObject({ repo: z.string(), file: z.string(), notes: z.array(z.strictObject({ kind: z.enum(["trap", "note"]), text: z.string() })) })),
-  check: z.array(z.strictObject({ question: z.string(), expected: z.array(z.string()) })),
+  // Expected points are for the agent judging check-me only: never sent to the dashboard.
+  check: z.array(z.strictObject({ question: z.string() })),
 });
 const TourResponse = z.strictObject({
   journeyId: z.string(), journeyExists: z.boolean(), tour: TourFile.nullable(), staleStops: z.array(z.string()), removedStops: z.array(z.string()),
@@ -184,6 +185,18 @@ describe("GET /api/tours/:journeyId", () => {
     expect(t.tour!.stops).toHaveLength(2);
     expect(t.staleStops).toEqual([]);
     expect(t.removedStops).toEqual([t.tour!.stops.find((s) => s.stopIndex === 99)!.key]);
+  });
+
+  it("never sends the check's expected points (they are for the agent judging check-me only)", async () => {
+    const res = await request(`/api/tours/${J1}`);
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain("expected");
+    const t = TourResponse.parse(res.body);
+    expect(t.tour!.check).toHaveLength(3);
+    for (const q of t.tour!.check) expect(Object.keys(q)).toEqual(["question"]);
+    // The committed tour file still holds them, for the MCP check-me path.
+    const onDisk = JSON.parse(readFileSync(tourPath(demo, J1), "utf8")) as { check: Array<{ expected: string[] }> };
+    expect(onDisk.check.every((q) => q.expected.length > 0)).toBe(true);
   });
 
   it("a journey with no tour yet → 200 with tour null", async () => {

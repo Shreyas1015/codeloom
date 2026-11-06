@@ -547,7 +547,8 @@ function progressRow(state: MapState, journeyId: string): ProgressWriteResponse 
 
 /** GET /api/tours/:journeyId: the tour (null when none yet), the stops whose file changed since it was
  * written, and the stops no longer in the journey (all of them for a journey that is gone). A journey
- * that is neither in journeys.json nor has a tour → 404; a malformed id → 400. */
+ * that is neither in journeys.json nor has a tour → 404; a malformed id → 400. Each check question goes
+ * out without its `expected` points: those are for the agent judging check-me only. */
 export function tourFor(start: string, journeyId: string): TourResponse {
   const id = parseBody(JourneyIdSchema, journeyId, "journey id");
   const state = loadMapState(start);
@@ -561,7 +562,7 @@ export function tourFor(start: string, journeyId: string): TourResponse {
   return {
     journeyId: id,
     journeyExists,
-    tour,
+    tour: { ...tour, check: tour.check.map(({ question }) => ({ question })) },
     staleStops: tourStaleStops(tour, state.ws).map((s) => s.key),
     removedStops: tour.stops.filter((s) => !current.has(s.key)).map((s) => s.key),
   };

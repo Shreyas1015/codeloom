@@ -20,9 +20,9 @@ const tour: TourFile = {
   dataJourney: { input: "{}", steps: [], output: "{}" },
   fileNotes: [],
   check: [
-    { question: "a", expected: ["x"] },
-    { question: "b", expected: ["x"] },
-    { question: "c", expected: ["x"] },
+    { question: "a" },
+    { question: "b" },
+    { question: "c" },
   ],
 };
 

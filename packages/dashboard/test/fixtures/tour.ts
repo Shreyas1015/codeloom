@@ -39,9 +39,9 @@ export const tourFile: TourFile = {
     },
   ],
   check: [
-    { question: "Where is the invoice total computed?", expected: ["In InvoicesController.store", "Not in the model"] },
-    { question: "Which tables get a row?", expected: ["invoices", "invoice_lines"] },
-    { question: "What does the form send?", expected: ["customerId and lines as JSON"] },
+    { question: "Where is the invoice total computed?" },
+    { question: "Which tables get a row?" },
+    { question: "What does the form send?" },
   ],
 };
 

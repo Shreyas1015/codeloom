@@ -179,6 +179,17 @@ describe("Tour mode", () => {
     expect(screen.getByText("/mcp__codeloom__check-me j_invoice")).toBeInTheDocument();
   });
 
+  it("Check yourself never shows what a good answer covers, even if a response carried expected points", async () => {
+    const leaky = { ...tourFile, check: tourFile.check.map((q) => ({ ...q, expected: ["SECRET-POINT"] })) };
+    stubApi({ tour: { ...tourResponse, tour: leaky as TourResponse["tour"] } });
+    renderAt("/journeys/j_invoice/tour?phase=check");
+    const qs = await screen.findByRole("list", { name: "Questions" });
+    expect(qs.children).toHaveLength(3);
+    expect(screen.queryByText(/good answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("SECRET-POINT")).not.toBeInTheDocument();
+    expect(qs.querySelector("details")).toBeNull();
+  });
+
   it("with no tour yet, offers the write-tour command", async () => {
     const { posts } = stubApi({ tour: noTourResponse });
     const writeText = vi.fn(async () => {});

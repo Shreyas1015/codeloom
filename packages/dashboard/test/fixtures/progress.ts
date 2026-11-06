@@ -98,9 +98,9 @@ function tourFile(journeyId: string): TourFile {
     dataJourney: { input: '{"customerId": 7}', steps: [], output: '{"id": 41}' },
     fileNotes: [],
     check: [
-      { question: "Where is the invoice total computed?", expected: ["InvoiceService"] },
-      { question: "Which table gets the lines?", expected: ["invoice_lines"] },
-      { question: "What does the page send?", expected: ["customerId"] },
+      { question: "Where is the invoice total computed?" },
+      { question: "Which table gets the lines?" },
+      { question: "What does the page send?" },
     ],
   };
 }

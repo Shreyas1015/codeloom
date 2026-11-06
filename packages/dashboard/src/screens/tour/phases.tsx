@@ -259,16 +259,6 @@ export function CheckPhase({
                 <span className="mr-2 font-mono text-[13px] text-muted-foreground tabular-nums">{i + 1}</span>
                 {q.question}
               </p>
-              <details className="group text-[13.5px]">
-                <summary className="w-fit cursor-pointer rounded-sm text-muted-foreground outline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-                  What a good answer covers
-                </summary>
-                <ul className="mt-1.5 flex list-disc flex-col gap-0.5 pl-5">
-                  {q.expected.map((e, j) => (
-                    <li key={j}>{e}</li>
-                  ))}
-                </ul>
-              </details>
             </li>
           ))}
         </ol>

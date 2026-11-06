@@ -392,6 +392,7 @@ export interface TourStop {
   explanation: string;
 }
 
+/** A tour as the dashboard gets it: the committed tour file minus each check question's `expected` points. */
 export interface TourFile {
   version: 1;
   journeyId: string;
@@ -400,8 +401,9 @@ export interface TourFile {
   stops: TourStop[];
   dataJourney: { input: string; steps: Array<{ stopKey: string; sql?: string; note: string }>; output: string };
   fileNotes: Array<{ repo: string; file: string; notes: Array<{ kind: "trap" | "note"; text: string }> }>;
-  /** Exactly 3. */
-  check: Array<{ question: string; expected: string[] }>;
+  /** Exactly 3. Only the questions: the expected key points stay in the tour file for the agent judging
+   * check-me, and are never sent to the dashboard (showing them would defeat "understood"). */
+  check: Array<{ question: string }>;
 }
 
 /** GET /api/tours/:journeyId — 404 when the journey is neither in journeys.json nor has a tour; 400 for a
