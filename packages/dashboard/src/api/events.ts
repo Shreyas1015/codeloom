@@ -12,11 +12,18 @@ const ofRepo = (name: string, repo: string) => (key: QueryKey) => key[0] === nam
  * - workspace → all
  * - chains, journeys → overview, journeys, journey/*, graph/* (files list their journeys), node/* (a node lists
  *   its chains and journeys), search/*
- * - repo:<id> → overview, graph/<id>/*, node/*, neighbors/*, layers/<id> (and the all-repos layers), code/<id>/*, search/* */
+ * - repo:<id> → overview, graph/<id>/*, node/*, neighbors/*, layers/<id> (and the all-repos layers), code/<id>/*, search/*
+ * - tours → tour/*, journey/*
+ * - progress → progress, overview, journeys
+ * - chains, journeys and repo:<id> also → progress, tour/* (a journey's stops and their file hashes may have
+ *   moved, which changes needs-re-walk, stale and removed stops) */
 export function invalidationFilters(keys: readonly ChangeKey[]): Invalidation {
   if (keys.includes("workspace")) return "all";
   const preds: Array<(key: QueryKey) => boolean> = [];
   if (keys.includes("chains") || keys.includes("journeys")) preds.push(named("overview"), named("journeys"), named("journey"), named("graph"), named("node"), named("search"));
+  if (keys.includes("tours")) preds.push(named("tour"), named("journey"));
+  if (keys.includes("progress")) preds.push(named("progress"), named("overview"), named("journeys"));
+  if (keys.some((k) => k === "chains" || k === "journeys" || k.startsWith("repo:"))) preds.push(named("progress"), named("tour"));
   for (const k of keys) {
     if (!k.startsWith("repo:")) continue;
     const repo = k.slice("repo:".length);

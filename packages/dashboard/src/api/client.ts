@@ -55,6 +55,21 @@ async function errorMessage(res: Response): Promise<{ message: string; code?: st
 
 export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> {
   const res = await fetch(apiUrl(path, params), { credentials: "same-origin", headers: { accept: "application/json" } });
+  return readResponse<T>(res);
+}
+
+/** Same-origin JSON POST: only the two progress writes take one (the server refuses any other). */
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return readResponse<T>(res);
+}
+
+async function readResponse<T>(res: Response): Promise<T> {
   if (res.ok) return (await res.json()) as T;
   const { message, code } = await errorMessage(res);
   if (res.status === 401) throw new SessionError();

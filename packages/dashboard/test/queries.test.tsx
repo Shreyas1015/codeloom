@@ -9,10 +9,14 @@ import {
   useJourney,
   useJourneys,
   useLayers,
+  useMarkSeen,
+  useMarkToured,
   useNeighbors,
   useNode,
   useOverview,
+  useProgress,
   useSearch,
+  useTour,
 } from "@/api/queries";
 
 function stubFetch(body: unknown = { ok: true }) {
@@ -138,5 +142,46 @@ describe("query hooks", () => {
     expect(queryKeys.layers("api")).toEqual(["layers", "api"]);
     expect(queryKeys.code("api", "f", 1, 2)).toEqual(["code", "api", "f", 1, 2]);
     expect(queryKeys.search("q", ["file"], "api")).toEqual(["search", "q", ["file"], "api"]);
+  });
+});
+
+describe("tours and progress hooks", () => {
+  it("useProgress → /api/progress, key [progress]", async () => {
+    const r = await run(() => useProgress(), { journeys: [] });
+    expect(r.url).toBe("/api/progress");
+    expect(r.keys).toEqual([["progress"]]);
+  });
+
+  it("useTour(id) → /api/tours/<encoded id>, key [tour, id]", async () => {
+    const r = await run(() => useTour("j_000000000001"), { tour: null });
+    expect(r.url).toBe("/api/tours/j_000000000001");
+    expect(r.keys).toEqual([["tour", "j_000000000001"]]);
+    expect(queryKeys.tour("j")).toEqual(["tour", "j"]);
+    expect(queryKeys.progress()).toEqual(["progress"]);
+  });
+
+  it("useTour with no id does not fetch", async () => {
+    const fetch = stubFetch();
+    const { wrapper } = setup();
+    renderHook(() => useTour(undefined), { wrapper });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("useMarkSeen / useMarkToured POST the body, then make progress, overview and journeys stale", async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) =>
+      new Response(JSON.stringify({ journey: { journeyId: "j_000000000001", level: "seen" } }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const { queryClient, wrapper } = setup();
+    for (const k of [["progress"], ["overview"], ["journeys"], ["graph", "api", ""]]) queryClient.setQueryData(k, { cached: true });
+    const { result } = renderHook(() => ({ seen: useMarkSeen(), toured: useMarkToured() }), { wrapper });
+    await result.current.seen.mutateAsync("j_000000000001");
+    expect(fetch.mock.calls[0]![0]).toBe("/api/progress/seen");
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ journey: "j_000000000001" }) });
+    await result.current.toured.mutateAsync({ journey: "j_000000000001", phases: ["flow", "data-journey", "file-notes", "check"] });
+    expect(fetch.mock.calls[1]![0]).toBe("/api/progress/toured");
+    expect(JSON.parse(String(fetch.mock.calls[1]![1]!.body))).toEqual({ journey: "j_000000000001", phases: ["flow", "data-journey", "file-notes", "check"] });
+    const stale = queryClient.getQueryCache().getAll().filter((q) => q.state.isInvalidated).map((q) => String(q.queryKey[0])).sort();
+    expect(stale).toEqual(["journeys", "overview", "progress"]);
   });
 });

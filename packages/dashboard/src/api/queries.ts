@@ -1,5 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { apiGet } from "./client.js";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiPost } from "./client.js";
 import type {
   CodeResponse,
   GraphLevel,
@@ -9,8 +9,12 @@ import type {
   NeighborsResult,
   NodeResult,
   Overview,
+  ProgressResponse,
+  ProgressWriteResponse,
   SearchKind,
   SearchResult,
+  TouredRequest,
+  TourResponse,
 } from "./types.js";
 
 export type NeighborDirection = "in" | "out" | "both";
@@ -27,6 +31,8 @@ export const queryKeys = {
   layers: (repo: string | null) => ["layers", repo] as const,
   code: (repo: string, file: string, start: number | null, end: number | null) => ["code", repo, file, start, end] as const,
   search: (q: string, kinds: SearchKind[], repo: string | null) => ["search", q, kinds, repo] as const,
+  progress: () => ["progress"] as const,
+  tour: (journeyId: string) => ["tour", journeyId] as const,
 };
 
 const enc = encodeURIComponent;
@@ -92,6 +98,40 @@ export function useCode(repo: string | undefined, file: string | undefined, star
     queryFn: () => apiGet<CodeResponse>("/api/code", { repo: repo!, file: file!, start, end }),
     enabled: !!repo && !!file,
   });
+}
+
+/** Your personal progress: every journey's level, needs-re-walk stops, last check, and totals. */
+export function useProgress() {
+  return useQuery({ queryKey: queryKeys.progress(), queryFn: () => apiGet<ProgressResponse>("/api/progress") });
+}
+
+/** One journey's tour (`tour: null` when none yet), its stale and removed stops. Disabled until `journeyId` is known. */
+export function useTour(journeyId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.tour(journeyId ?? ""),
+    queryFn: () => apiGet<TourResponse>(`/api/tours/${enc(journeyId!)}`),
+    enabled: !!journeyId,
+  });
+}
+
+/** After a progress write: the screens that show levels refetch (the watcher would also say so, later). */
+function useProgressWrite<V>(post: (v: V) => Promise<ProgressWriteResponse>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: post,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ predicate: (q) => ["progress", "overview", "journeys"].includes(String(q.queryKey[0])) }),
+  });
+}
+
+/** POST /api/progress/seen: the journey was opened. */
+export function useMarkSeen() {
+  return useProgressWrite((journey: string) => apiPost<ProgressWriteResponse>("/api/progress/seen", { journey }));
+}
+
+/** POST /api/progress/toured: all four tour phases were viewed (the journey needs a tour). */
+export function useMarkToured() {
+  return useProgressWrite((req: TouredRequest) => apiPost<ProgressWriteResponse>("/api/progress/toured", req));
 }
 
 /** Search files, functions, routes, pages, tables, queues, journeys and chains. A blank query does not

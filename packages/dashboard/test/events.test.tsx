@@ -60,9 +60,9 @@ const KEYS: QueryKey[] = [
   ["search", "cart", [], null],
 ];
 
-function setup() {
+function setup(keys: QueryKey[] = KEYS) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  for (const k of KEYS) queryClient.setQueryData(k, { cached: true });
+  for (const k of keys) queryClient.setQueryData(k, { cached: true });
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   const hook = renderHook(() => useMapEvents(), { wrapper });
   const invalidated = () =>
@@ -214,6 +214,36 @@ describe("useMapEvents", () => {
     vi.stubGlobal("EventSource", undefined);
     const { hook } = setup();
     expect(hook.result.current.paused).toBe(false);
+  });
+});
+
+describe("tours and progress keys", () => {
+  const V2B: QueryKey[] = [...KEYS, ["progress"], ["tour", "j_a"], ["tour", "j_c"]];
+
+  it("tours → every tour/* and every journey/*", () => {
+    const { es, invalidated } = setup(V2B);
+    act(() => es().change(["tours"]));
+    expect(invalidated()).toEqual(str([["tour", "j_a"], ["tour", "j_c"], ["journey", "j_a"], ["journey", "ch_b"]]));
+  });
+
+  it("progress → progress, overview and journeys (and nothing else)", () => {
+    const { es, invalidated } = setup(V2B);
+    act(() => es().change(["progress"]));
+    expect(invalidated()).toEqual(str([["progress"], ["overview"], ["journeys"]]));
+  });
+
+  it("journeys, chains and repo:<id> also make progress and tours stale (stops and file hashes may have moved)", () => {
+    for (const key of ["journeys", "chains", "repo:api"]) {
+      const { es, invalidated } = setup(V2B);
+      act(() => es().change([key]));
+      expect(invalidated(), key).toEqual(expect.arrayContaining(str([["progress"], ["tour", "j_a"], ["tour", "j_c"]])));
+    }
+  });
+
+  it("workspace → everything, tours and progress included", () => {
+    const { es, invalidated } = setup(V2B);
+    act(() => es().change(["workspace"]));
+    expect(invalidated()).toEqual(str(V2B));
   });
 });
 

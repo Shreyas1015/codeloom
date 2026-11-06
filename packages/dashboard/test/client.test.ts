@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet, MapStateError, SessionError } from "@/api/client";
+import { ApiError, apiGet, apiPost, MapStateError, SessionError } from "@/api/client";
 
 function stubFetch(body: unknown, status: number) {
   const fetch = vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
@@ -42,5 +42,31 @@ describe("apiGet", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(404);
     expect((err as ApiError).message).toBe("nope");
+  });
+});
+
+describe("apiPost", () => {
+  it("posts JSON same-origin with credentials and returns the parsed body", async () => {
+    const fetch = stubFetch({ journey: { journeyId: "j_000000000001" } }, 200);
+    await expect(apiPost("/api/progress/seen", { journey: "j_000000000001" })).resolves.toEqual({ journey: { journeyId: "j_000000000001" } });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/progress/seen",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        headers: expect.objectContaining({ "content-type": "application/json" }),
+        body: JSON.stringify({ journey: "j_000000000001" }),
+      }),
+    );
+  });
+
+  it("maps errors like apiGet: 401 → SessionError, others → ApiError", async () => {
+    stubFetch({ error: "no session" }, 401);
+    await expect(apiPost("/api/progress/seen", {})).rejects.toBeInstanceOf(SessionError);
+    stubFetch({ error: "Journey j_x has no tour yet" }, 404);
+    const err = await apiPost("/api/progress/toured", {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(404);
+    expect((err as ApiError).message).toBe("Journey j_x has no tour yet");
   });
 });
