@@ -229,7 +229,7 @@ interface Neighbor {
 /** Breadth-first walk over one repo's graph edges. Each node keeps the depth (and edge) it was first
  * reached by; the frontier is walked in id order and each node's edges in (type, other id) order, so
  * the result is the same on every run. Sorted by depth then ref; the root itself is not listed. */
-function neighbors(repo: RepoData, rootId: string, args: Required<Omit<NeighborsArgs, "node" | "edgeTypes">> & { edgeTypes?: string[] }) {
+export function neighbors(repo: RepoData, rootId: string, args: Required<Omit<NeighborsArgs, "node" | "edgeTypes">> & { edgeTypes?: string[] }) {
   const types = args.edgeTypes && args.edgeTypes.length > 0 ? new Set(args.edgeTypes) : undefined;
   const nodes = new Map(repo.graph.nodes.map((n) => [n.id, n]));
   type Step = { other: string; type: string; direction: "in" | "out"; confidence?: CallConfidence };

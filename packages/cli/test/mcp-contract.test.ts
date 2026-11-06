@@ -26,6 +26,9 @@ import {
   StopKindSchema,
   UnresolvedSchema,
 } from "../src/store/schemas.js";
+import { CheckRecordSchema } from "../src/store/progress.js";
+import { stopKey } from "../src/store/stop-key.js";
+import { CheckQuestionSchema } from "../src/store/tours.js";
 import { commitAll, materializeFixture } from "./helpers.js";
 import { CATALOGUE } from "./mcp-catalogue.js";
 
@@ -94,6 +97,40 @@ const Neighbor = z
   })
   .strict();
 
+const Sha = str.regex(/^[0-9a-f]{64}$/);
+const TypeRef = z.object({ name: str, file: str.optional(), line: int.positive().optional(), text: str.optional(), from: str.optional() }).strict();
+const Shape = z.object({ kind: z.enum(["schema", "validator", "request", "response", "type"]), line: int.positive(), text: str }).strict();
+const DbDetail = z
+  .object({
+    table: str.optional(),
+    model: str.optional(),
+    op: str,
+    via: str,
+    statement: str,
+    tableDef: z.object({ file: str, line: int.positive(), source: str, text: str }).strict().nullable(),
+    modelDef: z.object({ file: str, source: str }).strict().nullable(),
+  })
+  .strict();
+/** One stop in build_tour_context: the chain stop, its file hash, and (unless `sameAs`) its context. */
+const TourContextStop = StopView.omit({ from: true })
+  .extend({
+    chainId: str,
+    stopIndex: int.nonnegative(),
+    key: str,
+    from: int.nonnegative().optional(),
+    fileHash: Sha.nullable(),
+    sameAs: z.object({ chainId: str, stopIndex: int.nonnegative() }).strict().optional(),
+    code: z.object({ startLine: int.positive(), endLine: int.positive(), text: str, truncated: z.boolean() }).strict().nullable().optional(),
+    codeUnavailable: str.optional(),
+    types: z.array(TypeRef).max(15).optional(),
+    shapes: z.array(Shape).max(12).optional(),
+    db: DbDetail.optional(),
+    neighbors: z.array(Neighbor).max(20).optional(),
+  })
+  .strict();
+const Levels = z.object({ total: int, none: int, seen: int, toured: int, understood: int, needsReWalk: int }).strict();
+const Level = z.enum(["none", "seen", "toured", "understood"]);
+
 /** Any tool result may be cut to fit 1 MB (mcp/result.ts fitResponse): it then carries `truncated: true`
  * and a `truncatedNote`. */
 function cuttable(schema: z.ZodType): z.ZodType {
@@ -104,6 +141,63 @@ function cuttable(schema: z.ZodType): z.ZodType {
 }
 
 const RawSchemas: Record<string, z.ZodObject> = {
+  build_tour_context: z
+    .object({
+      journey: z.object({ id: str.regex(/^j_[0-9a-f]{12}$/), name: str, area: str, note: str }).strict(),
+      chains: z.array(z.object({ id: str, name: str, entry: str, routeKey: str, stopCount: int.nonnegative() }).strict()),
+      stops: z.array(TourContextStop),
+      files: z.array(z.object({ repo: str, file: str, fileHash: Sha.nullable() }).strict()),
+      tour: z
+        .object({
+          writtenAt: str,
+          stops: int.nonnegative(),
+          staleStops: z.array(str),
+          removedStops: z.array(str),
+          check: z.array(CheckQuestionSchema.strict()).length(3),
+        })
+        .strict()
+        .nullable(),
+      notes: z.array(str),
+    })
+    .strict(),
+  save_tour: z
+    .object({
+      journeyId: str,
+      path: str.regex(/^\.codeloom\/tours\/j_[0-9a-f]{12}\.json$/),
+      replaced: z.boolean(),
+      writtenAt: str,
+      writtenAtCommit: z.record(str, str),
+      stops: int.positive(),
+      uncoveredStops: z.array(str),
+    })
+    .strict(),
+  get_progress: z
+    .object({
+      workspaceId: str.regex(/^[0-9a-f]{16}$/),
+      journeys: z.array(
+        z
+          .object({
+            journeyId: str,
+            name: str,
+            area: str,
+            repos: z.array(str),
+            level: Level,
+            needsReWalk: z.array(str),
+            lastCheck: CheckRecordSchema.strict().nullable(),
+            seenAt: str.optional(),
+            touredAt: str.optional(),
+            understoodAt: str.optional(),
+          })
+          .strict(),
+      ),
+      totals: z.object({ all: Levels, byRepo: z.record(str, Levels), byArea: z.record(str, Levels) }).strict(),
+      left: z.array(z.object({ journeyId: str, name: str, area: str, level: Level, reWalkStops: int.nonnegative() }).strict()),
+      olderJourneys: z.array(str),
+    })
+    .strict(),
+  record_check: z
+    .object({ journeyId: str, verdict: z.enum(["pass", "fail"]), understood: z.boolean(), understoodAt: str.optional(), checks: int.positive() })
+    .strict(),
   workspace_overview: z
     .object({
       name: str,
@@ -480,6 +574,46 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(c, root, "save_journeys", { ops: [{ op: "rename", id: jid }] });
   });
 
+  it("tours and progress: valid calls return the documented shape; invalid input writes nothing", async () => {
+    const root = copyShop(shop);
+    const c = await connect(root);
+    const saved = (await valid(c, "save_journeys", { ops: [{ op: "create", name: "Add a customer", area: "Customers", chainIds: [chainId] }] })) as {
+      created: string[];
+    };
+    const jid = saved.created[0]!;
+    // reading context and progress, and recording a check, write nothing under the workspace
+    const before = hashTree(root);
+    const ctx = (await valid(c, "build_tour_context", { journey: jid })) as { stops: Array<{ chainId: string; stopIndex: number; key: string }>; tour: unknown };
+    expect(ctx.stops.length).toBeGreaterThan(0);
+    expect(ctx.tour).toBeNull();
+    await valid(c, "build_tour_context", { journey: jid, chain: chainId });
+    expect(((await valid(c, "get_progress")) as { journeys: Array<{ level: string }> }).journeys.map((j) => j.level)).toEqual(["none"]);
+    await valid(c, "get_progress", { repo: "demo-api", area: "Customers" });
+    const qa = { questions: ["a?", "b?", "c?"], answers: ["a", "b", "c"], notes: "" };
+    expect(await valid(c, "record_check", { journey: jid, ...qa, verdict: "fail" })).toMatchObject({ understood: false });
+    expect(await valid(c, "record_check", { journey: jid, ...qa, verdict: "pass" })).toMatchObject({ understood: true, checks: 2 });
+    expect(hashTree(root)).toEqual(before);
+    const tour = {
+      stops: ctx.stops.map((s) => ({ chainId: s.chainId, stopIndex: s.stopIndex, key: s.key, explanation: "What happens here." })),
+      dataJourney: { input: '{ "name": "Ada" }', steps: [{ stopKey: ctx.stops[0]!.key, note: "starts here" }], output: '{ "id": 1 }' },
+      fileNotes: [],
+      check: [1, 2, 3].map((n) => ({ question: `Question ${n}?`, expected: ["a key point"] })),
+    };
+    expect(await valid(c, "save_tour", { journey: jid, tour })).toMatchObject({ journeyId: jid, replaced: false, uncoveredStops: [] });
+    expect(((await valid(c, "build_tour_context", { journey: jid })) as { tour: { staleStops: string[] } }).tour.staleStops).toEqual([]);
+
+    await invalid(c, root, "build_tour_context", { journey: "j_000000000000" });
+    await invalid(c, root, "build_tour_context", {});
+    await invalid(c, root, "save_tour", { journey: jid, tour: { ...tour, check: tour.check.slice(0, 2) } });
+    await invalid(c, root, "save_tour", { journey: jid, tour: { ...tour, stops: [{ ...tour.stops[0]!, stopIndex: 999 }] } });
+    await invalid(c, root, "save_tour", { journey: jid, tour: { ...tour, stops: [{ ...tour.stops[0]!, key: stopKey({ lane: "db", repo: "demo-api", file: "x.ts", line: 1, symbol: "x" }) }] } });
+    await invalid(c, root, "save_tour", { journey: "j_000000000000", tour });
+    await invalid(c, root, "get_progress", { repo: "nope" });
+    await invalid(c, root, "record_check", { journey: jid, questions: ["a?"], answers: ["a"], verdict: "pass", notes: "" });
+    await invalid(c, root, "record_check", { journey: jid, ...qa, verdict: "maybe" });
+    await invalid(c, root, "record_check", { journey: "j_000000000000", ...qa, verdict: "fail" });
+  });
+
   it("every tool rejects invalid input with isError and changes no file", async () => {
     // tools with no input: point them at a folder that is not an indexed workspace
     expect(await invalid(emptyClient, empty, "workspace_overview")).toMatch(/codeloom/i);
@@ -511,10 +645,10 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
 
   it("prompts/list and getPrompt", async () => {
     const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(["name-journeys", "verify-journey"]);
-    expect(prompts.find((p) => p.name === "verify-journey")!.arguments).toEqual([
-      expect.objectContaining({ name: "journey", required: true }),
-    ]);
+    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "name-journeys", "verify-journey", "write-tour"]);
+    for (const name of ["verify-journey", "write-tour", "check-me"]) {
+      expect(prompts.find((p) => p.name === name)!.arguments, name).toEqual([expect.objectContaining({ name: "journey", required: true })]);
+    }
     const PromptResult = z.object({
       messages: z.array(z.object({ role: z.literal("user"), content: z.object({ type: z.literal("text"), text: str.min(1) }).strict() }).strict()).length(1),
     });
@@ -523,6 +657,12 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     const verify = PromptResult.parse(await client.getPrompt({ name: "verify-journey", arguments: { journey: chainId } }));
     expect(verify.messages[0]!.content.text).toContain(chainId);
     await expect(client.getPrompt({ name: "verify-journey", arguments: {} })).rejects.toThrow();
+    const tour = PromptResult.parse(await client.getPrompt({ name: "write-tour", arguments: { journey: "j_0000000000aa" } }));
+    expect(tour.messages[0]!.content.text).toMatch(/build_tour_context[\s\S]*save_tour/);
+    const check = PromptResult.parse(await client.getPrompt({ name: "check-me", arguments: { journey: "j_0000000000aa" } }));
+    expect(check.messages[0]!.content.text).toMatch(/record_check/);
+    await expect(client.getPrompt({ name: "write-tour", arguments: {} })).rejects.toThrow();
+    await expect(client.getPrompt({ name: "check-me", arguments: {} })).rejects.toThrow();
   });
 });
 
@@ -594,6 +734,13 @@ describe("H5: every tool response stays under 1 MB on a 5000-chain map", { timeo
     expect(Object.values(cut.lanes).some((l) => l.length > 0)).toBe(true);
   });
 
+  it("build_tour_context of a 5000-chain journey is cut with a note on how to narrow it", async () => {
+    const r = (await bounded("build_tour_context", { journey: BIG_JOURNEY })) as { stops: unknown[]; truncated?: boolean; truncatedNote?: string };
+    expect(r.truncated).toBe(true);
+    expect(r.truncatedNote).toMatch(/chain/);
+    await bounded("build_tour_context", { journey: BIG_JOURNEY, chain: "ch_000000000000" });
+  });
+
   it("check_chains: 20 items per kind by default; kinds + limit + offset page the rest", async () => {
     const r = (await bounded("check_chains")) as { items: Array<{ kind: string }>; itemTotals: Record<string, number>; truncated: boolean; next?: string };
     expect(r.itemTotals["guess-link"]).toBeGreaterThan(10_000);
@@ -617,6 +764,7 @@ describe("H5: every tool response stays under 1 MB on a 5000-chain map", { timeo
     await bounded("trace_route", { from: fnRef });
     await bounded("impact_of_diff");
     await bounded("list_chains", { unnamed: false, detail: true, limit: 500, offset: 4500 });
+    await bounded("get_progress");
     if (process.env.CODELOOM_SIZES) process.stderr.write(`${JSON.stringify(sizes, null, 2)}\n`);
   });
 });

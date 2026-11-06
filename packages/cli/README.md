@@ -125,8 +125,9 @@ folders to functions). See [docs/dashboard.md](https://github.com/Shreyas1015/co
 
 ## MCP tools and prompts
 
-`codeloom serve` gives your agent these tools. They read the map fresh on every call. Only `save_journeys`
-and `save_summary` write anything; `reindex` runs the indexer.
+`codeloom serve` gives your agent these tools. They read the map fresh on every call. Only `save_journeys`,
+`save_summary` and `save_tour` write to the workspace, and `reindex` runs the indexer. `record_check` writes
+your personal progress, kept in `~/.codeloom` and never committed.
 
 | Tool | What it returns |
 |---|---|
@@ -145,11 +146,17 @@ and `save_summary` write anything; `reindex` runs the indexer.
 | `save_summary` | Save a short summary of a node to `.codeloom/summaries.json`. |
 | `check_chains` | The `codeloom check` summary, totals per item kind and up to 20 items per kind (optionally with the trace check). `kinds`, `limit` and `offset` page through the items. |
 | `impact_of_diff` | The files, nodes, chains and journeys a code change touches. |
+| `build_tour_context` | Everything needed to write a journey's tour: each stop's code, types, request/response shapes, DB detail, neighbours and file hash. |
+| `save_tour` | Save a journey's tour to `.codeloom/tours/<journey>.json`. Stops must be the journey's own; codeloom computes the hashes. |
+| `get_progress` | Your progress per journey (seen, toured, understood), stops to re-walk, last check, totals per repo and area, and what is left. |
+| `record_check` | Record a `check-me` result. A pass is the only way to mark a journey understood. |
 
 | Prompt | What it asks the agent to do |
 |---|---|
 | `name-journeys` | Group the unnamed chains into short, plain-language journeys and save them. |
 | `verify-journey` | Check one journey hop by hop against the code and report what agrees or looks doubtful. |
+| `write-tour` | Write a plain-language tour of one journey (flow, data journey, file notes, 3 check questions) and save it. |
+| `check-me` | Ask you 3 questions about one journey, one at a time, judge the answers against the code, and record the result. |
 
 ## Workspace file
 
