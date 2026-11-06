@@ -120,8 +120,47 @@ route or queue consumer that reaches the database but that no UI code calls coun
 Exit codes: `0` ok, `1` `--fail-under` not met (or `doctor` found errors), `2` a data or usage error
 (missing or broken `.codeloom` files, bad flag value).
 
-The dashboard has three screens: Home (journey list), Journey (UI / API / code / DB lanes) and Map (one repo,
-folders to functions). See [docs/dashboard.md](https://github.com/Shreyas1015/codeloom/blob/main/docs/dashboard.md).
+The dashboard has five screens: Home (journey list), Journey (UI / API / code / DB lanes), Tour (walk one
+journey stop by stop), Map (one repo, folders to functions) and Progress (how much you understand). See
+[docs/dashboard.md](https://github.com/Shreyas1015/codeloom/blob/main/docs/dashboard.md).
+
+## Tours and progress
+
+A **tour** walks you through one journey in four parts: **Flow** (each stop's code beside a plain-language
+explanation), **Data journey** (one sample request followed stop by stop down to the SQL), **File notes**
+(traps and notes per file) and **Check yourself** (3 questions).
+
+Your agent writes the tour; codeloom never does. Two prompts do the work, in Claude Code:
+
+1. `/mcp__codeloom__write-tour <journey id>`: Claude reads the journey's code with `build_tour_context`,
+   writes the tour and saves it with `save_tour`. It may only use the journey's real stops and code.
+2. `/mcp__codeloom__check-me <journey id>`: Claude asks you the tour's 3 questions one at a time, judges your
+   answers against the code and records the result with `record_check`.
+
+The dashboard shows both commands with a copy button (the journey id is filled in).
+
+**Progress** has three levels per journey:
+
+| Level | How you get it |
+|---|---|
+| Seen | You opened the journey in the dashboard. |
+| Toured | You viewed all four parts of its tour in Tour mode. |
+| Understood | You passed `check-me` (all 3 answers acceptable). Nothing else sets it. |
+
+When the code under a journey you understood changes, the journey **needs a re-walk**: the dashboard lists
+only the stops whose file changed. Re-walk those stops and pass `check-me` again to get it back. A tour stop
+whose file changed since the tour was written is marked "may be out of date"; the tour stays usable.
+
+Where the files live:
+
+| What | Where | Shared? |
+|---|---|---|
+| Tours | `.codeloom/tours/<journey id>.json` in the workspace root | Committed: team knowledge. Written only by `save_tour`. |
+| Your progress | `~/.codeloom/progress/<workspace id>.json` (or under `$CODELOOM_HOME`) | Personal: never in your repo, never committed. |
+| Your place in a tour | the browser's local storage | This browser only. |
+
+The workspace id comes from the workspace name and its repo ids, so it stays the same across clones.
+`codeloom doctor` reports a broken progress or tour file; codeloom never overwrites one silently.
 
 ## MCP tools and prompts
 
@@ -264,12 +303,12 @@ Known limits:
   place where they differ wins, at `param` (`GET /invoices/summary` picks `/invoices/:id` over
   `/:kind/summary`). A real tie (for example `/items/:id` and `/items/:slug`) stays a `guess`.
 
-## Not in v0.1
+## Not yet
 
 - Journeys only for JavaScript and TypeScript code.
 - Queues: RabbitMQ (amqplib) only.
-- The dashboard is read-only and shows Home, Journey and Map. Guided tours, "understood" progress, spec
-  badges and custom views come later.
+- The dashboard writes only your own progress (seen, toured); journeys and tours come from your agent. Spec
+  badges, custom views and team-shared progress come later.
 
 ## Credits
 
