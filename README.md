@@ -146,8 +146,9 @@ The dashboard shows both commands with a copy button (the journey id is filled i
 | Understood | You passed `check-me` (all 3 answers acceptable). Nothing else sets it. |
 
 When the code under a journey you understood changes, the journey **needs a re-walk**: the dashboard lists
-only the stops whose file changed. Re-walk those stops and pass `check-me` again to get it back. A tour stop
-whose file changed since the tour was written is marked "may be out of date"; the tour stays usable.
+only the stops whose file changed, and it counts as toured until you pass `check-me` again. A tour stop
+whose file changed since the tour was written is marked "may be out of date"; the tour stays usable. Stops
+are matched by lane, repo, file and symbol, so a line added above a stop moves it, never removes it.
 
 Where the files live:
 
@@ -157,7 +158,9 @@ Where the files live:
 | Your progress | `~/.codeloom/progress/<workspace id>.json` (or under `$CODELOOM_HOME`) | Personal: never in your repo, never committed. |
 | Your place in a tour | the browser's local storage | This browser only. |
 
-The workspace id comes from the workspace name and its repo ids, so it stays the same across clones.
+The workspace id comes from the workspace name and its repo ids, so it stays the same across clones. If you
+add or remove a repo, the id changes; `codeloom doctor` lists your earlier progress file for the same
+workspace name so you can copy what you need (codeloom never moves it).
 `codeloom doctor` reports a broken progress or tour file; codeloom never overwrites one silently.
 
 ## MCP tools and prompts
@@ -185,7 +188,7 @@ your personal progress, kept in `~/.codeloom` and never committed.
 | `impact_of_diff` | The files, nodes, chains and journeys a code change touches. |
 | `build_tour_context` | Everything needed to write a journey's tour: each stop's code, types, request/response shapes, DB detail, neighbours and file hash. |
 | `save_tour` | Save a journey's tour to `.codeloom/tours/<journey>.json`. Stops must be the journey's own; codeloom computes the hashes. |
-| `get_progress` | Your progress per journey (seen, toured, understood), stops to re-walk, last check, totals per repo and area, and what is left. |
+| `get_progress` | Your progress per journey (seen, toured, understood), stops to re-walk, last check, totals per repo and area (a journey that needs a re-walk counts as toured), and what is left. |
 | `record_check` | Record a `check-me` result. A pass is the only way to mark a journey understood. |
 
 | Prompt | What it asks the agent to do |

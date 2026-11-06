@@ -41,15 +41,16 @@ Viewing all four parts marks the journey **toured**. Markers you may see:
 | Marker | Meaning |
 |---|---|
 | May be out of date | The stop's file changed since the tour was written. The explanation may no longer match the code. |
-| Removed | The tour has a stop the journey no longer has. It is listed last, without code. |
+| Removed | The tour has a stop the journey no longer has. It is listed last, without code. A stop that only moved to another line is not removed. |
 | No tour yet | Copy `/mcp__codeloom__write-tour <journey id>` and run it in Claude Code. |
-| For an older journey | The journey was renamed, merged or split, so it has a new id. Open the new journey and ask for a new tour. |
+| For an older journey | The journey was renamed, merged or split, so it has a new id. Its old tour still opens from Progress → For older journeys. Open the new journey and ask for a new tour. |
 
 ## Progress
 
 - **Seen:** you opened the journey. **Toured:** you viewed all four parts of its tour. **Understood:** you passed `check-me`.
 - The page shows understood, toured and seen per repo (bars on one scale, so a bigger repo has a longer bar) and per area, what is left grouped by area, and the next journey to try.
-- **Needs a re-walk:** journeys you understood whose code changed since. Only the changed stops are listed, each linked to that stop in Tour mode. Pass `check-me` again to count it as understood.
+- **Needs a re-walk:** journeys you understood whose code changed since. Only the changed stops are listed, each linked to that stop in Tour mode. Until you pass `check-me` again it counts as toured, and Recent checks shows its pass as "Passed — needs re-walk".
+- **For older journeys:** journeys renamed, merged or split away. Your progress on them is kept; one with a tour links to it in Tour mode.
 - Your progress is kept on this computer only, in `~/.codeloom/progress/` (the page shows the exact file). It is never written into your repos.
 
 ## Messages you may see
@@ -64,6 +65,7 @@ Viewing all four parts marks the journey **toured**. Markers you may see:
 | Session expired | Run `codeloom dashboard` again and open the new URL. |
 | Live updates paused | The page lost its connection to `codeloom dashboard` and is reconnecting. |
 | Your progress file can't be read | Run `codeloom doctor`. codeloom does not overwrite a broken progress file. |
+| Your progress file is busy | Another codeloom (your agent or the dashboard) is writing it. Try again; if none is running, delete the `.lock` file the message names. |
 
 ## Not yet
 

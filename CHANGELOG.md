@@ -6,16 +6,21 @@ Tours and progress (v0.2b):
 
 - Guided tours: Tour mode in the dashboard walks one journey in four parts (Flow, Data journey, File notes,
   Check yourself), with each stop's code beside its explanation and ← / → between stops. Tours are committed
-  in `.codeloom/tours/<journey id>.json`; a stop whose file changed is marked "may be out of date".
+  in `.codeloom/tours/<journey id>.json`; a stop whose file changed is marked "may be out of date". Stops are
+  matched by lane, repo, file and symbol, not line, so a line added above a stop never makes it "Removed".
 - Progress: seen → toured → understood per journey, kept in `~/.codeloom/progress/` (never committed).
   Only a passed `check-me` marks a journey understood; when its code changes it needs a re-walk of just the
   changed stops. New Progress screen, understood % on Home, a progress strip per journey and the level on the
-  Journey screen; the Continue band resumes your next tour stop.
+  Journey screen; the Continue band resumes your next tour stop. A journey that needs a re-walk counts as
+  toured, not understood, everywhere (including `get_progress`). The progress file is locked while it is
+  written, so the dashboard and your agent never lose each other's updates.
 - MCP: `build_tour_context`, `save_tour`, `get_progress`, `record_check` tools and `write-tour`, `check-me`
   prompts.
 - The dashboard's only writes: `POST /api/progress/seen` and `POST /api/progress/toured` (same token and
   127.0.0.1 rules). `GET /api/tours/:id` never sends the check's expected answers.
-- `codeloom doctor` checks the progress and tour files.
+- `codeloom doctor` checks the progress and tour files, warns about a tour for a journey that no longer
+  exists, and lists progress kept under the same workspace name before its repo set changed (never moved).
+- `/api/code` never serves `.codeloom` files (a tour holds the check's expected answers).
 
 Map accuracy (v0.2a):
 
