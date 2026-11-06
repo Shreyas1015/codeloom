@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import type { JourneyRow, JourneysResponse, Overview } from "@/api/types";
-import { rememberTourStop } from "@/lib/tourPosition";
+import { rememberTourPlace } from "@/screens/tour/position";
 import { createAppRouter } from "@/router";
 import { lastJourneyKey } from "@/screens/home/lastJourney";
 import { journeyResult } from "./fixtures/journey";
@@ -130,14 +130,33 @@ describe("Home: a progress strip per journey row", () => {
 });
 
 describe("Home: the Continue band resumes the next unfinished tour stop", () => {
-  it("resumes the last opened journey at the remembered tour stop", async () => {
+  it("resumes the last opened journey where Tour mode left it", async () => {
     localStorage.setItem(lastJourneyKey("demo-shop"), "j_void");
-    rememberTourStop("demo-shop", "j_void", { phase: "check", stop: 3 });
+    rememberTourPlace("demo-shop", "j_void", { phase: "flow", stop: 2, viewed: ["flow"] });
     renderAt("/");
     const band = await screen.findByRole("region", { name: "Continue: Admin voids an invoice" });
     const go = await within(band).findByRole("link", { name: /Resume tour/ });
-    expect(go).toHaveAttribute("href", "/journeys/j_void/tour?phase=check&stop=3");
-    expect(band).toHaveTextContent("Stop 3 of 3 · Check yourself");
+    expect(go).toHaveAttribute("href", "/journeys/j_void/tour?phase=flow&stop=2");
+    expect(band).toHaveTextContent("Stop 2 of 3 · InvoicesController.store");
+  });
+
+  it("names the phase when Tour mode left off past Flow", async () => {
+    localStorage.setItem(lastJourneyKey("demo-shop"), "j_void");
+    rememberTourPlace("demo-shop", "j_void", { phase: "file-notes", stop: 1, viewed: ["flow", "data-journey"] });
+    renderAt("/");
+    const band = await screen.findByRole("region", { name: "Continue: Admin voids an invoice" });
+    expect(await within(band).findByRole("link", { name: /Resume tour/ })).toHaveAttribute("href", "/journeys/j_void/tour?phase=file-notes&stop=1");
+    expect(band).toHaveTextContent("File notes");
+    expect(band).not.toHaveTextContent("Stop 1 of 3");
+  });
+
+  it("goes to Check yourself once every phase was viewed", async () => {
+    localStorage.setItem(lastJourneyKey("demo-shop"), "j_void");
+    rememberTourPlace("demo-shop", "j_void", { phase: "flow", stop: 3, viewed: ["flow", "data-journey", "file-notes", "check"] });
+    renderAt("/");
+    const band = await screen.findByRole("region", { name: "Continue: Admin voids an invoice" });
+    expect(await within(band).findByRole("link", { name: /Resume tour/ })).toHaveAttribute("href", "/journeys/j_void/tour?phase=check&stop=1");
+    expect(band).toHaveTextContent("Check yourself");
   });
 
   it("starts the tour at stop 1 when nothing was remembered, and goes there on click", async () => {

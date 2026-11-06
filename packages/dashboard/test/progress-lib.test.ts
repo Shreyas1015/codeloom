@@ -1,15 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { JourneyProgressView, LevelCounts, TourFile } from "@/api/types";
-import {
-  displayLevel,
-  nextTourStop,
-  pickContinue,
-  stopKeyFields,
-  stripCounts,
-  tourHref,
-  understoodPercent,
-} from "@/lib/progress";
-import { readTourStop, rememberTourStop, tourStopKey } from "@/lib/tourPosition";
+import { displayLevel, nextTourStop, pickContinue, stripCounts, understoodPercent } from "@/lib/progress";
 
 const key = (file: string, line: number, symbol: string, lane = "code", repo = "api") => JSON.stringify([lane, repo, file, line, symbol]);
 const K1 = key("app/invoices/new/page.tsx", 12, "NewInvoicePage", "ui", "web");
@@ -73,34 +64,6 @@ describe("stripCounts and understoodPercent", () => {
   });
 });
 
-describe("stopKeyFields", () => {
-  it("parses a stopKey and rejects anything else", () => {
-    expect(stopKeyFields(K2)).toEqual({ lane: "code", repo: "api", file: "app/controllers/invoices_controller.ts", line: 41, symbol: "InvoicesController.store" });
-    expect(stopKeyFields("nope")).toBeNull();
-    expect(stopKeyFields(JSON.stringify(["a", "b"]))).toBeNull();
-  });
-});
-
-describe("tourHref", () => {
-  it("builds the Tour mode URL with phase and a 1-based stop", () => {
-    expect(tourHref("j_invoice", "flow", 2)).toBe("/journeys/j_invoice/tour?phase=flow&stop=2");
-    expect(tourHref("j/x y", "check")).toBe("/journeys/j%2Fx%20y/tour?phase=check");
-  });
-});
-
-describe("tour position", () => {
-  it("remembers the last tour stop per workspace and journey, and ignores bad values", () => {
-    expect(readTourStop("demo-shop", "j_invoice")).toBeUndefined();
-    rememberTourStop("demo-shop", "j_invoice", { phase: "data-journey", stop: 2 });
-    expect(readTourStop("demo-shop", "j_invoice")).toEqual({ phase: "data-journey", stop: 2 });
-    expect(readTourStop("other", "j_invoice")).toBeUndefined();
-    localStorage.setItem(tourStopKey("demo-shop", "j_bad"), JSON.stringify({ phase: "nope", stop: 0 }));
-    expect(readTourStop("demo-shop", "j_bad")).toBeUndefined();
-    localStorage.setItem(tourStopKey("demo-shop", "j_bad"), "{");
-    expect(readTourStop("demo-shop", "j_bad")).toBeUndefined();
-  });
-});
-
 describe("nextTourStop", () => {
   it("is the first changed stop for a re-walk", () => {
     expect(nextTourStop(tour, view({ journeyId: "j_invoice", level: "understood", needsReWalk: [K3, K2] }), undefined)).toEqual({
@@ -110,14 +73,23 @@ describe("nextTourStop", () => {
     });
   });
 
-  it("resumes the remembered stop, else starts at stop 1", () => {
+  it("resumes the place Tour mode remembered, else starts at stop 1", () => {
     const v = view({ journeyId: "j_invoice", level: "seen" });
-    expect(nextTourStop(tour, v, { phase: "file-notes", stop: 3 })).toEqual({ phase: "file-notes", stop: 3, resumed: true });
+    expect(nextTourStop(tour, v, { phase: "file-notes", stop: 3, viewed: ["flow"] })).toEqual({ phase: "file-notes", stop: 3, resumed: true });
     expect(nextTourStop(tour, v, undefined)).toEqual({ phase: "flow", stop: 1, resumed: false });
   });
 
-  it("starts over when the remembered stop is past the end of the tour", () => {
-    expect(nextTourStop(tour, view({ journeyId: "j_invoice" }), { phase: "flow", stop: 9 })).toEqual({ phase: "flow", stop: 1, resumed: false });
+  it("goes to Check yourself once every phase was viewed", () => {
+    const v = view({ journeyId: "j_invoice", level: "toured" });
+    expect(nextTourStop(tour, v, { phase: "flow", stop: 2, viewed: ["flow", "data-journey", "file-notes", "check"] })).toEqual({
+      phase: "check",
+      stop: 1,
+      resumed: true,
+    });
+  });
+
+  it("starts over when the remembered Flow stop is past the end of the tour", () => {
+    expect(nextTourStop(tour, view({ journeyId: "j_invoice" }), { phase: "flow", stop: 9, viewed: [] })).toEqual({ phase: "flow", stop: 1, resumed: false });
   });
 
   it("is undefined without a tour", () => {

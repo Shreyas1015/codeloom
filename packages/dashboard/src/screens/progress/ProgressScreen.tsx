@@ -5,12 +5,12 @@ import { useProgress, useTour } from "@/api/queries";
 import type { JourneyProgressView, ProgressResponse } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
 import { ProgressLegend, ProgressStrip } from "@/components/gallery/ProgressStrip";
-import { TourLink } from "@/components/gallery/TourLink";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { Breakable } from "@/lib/breakable";
-import { displayLevel, LEVEL_WORD, nextTourStop, stopKeyFields, stripCounts, tourHref } from "@/lib/progress";
+import { displayLevel, LEVEL_WORD, nextTourStop, stripCounts } from "@/lib/progress";
 import { cn } from "@/lib/utils";
 import { AgentHint } from "@/screens/home/parts";
+import { parseKey } from "@/screens/tour/model";
 import { areaRows, nextSuggested, recentChecks, repoRows, reWalks, whatsLeft } from "./model";
 
 export const WRITE_TOUR = "/mcp__codeloom__write-tour";
@@ -298,7 +298,6 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
     const i = tour ? tour.stops.findIndex((s) => s.key === key) : -1;
     return i < 0 ? undefined : i + 1;
   };
-  const go = first ? tourHref(v.journeyId, first.phase, first.stop) : undefined;
   return (
     <li className="flex flex-col gap-2 rounded-[9px] border border-dashed border-ring bg-accent-soft px-3 py-2.5">
       <div className="flex items-start gap-3">
@@ -309,10 +308,16 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
             {plural(v.needsReWalk.length, "stop")} changed
           </small>
         </div>
-        {go ? (
-          <TourLink href={go} aria-label={`Re-walk ${v.name}`} className={REWALK}>
+        {first ? (
+          <Link
+            to="/journeys/$id/tour"
+            params={{ id: v.journeyId }}
+            search={{ phase: first.phase, stop: first.stop }}
+            aria-label={`Re-walk ${v.name}`}
+            className={REWALK}
+          >
             Re-walk
-          </TourLink>
+          </Link>
         ) : (
           <Link to="/journeys/$id" params={{ id: v.journeyId }} aria-label={`Re-walk ${v.name}`} className={REWALK}>
             Re-walk
@@ -321,7 +326,7 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
       </div>
       <ul className="flex flex-col gap-1">
         {v.needsReWalk.map((key) => {
-          const f = stopKeyFields(key);
+          const f = parseKey(key);
           const n = stopNo(key);
           const text = (
             <>
@@ -332,9 +337,15 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
           return (
             <li key={key}>
               {n !== undefined ? (
-                <TourLink href={tourHref(v.journeyId, "flow", n)} className={cn(LINK, "block")} title={f ? `${f.repo}/${f.file}:${f.line}` : undefined}>
+                <Link
+                  to="/journeys/$id/tour"
+                  params={{ id: v.journeyId }}
+                  search={{ phase: "flow", stop: n }}
+                  className={cn(LINK, "block")}
+                  title={f ? `${f.repo}/${f.file}:${f.line}` : undefined}
+                >
                   {text}
-                </TourLink>
+                </Link>
               ) : (
                 <div title={f ? `${f.repo}/${f.file}:${f.line}` : undefined}>{text}</div>
               )}

@@ -2,15 +2,14 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTour } from "@/api/queries";
-import type { JourneyProgressView, JourneysResponse, ProgressResponse, TourPhase } from "@/api/types";
-import { TourLink } from "@/components/gallery/TourLink";
+import type { JourneyProgressView, JourneysResponse, ProgressResponse } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { displayLevel, nextTourStop, pickContinue, stopKeyFields, tourHref } from "@/lib/progress";
-import { readTourStop } from "@/lib/tourPosition";
+import { displayLevel, nextTourStop, pickContinue } from "@/lib/progress";
+import { parseKey, phaseName } from "@/screens/tour/model";
+import { readTourPlace } from "@/screens/tour/position";
 import { totalStops } from "./filter";
 import { readLastJourney } from "./lastJourney";
 
-const PHASE_WORD: Record<TourPhase, string> = { flow: "Flow", "data-journey": "Data journey", "file-notes": "File notes", check: "Check yourself" };
 const stops = (n: number) => `${n} stop${n === 1 ? "" : "s"}`;
 
 function Band({ name, caption, children }: { name: string; caption: string; children: ReactNode }) {
@@ -65,7 +64,7 @@ function TourBand({ workspace, data, view }: { workspace: string; data: Journeys
   const journey = data.journeys.find((j) => j.id === view.journeyId)!;
   const { data: t } = useTour(view.journeyId);
   const tour = t?.tour;
-  const next = nextTourStop(tour, view, readTourStop(workspace, view.journeyId));
+  const next = nextTourStop(tour, view, readTourPlace(workspace, view.journeyId));
 
   if (!tour || !next) {
     const caption = [journey.area, stops(totalStops(journey)), ...(t && !tour ? ["No tour yet"] : [])].filter(Boolean).join(" · ");
@@ -80,17 +79,18 @@ function TourBand({ workspace, data, view }: { workspace: string; data: Journeys
   }
 
   const rewalk = displayLevel(view) === "re-walk";
-  const at = stopKeyFields(tour.stops[next.stop - 1]!.key);
-  const where = next.phase === "flow" ? (at?.symbol ?? "") : PHASE_WORD[next.phase];
+  const at = next.phase === "flow" ? parseKey(tour.stops[next.stop - 1]!.key) : null;
   const caption = rewalk
     ? [`${stops(view.needsReWalk.length)} changed`, at?.symbol].filter(Boolean).join(" · ")
-    : [`Stop ${next.stop} of ${tour.stops.length}`, where].filter(Boolean).join(" · ");
+    : next.phase === "flow"
+      ? [`Stop ${next.stop} of ${tour.stops.length}`, at?.symbol].filter(Boolean).join(" · ")
+      : phaseName(next.phase);
   return (
     <Band name={view.name} caption={caption}>
-      <TourLink href={tourHref(view.journeyId, next.phase, next.stop)}>
+      <Link to="/journeys/$id/tour" params={{ id: view.journeyId }} search={{ phase: next.phase, stop: next.stop }}>
         {rewalk ? "Re-walk" : next.resumed ? "Resume tour" : "Start tour"}
         <ArrowRight aria-hidden />
-      </TourLink>
+      </Link>
     </Band>
   );
 }

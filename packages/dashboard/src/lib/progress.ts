@@ -1,6 +1,7 @@
 /** Reading your progress for display: levels, the three strip segments, understood %, and where to resume. */
 import type { JourneyProgressView, LevelCounts, TourFile, TourPhase } from "@/api/types";
-import type { TourStop } from "./tourPosition";
+import { PHASE_IDS } from "@/screens/tour/model";
+import type { StoredTourPlace } from "@/screens/tour/position";
 
 /** What a journey shows: its level, or "re-walk" for an understood journey whose code changed since. */
 export type DisplayLevel = "none" | "seen" | "toured" | "understood" | "re-walk";
@@ -39,51 +40,26 @@ export function understoodPercent(c: LevelCounts): number | undefined {
   return Math.floor((stripCounts(c).understood / c.total) * 100);
 }
 
-export interface StopKeyFields {
-  lane: string;
-  repo: string;
-  file: string;
-  line: number;
-  symbol: string;
-}
-
-/** The fields of a stopKey (JSON [lane, repo, file, line, symbol]); null when the string is not one. */
-export function stopKeyFields(key: string): StopKeyFields | null {
-  let v: unknown;
-  try {
-    v = JSON.parse(key);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(v) || v.length !== 5) return null;
-  const [lane, repo, file, line, symbol] = v as unknown[];
-  if (typeof lane !== "string" || typeof repo !== "string" || typeof file !== "string" || typeof symbol !== "string") return null;
-  if (typeof line !== "number" || !Number.isInteger(line) || line < 1) return null;
-  return { lane, repo, file, line, symbol };
-}
-
-/** Tour mode's URL: `/journeys/<id>/tour?phase=&stop=` (stop 1-based, into the tour's stops). */
-export function tourHref(journeyId: string, phase: TourPhase, stop?: number): string {
-  const qs = new URLSearchParams({ phase });
-  if (stop !== undefined) qs.set("stop", String(stop));
-  return `/journeys/${encodeURIComponent(journeyId)}/tour?${qs.toString()}`;
-}
-
-export interface NextStop extends TourStop {
+export interface NextStop {
+  phase: TourPhase;
+  /** 1-based, into the tour's stops (Tour mode's `?stop=`). */
+  stop: number;
   /** True when this is where the viewer left off (not the start, not a changed stop). */
   resumed: boolean;
 }
 
-/** Where to pick a tour up: the first changed stop when the journey needs a re-walk, else the remembered
- * stop, else stop 1 of Flow. Undefined when the journey has no tour. */
-export function nextTourStop(tour: TourFile | null | undefined, v: JourneyProgressView | undefined, saved: TourStop | undefined): NextStop | undefined {
+/** Where to pick a tour up: the first changed stop when the journey needs a re-walk; else the place Tour mode
+ * remembered (`readTourPlace`) while a phase is unviewed, or Check yourself once all four were viewed; else
+ * stop 1 of Flow. Undefined when the journey has no tour. */
+export function nextTourStop(tour: TourFile | null | undefined, v: JourneyProgressView | undefined, saved: StoredTourPlace | undefined): NextStop | undefined {
   if (!tour || tour.stops.length === 0) return undefined;
   if (v && displayLevel(v) === "re-walk") {
     const changed = new Set(v.needsReWalk);
     const i = tour.stops.findIndex((s) => changed.has(s.key));
     return { phase: "flow", stop: i < 0 ? 1 : i + 1, resumed: false };
   }
-  if (saved && saved.stop <= tour.stops.length) return { ...saved, resumed: true };
+  if (saved && PHASE_IDS.every((p) => saved.viewed.includes(p))) return { phase: "check", stop: 1, resumed: true };
+  if (saved && (saved.phase !== "flow" || saved.stop <= tour.stops.length)) return { phase: saved.phase, stop: saved.stop, resumed: true };
   return { phase: "flow", stop: 1, resumed: false };
 }
 
