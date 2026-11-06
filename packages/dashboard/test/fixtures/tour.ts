@@ -74,5 +74,6 @@ export function progressWith(row: JourneyProgressView = invoiceProgress): Progre
     journeys: [row],
     totals: { all: counts, byRepo: { api: counts, web: counts }, byArea: { Invoices: counts } },
     olderJourneys: [],
+    olderTours: [],
   };
 }

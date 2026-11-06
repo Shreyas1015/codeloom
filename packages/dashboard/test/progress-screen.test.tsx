@@ -121,7 +121,7 @@ describe("Progress screen (/progress)", () => {
     expect(items.map((li) => li.textContent)).toEqual([
       "Admin voids an invoiceNot passed · 25 Oct",
       "Customer signs upPassed · 22 Oct",
-      "Customer creates an invoicePassed · 21 Oct",
+      "Customer creates an invoicePassed — needs re-walk · 21 Oct", // its code changed since the pass
     ]);
     expect(within(items[0]!).getByText("Not passed · 25 Oct")).toHaveAttribute("data-verdict", "fail");
   });
@@ -151,6 +151,9 @@ describe("Progress screen (/progress)", () => {
     const older = await screen.findByRole("region", { name: "For older journeys" });
     expect(older).toHaveTextContent("j_oldinvoice");
     expect(older).toHaveTextContent("/mcp__codeloom__write-tour");
+    // a renamed journey's tour still opens in Tour mode; progress alone has nothing to open
+    expect(within(older).getByRole("link", { name: /j_oldtour/ })).toHaveAttribute("href", "/journeys/j_oldtour/tour");
+    expect(within(older).queryByRole("link", { name: /j_oldinvoice/ })).toBeNull();
   });
 
   it("has a plain empty state when there are no journeys", async () => {

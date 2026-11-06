@@ -78,7 +78,8 @@ export const progress: ProgressResponse = {
       Invoices: counts({ total: 3, seen: 1, toured: 1, understood: 1, needsReWalk: 1 }),
     },
   },
-  olderJourneys: ["j_oldinvoice"],
+  olderJourneys: ["j_oldinvoice", "j_oldtour"],
+  olderTours: ["j_oldtour"],
 };
 
 export const emptyProgress: ProgressResponse = {
@@ -86,6 +87,7 @@ export const emptyProgress: ProgressResponse = {
   journeys: [],
   totals: { all: counts({}), byRepo: { api: counts({}) }, byArea: {} },
   olderJourneys: [],
+  olderTours: [],
 };
 
 function tourFile(journeyId: string): TourFile {

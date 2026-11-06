@@ -92,6 +92,15 @@ describe("nextTourStop", () => {
     expect(nextTourStop(tour, view({ journeyId: "j_invoice" }), { phase: "flow", stop: 9, viewed: [] })).toEqual({ phase: "flow", stop: 1, resumed: false });
   });
 
+  it("finds the changed stop when its line moved since the tour was written", () => {
+    const K3now = key("app/controllers/invoices_controller.ts", 45, "InvoicesController.store", "db");
+    expect(nextTourStop(tour, view({ journeyId: "j_invoice", level: "understood", needsReWalk: [K3now] }), undefined)).toEqual({
+      phase: "flow",
+      stop: 3,
+      resumed: false,
+    });
+  });
+
   it("is undefined without a tour", () => {
     expect(nextTourStop(null, view({ journeyId: "j_invoice" }), undefined)).toBeUndefined();
   });

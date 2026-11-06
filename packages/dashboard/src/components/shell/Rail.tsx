@@ -77,6 +77,8 @@ export function Rail({
   const under = (p: string) => pathname === p || pathname.startsWith(`${p}/`);
   const onMap = under("/map");
   const onProgress = under("/progress");
+  // Tour mode is a journey, not Home: no rail item is current there
+  const onTour = /^\/journeys\/[^/]+\/tour\/?$/.test(pathname);
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
   const repoCount = overview?.repos.length ?? 0;
   const iconCls = "size-[17px] shrink-0";
@@ -106,7 +108,7 @@ export function Rail({
       )}
 
       <nav aria-label="Main" className="flex flex-col gap-0.5">
-        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress} />
+        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress && !onTour} />
         <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
         <NavItem
           to="/progress"

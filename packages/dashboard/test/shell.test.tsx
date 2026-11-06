@@ -92,6 +92,13 @@ describe("shell", () => {
     expect(within(nav).getByRole("link", { name: /Map/ })).toHaveAttribute("aria-current", "page");
   });
 
+  it("marks nothing current in Tour mode (it is a journey, not Home)", async () => {
+    stubFetch(overview);
+    renderAt("/journeys/j_00000000c0de/tour");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    for (const name of [/Home/, /Map/, /Progress/]) expect(within(nav).getByRole("link", { name })).not.toHaveAttribute("aria-current");
+  });
+
   it("says when MCP is not set up", async () => {
     stubFetch({ ...overview, mcpConnected: false });
     renderAt("/");

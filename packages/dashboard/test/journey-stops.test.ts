@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ChainView, JourneyResult, StopView } from "@/api/types";
-import { numberStops, stopFrom, stopKey } from "@/lib/journey-stops";
+import { keyIdentity, numberStops, stopFrom, stopIdentity, stopKey, stopMatcher } from "@/lib/journey-stops";
 import { buildJourneyModel } from "@/screens/journey/model";
 import { journeyStops } from "@/screens/map/layout";
-import { parseStopKey as cliParseStopKey, stopKey as cliStopKey } from "codeloom/src/store/stop-key.js";
+import {
+  keyIdentity as cliKeyIdentity,
+  parseStopKey as cliParseStopKey,
+  stopIdentity as cliStopIdentity,
+  stopKey as cliStopKey,
+  stopMatcher as cliStopMatcher,
+} from "codeloom/src/store/stop-key.js";
 import { chainCounts } from "./fixtures/journey";
 
 const stop = (s: Partial<StopView> & Pick<StopView, "lane" | "repo" | "file" | "line" | "symbol">): StopView => ({
@@ -68,6 +74,34 @@ describe("journey stop numbering (shared by Journey and Map)", () => {
       expect(stopKey(s)).toBe(cliStopKey(s));
       expect(cliParseStopKey(stopKey(s))).toEqual({ lane: s.lane, repo: s.repo, file: s.file, line: s.line, symbol: s.symbol });
     }
+  });
+
+  it("matches saved stops by the same line-free identity as the cli (tours and re-walk)", () => {
+    for (const s of [page, call, handler, write, route, read]) {
+      expect(stopIdentity(s)).toBe(cliStopIdentity(s));
+      expect(stopIdentity(s)).toBe(stopIdentity({ ...s, line: s.line + 1 } as StopView));
+      expect(keyIdentity(stopKey(s))).toBe(cliKeyIdentity(stopKey(s)));
+    }
+    // two db stops sharing an identity (same lane, repo, file, symbol) in one chain
+    const write2 = { ...write, line: 43, label: "audit_logs" };
+    const placed = [handler, write, write2].map((s, stopIndex) => ({ chainId: "ch_a", stopIndex, key: stopKey(s) }));
+    const moved = (s: StopView) => stopKey({ ...s, line: s.line - 1 });
+    const asks: Array<[string, { chainId: string; stopIndex: number } | undefined]> = [
+      [stopKey(handler), undefined],
+      [moved(handler), undefined],
+      [moved(write), { chainId: "ch_a", stopIndex: 1 }],
+      [moved(write2), { chainId: "ch_a", stopIndex: 2 }],
+      [moved(write2), undefined],
+      [moved(write2), { chainId: "ch_a", stopIndex: 0 }],
+      [stopKey({ ...read, symbol: "C.gone" }), undefined],
+      ["not a key", undefined],
+    ];
+    const mine = stopMatcher(placed);
+    const cli = cliStopMatcher(placed);
+    for (const [k, at] of asks) expect(mine(k, at)).toBe(cli(k, at));
+    expect(asks.map(([k, at]) => mine(k, at))).toEqual([
+      stopKey(handler), stopKey(handler), stopKey(write), stopKey(write2), undefined, undefined, undefined, undefined,
+    ]);
   });
 
   it("reads a stop's `from` only when it is a whole number", () => {

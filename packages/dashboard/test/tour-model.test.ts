@@ -3,7 +3,7 @@ import { buildJourneyModel } from "@/screens/journey/model";
 import { buildTourModel, nextPlace, phaseViewed, placeOf, prevPlace, TOUR_PHASES } from "@/screens/tour/model";
 import { readTourPlace, rememberTourPlace, tourPlaceKey } from "@/screens/tour/position";
 import { journeyResult } from "./fixtures/journey";
-import { removedKey, storeKey, tourFile, tourResponse } from "./fixtures/tour";
+import { insertInvoiceKey, removedKey, storeKey, tourFile, tourResponse } from "./fixtures/tour";
 
 const journey = buildJourneyModel(journeyResult);
 
@@ -18,6 +18,33 @@ describe("tour model", () => {
     const gone = m.stops.find((s) => s.key === removedKey)!;
     expect(gone).toMatchObject({ removed: true, stale: false, fields: { repo: "api", file: "app/services/legacy_invoice.ts", line: 3 } });
     expect(gone.view).toBeUndefined();
+  });
+
+  it("finds stops whose line moved (a line added above them): not removed, by identity, by place when two share one", () => {
+    const down = (k: string) => {
+      const [lane, repo, file, line, symbol] = JSON.parse(k) as [string, string, string, number, string];
+      return JSON.stringify([lane, repo, file, line - 1, symbol]);
+    };
+    const lines = journeyResult.chains[0]!.stops[5]!; // invoice_lines: same lane, file and symbol as invoices
+    const linesKey = JSON.stringify([lines.lane, lines.repo, lines.file, lines.line, lines.symbol]);
+    const stops = [
+      { chainId: "ch_aaaa", stopIndex: 3, key: down(storeKey), fileHash: "h3", explanation: "store" },
+      { chainId: "ch_aaaa", stopIndex: 5, key: down(linesKey), fileHash: "h5", explanation: "lines" },
+      { chainId: "ch_aaaa", stopIndex: 4, key: down(insertInvoiceKey), fileHash: "h4", explanation: "invoices" },
+    ];
+    const r = {
+      ...tourResponse,
+      tour: { ...tourFile, stops, dataJourney: { ...tourFile.dataJourney, steps: [{ stopKey: down(linesKey), note: "lines" }] } },
+      staleStops: stops.map((s) => s.key),
+      removedStops: [],
+    };
+    const m = buildTourModel(r, journey);
+    expect(m.stops.map((s) => [s.n, s.title, s.removed, s.stale])).toEqual([
+      [4, "InvoicesController.store", false, true],
+      [5, "invoices", false, true],
+      [6, "invoice_lines", false, true],
+    ]);
+    expect(m.steps.map((s) => [s.n, s.title])).toEqual([[6, "invoice_lines"]]);
   });
 
   it("treats every stop as removed when the journey is gone", () => {

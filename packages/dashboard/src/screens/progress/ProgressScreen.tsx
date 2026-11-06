@@ -7,7 +7,7 @@ import { Command } from "@/components/gallery/CopyCommand";
 import { ProgressLegend, ProgressStrip } from "@/components/gallery/ProgressStrip";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { Breakable } from "@/lib/breakable";
-import { displayLevel, LEVEL_WORD, nextTourStop, stripCounts } from "@/lib/progress";
+import { displayLevel, LEVEL_WORD, nextTourStop, stripCounts, tourStopIndex } from "@/lib/progress";
 import { cn } from "@/lib/utils";
 import { AgentHint } from "@/screens/home/parts";
 import { parseKey } from "@/screens/tour/model";
@@ -145,7 +145,7 @@ function Body({ p }: { p: ProgressResponse }) {
               <ArrowRight aria-hidden className="size-4 shrink-0" />
             </Link>
           ) : null}
-          <OlderJourneys ids={p.olderJourneys} />
+          <OlderJourneys ids={p.olderJourneys} withTour={p.olderTours} />
         </div>
       </div>
     </>
@@ -296,7 +296,7 @@ function ReWalkRow({ v }: { v: JourneyProgressView }) {
   const tour = data?.tour;
   const first = nextTourStop(tour, v, undefined);
   const stopNo = (key: string) => {
-    const i = tour ? tour.stops.findIndex((s) => s.key === key) : -1;
+    const i = tour ? tourStopIndex(tour, [key]) : -1;
     return i < 0 ? undefined : i + 1;
   };
   return (
@@ -383,7 +383,7 @@ function RecentChecks({ p }: { p: ProgressResponse }) {
                   {v.name}
                 </Link>
                 <span data-verdict={c.verdict} className={cn("shrink-0 text-[12.5px]", pass ? "text-muted-foreground" : "font-semibold text-destructive")}>
-                  {pass ? "Passed" : "Not passed"} · {day(c.at)}
+                  {pass ? (displayLevel(v) === "re-walk" ? "Passed — needs re-walk" : "Passed") : "Not passed"} · {day(c.at)}
                 </span>
               </li>
             );
@@ -394,7 +394,9 @@ function RecentChecks({ p }: { p: ProgressResponse }) {
   );
 }
 
-function OlderJourneys({ ids }: { ids: string[] }) {
+/** Journeys renamed, merged or split away: progress kept, and a tour (when it has one) still opens in Tour mode. */
+function OlderJourneys({ ids, withTour }: { ids: string[]; withTour: string[] }) {
+  const toured = new Set(withTour);
   if (ids.length === 0) return null;
   return (
     <section aria-labelledby="progress-older" className={cn(PANEL, "flex flex-col gap-2 px-4.5 py-4")}>
@@ -402,12 +404,21 @@ function OlderJourneys({ ids }: { ids: string[] }) {
         For older journeys
       </h2>
       <p className="text-[13px] text-muted-foreground">
-        These journeys were renamed, merged or split. Your progress on them is kept. To tour the new journey, ask your agent:
+        These journeys were renamed, merged or split. Your progress on them is kept
+        {withTour.length > 0 ? ", and a linked one's old tour still opens" : ""}. To tour the new journey, ask your agent:
       </p>
       <Command text={WRITE_TOUR} />
       <ul className="flex flex-col gap-0.5 font-mono text-[11.5px] text-muted-foreground">
         {ids.map((id) => (
-          <li key={id}>{id}</li>
+          <li key={id}>
+            {toured.has(id) ? (
+              <Link to="/journeys/$id/tour" params={{ id }} className={LINK} aria-label={`Open the tour of ${id}`}>
+                {id}
+              </Link>
+            ) : (
+              id
+            )}
+          </li>
         ))}
       </ul>
     </section>

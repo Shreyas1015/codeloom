@@ -1,5 +1,6 @@
 /** Reading your progress for display: levels, the three strip segments, understood %, and where to resume. */
 import type { JourneyProgressView, LevelCounts, TourFile, TourPhase } from "@/api/types";
+import { keyIdentity } from "@/lib/journey-stops";
 import { PHASE_IDS } from "@/screens/tour/model";
 import type { StoredTourPlace } from "@/screens/tour/position";
 
@@ -48,14 +49,22 @@ export interface NextStop {
   resumed: boolean;
 }
 
+/** The 0-based index of the first tour stop that is one of `keys` (current stopKeys, e.g. needsReWalk),
+ * matched by exact key or by line-free identity (a line added above a stop moves it); -1 when none is.
+ * Stops sharing an identity share a file, so they change together: identity alone is enough here. */
+export function tourStopIndex(tour: Pick<TourFile, "stops">, keys: readonly string[]): number {
+  const exact = new Set(keys);
+  const ids = new Set(keys.map(keyIdentity).filter((id) => id !== null));
+  return tour.stops.findIndex((s) => exact.has(s.key) || ids.has(keyIdentity(s.key) ?? ""));
+}
+
 /** Where to pick a tour up: the first changed stop when the journey needs a re-walk; else the place Tour mode
  * remembered (`readTourPlace`) while a phase is unviewed, or Check yourself once all four were viewed; else
  * stop 1 of Flow. Undefined when the journey has no tour. */
 export function nextTourStop(tour: TourFile | null | undefined, v: JourneyProgressView | undefined, saved: StoredTourPlace | undefined): NextStop | undefined {
   if (!tour || tour.stops.length === 0) return undefined;
   if (v && displayLevel(v) === "re-walk") {
-    const changed = new Set(v.needsReWalk);
-    const i = tour.stops.findIndex((s) => changed.has(s.key));
+    const i = tourStopIndex(tour, v.needsReWalk);
     return { phase: "flow", stop: i < 0 ? 1 : i + 1, resumed: false };
   }
   if (saved && PHASE_IDS.every((p) => saved.viewed.includes(p))) return { phase: "check", stop: 1, resumed: true };

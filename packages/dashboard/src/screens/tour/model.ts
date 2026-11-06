@@ -1,5 +1,5 @@
 import type { StopView, TourPhase, TourResponse } from "@/api/types";
-import { stopKey } from "@/lib/journey-stops";
+import { type PlacedStop, stopKey, stopMatcher } from "@/lib/journey-stops";
 import { type JourneyModel, type JourneyStop, stopTitle } from "@/screens/journey/model";
 
 /** The four phases, in walking order (the server's TourPhase ids). */
@@ -64,13 +64,26 @@ export interface TourModel {
   steps: DataStepItem[];
 }
 
+/** Every journey stop with its place (chain id, index in that chain), for matching saved stops. */
+function placedStops(journey: JourneyModel | undefined): PlacedStop[] {
+  if (!journey) return [];
+  const byN = new Map(journey.stops.map((s) => [s.n, s]));
+  return [...journey.chainStops].flatMap(([chainId, nums]) => nums.map((n, stopIndex) => ({ chainId, stopIndex, key: stopKey(byN.get(n)!.view) })));
+}
+
+/** Places a saved stop key in the journey as it is now: matched by its line-free identity (a line added
+ * above it is not a removal), by its tour place when two stops share one. */
 function placer(r: TourResponse, journey: JourneyModel | undefined) {
   const byKey = new Map<string, JourneyStop>();
   for (const s of journey?.stops ?? []) byKey.set(stopKey(s.view), s);
+  const match = stopMatcher(placedStops(journey));
   const removed = new Set(r.removedStops);
-  return (key: string): Placed => {
+  // a data journey step has no place of its own: it borrows the tour stop's with the same key
+  const tourPlace = new Map((r.tour?.stops ?? []).map((s) => [s.key, { chainId: s.chainId, stopIndex: s.stopIndex }]));
+  return (key: string, place?: { chainId: string; stopIndex: number }): Placed => {
     const fields = parseKey(key);
-    const at = removed.has(key) ? undefined : byKey.get(key);
+    const now = removed.has(key) ? undefined : match(key, place ?? tourPlace.get(key));
+    const at = now === undefined ? undefined : byKey.get(now);
     if (!at) return { key, fields, removed: true, title: fields?.symbol ?? "Unknown stop" };
     return { key, n: at.n, view: at.view, fields, removed: false, title: stopTitle(at.view) };
   };
@@ -82,7 +95,7 @@ export function buildTourModel(r: TourResponse, journey: JourneyModel | undefine
   const tour = r.tour;
   if (!tour) return { stops: [], steps: [] };
   const stops = tour.stops
-    .map((s, i) => ({ ...place(s.key), explanation: s.explanation, stale: stale.has(s.key), i }))
+    .map((s, i) => ({ ...place(s.key, s), explanation: s.explanation, stale: stale.has(s.key), i }))
     .sort((a, b) => (a.n ?? Infinity) - (b.n ?? Infinity) || a.i - b.i)
     .map(({ i: _i, ...s }) => s);
   const steps = tour.dataJourney.steps.map((s) => ({ ...place(s.stopKey), note: s.note, ...(s.sql ? { sql: s.sql } : {}) }));
