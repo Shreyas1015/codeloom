@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-11-08 (GitHub release; not yet on npm)
 
 Specs per journey and views Claude can make:
 
@@ -32,7 +32,7 @@ Specs per journey and views Claude can make:
   (`ORD-MH-26-001`) and `TC`, `AC`, `ADR`, `QA`, `ID` keys are ignored. Git never fetches in a partial clone.
 - Views: the journeys widget's spec filter takes `unchecked`; `none` means checked with no spec, as on Home.
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-11-06 (on main; not tagged separately)
 
 Tours and progress (v0.2b):
 

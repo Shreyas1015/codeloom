@@ -42,7 +42,7 @@ describe("packageName", () => {
 describe("publish manifest", () => {
   it("names, versions and describes the package", () => {
     expect(manifest.name).toBe("codeloom");
-    expect(manifest.version).toBe("0.1.0");
+    expect(manifest.version).toBe("0.3.0");
     expect(manifest.private).toBeUndefined();
     expect(manifest.type).toBe("module");
     expect(manifest.license).toBe("MIT");
