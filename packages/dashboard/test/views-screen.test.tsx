@@ -243,6 +243,66 @@ describe("Home and the home view", () => {
     expect(screen.queryByText(/home view can't be read/)).toBeNull();
   });
 
+  it("shows one neutral loading state, never the built-in Home skeleton, while the home view loads", async () => {
+    renderAt("/", { "/api/views/home": "pending" });
+    const loading = await screen.findByTestId("home-view-loading");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByTestId("home-loading")).toBeNull();
+    expect(screen.queryByTestId("screen-home")).toBeNull();
+    expect(screen.queryByRole("list", { name: "User journeys" })).toBeNull();
+  });
+
+  it("goes straight from the loading state to a valid home view, never through the built-in Home", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const fetch = stubApi({ "/api/views/home": { body: ok("home", [{ type: "note", markdown: "Hello." }], "Team home") } });
+    const real = fetch.getMockImplementation()!;
+    fetch.mockImplementation((url: string) => (url.split("?")[0] === "/api/views/home" ? gate.then(() => real(url)) : real(url)));
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      if (document.querySelector('[data-testid="home-loading"]')) seen.push("skeleton");
+      if (document.querySelector('[aria-label="User journeys"]')) seen.push("list");
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<App router={router} queryClient={queryClient} />);
+    await screen.findByTestId("home-view-loading");
+    release();
+    expect(await screen.findByRole("heading", { level: 1, name: "Team home" })).toBeInTheDocument();
+    observer.disconnect();
+    expect(seen).toEqual([]);
+  });
+
+  it("does not loop when the overview fails: the view request and the overview request each go out once", async () => {
+    const fetch = stubApi({
+      "/api/overview": { status: 500, body: { error: "boom" } },
+      "/api/views/home": { body: ok("home", [{ type: "note", markdown: "Hello." }], "Team home") },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<App router={router} queryClient={queryClient} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Team home" })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 200));
+    const calls = (path: string) => fetch.mock.calls.filter(([u]) => String(u).split("?")[0] === path).length;
+    expect(calls("/api/views/home")).toBe(1);
+    expect(calls("/api/overview")).toBeLessThanOrEqual(2);
+  });
+
+  it("falls back to the built-in Home when the view request itself fails, even with a failing overview", async () => {
+    const fetch = stubApi({
+      "/api/overview": { status: 500, body: { error: "boom" } },
+      "/api/views/home": { status: 500, body: { error: "boom" } },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<App router={router} queryClient={queryClient} />);
+    expect(await screen.findByTestId("screen-home")).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByTestId("home-view-loading")).toBeNull();
+    expect(fetch.mock.calls.filter(([u]) => String(u).split("?")[0] === "/api/views/home").length).toBe(1);
+  });
+
   it("falls back to the built-in Home with a quiet notice when home.json is broken", async () => {
     renderAt("/", { "/api/views/home": { body: { id: "home", url: "/", view: null, error: "views/home.json: bad JSON. Run codeloom doctor." } } });
     expect(await screen.findByRole("list", { name: "User journeys" })).toBeInTheDocument();

@@ -134,7 +134,7 @@ describe("Home", () => {
     renderHome();
     const main = await screen.findByRole("main");
     expect(await within(main).findByRole("heading", { level: 1, name: "demo-shop" })).toBeInTheDocument();
-    expect(within(main).getByText("3 journeys · 12 chains, 9 complete")).toBeInTheDocument();
+    expect(await within(main).findByText("3 journeys · 12 chains, 9 complete")).toBeInTheDocument();
     const strip = within(main).getByRole("list", { name: "Totals" });
     expect(strip).toHaveTextContent("200Files");
     expect(strip).toHaveTextContent("9UI pages");

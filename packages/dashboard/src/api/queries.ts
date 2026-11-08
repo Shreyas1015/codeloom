@@ -154,6 +154,8 @@ export function useView(id: string | undefined) {
     queryKey: queryKeys.view(id ?? ""),
     queryFn: () => apiGet<ViewResponse>(`/api/views/${enc(id!)}`),
     enabled: !!id,
+    // A local file: a retry would not change the answer, and Home waits on this one before it picks a layout.
+    retry: false,
   });
 }
 

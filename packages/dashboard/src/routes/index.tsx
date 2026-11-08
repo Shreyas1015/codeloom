@@ -7,10 +7,12 @@ import { ViewBody } from "@/screens/views/ViewScreen";
 /** Home (`/`): the `home` view when `.codeloom/views/home.json` exists and is valid; otherwise the built-in
  * Home, with a quiet notice when home.json is there but broken. Any failure to read the view (an older
  * server, a network error) falls back to the built-in Home too: a bad view never costs you Home.
- * While the view is still loading the built-in Home starts loading as well (most workspaces have no home
- * view), so Home is never held back by it; a local file answers before the journeys do. */
+ * Until the view request settles, Home shows one neutral loading state rather than the built-in Home's
+ * skeleton, so a custom Home never flashes the built-in layout first. The request is a small local file
+ * (never retried); whatever it settles to (view, no view, broken, error) decides once. */
 export function HomeRoute() {
-  const { data } = useView("home");
+  const { data, isPending } = useView("home");
+  if (isPending) return <HomeViewLoading />;
   if (data?.view) return <ViewBody view={data.view} home />;
   return (
     <>
@@ -29,6 +31,15 @@ function HomeViewNotice({ error }: { error: string }) {
         <code className="font-mono text-[12px]">.codeloom/views/home.json</code> <span className="text-muted-foreground">with</span>
       </span>
       <Command text="codeloom doctor" />
+    </div>
+  );
+}
+
+/** The one loading state before Home knows which layout it shows: a quiet bar, nothing claiming a layout. */
+function HomeViewLoading() {
+  return (
+    <div data-testid="home-view-loading" aria-busy="true" aria-label="Loading Home" className="flex flex-col gap-5.5">
+      <div className="h-9 w-64 rounded-md bg-muted motion-safe:animate-pulse" />
     </div>
   );
 }

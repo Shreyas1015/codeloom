@@ -81,7 +81,8 @@ describe("shell", () => {
     stubFetch(overview);
     renderAt(path);
     const main = await screen.findByRole("main");
-    expect(within(main).getByTestId(`screen-${id}`)).toBeInTheDocument();
+    // Home first settles which layout it shows (a custom home view or the built-in one)
+    expect(await within(main).findByTestId(`screen-${id}`)).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "codeloom" })).toBeInTheDocument();
   });
 
