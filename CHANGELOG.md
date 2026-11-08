@@ -23,6 +23,14 @@ Specs per journey and views Claude can make:
   writes either; view notes never render raw HTML.
 - CLI: `codeloom views list` and `codeloom views reset <id>` (`reset home` brings back the built-in Home).
   `codeloom doctor` checks `specs.json` and every view file.
+- Ranking: a doc term many journeys share (a `customers` table) counts for little, and docs naming only
+  tables or queues come last; a ticket whose commits touched many journeys' files counts for less.
+  `match_specs` on a journey saved since the last index computes its candidates on the spot.
+- Safety: spec doc links, snippets and the dashboard's code and doc views share one path check (inside the
+  repo after symlinks; never `.git`, `.env*` or `.codeloom`, in any letter case). Ticket patterns are at most
+  100 characters with no nested quantifiers or backreferences; keys inside longer tokens
+  (`ORD-MH-26-001`) and `TC`, `AC`, `ADR`, `QA`, `ID` keys are ignored. Git never fetches in a partial clone.
+- Views: the journeys widget's spec filter takes `unchecked`; `none` means checked with no spec, as on Home.
 
 ## 0.2.0 — unreleased
 
