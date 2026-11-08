@@ -4,6 +4,15 @@ on:
   push:
   pull_request:
 
+# Least privilege: CI only reads the repo, so a pull request cannot use the workflow token to write to it.
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}

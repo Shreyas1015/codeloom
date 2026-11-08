@@ -1,0 +1,69 @@
+name: Release
+
+# Publishes codeloom to npm when a version tag is pushed:
+#   git tag -a v0.4.0 -m "codeloom 0.4.0" && git push origin v0.4.0
+# npm trusted publishing: npm trusts this workflow (repo Shreyas1015/codeloom, release.yml, environment npm),
+# so no npm token is stored anywhere, and every version gets a provenance statement.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing and provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Protected environment: needs your approval, and only v* tags may use it.
+    environment: npm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 22 for pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Tag matches the package version
+        shell: bash
+        run: |
+          version=$(node -p 'require("./packages/cli/package.json").version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match packages/cli/package.json version $version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Release build
+        run: pnpm release:build
+
+      - name: Pack (runs the prepack guard)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          pnpm --dir packages/cli pack --pack-destination "$RUNNER_TEMP/pack"
+
+      - name: Tarball install test
+        shell: bash
+        run: scripts/release/pack-test.sh --tarball "$(ls "$RUNNER_TEMP"/pack/codeloom-*.tgz)"
+
+      # Trusted publishing needs npm 11.5.1 or newer, which ships with Node 24.
+      - name: Set up Node 24 for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm (public, with provenance)
+        shell: bash
+        run: npm publish "$(ls "$RUNNER_TEMP"/pack/codeloom-*.tgz)" --provenance --access public

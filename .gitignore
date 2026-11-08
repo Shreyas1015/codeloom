@@ -12,3 +12,5 @@ playwright-report/
 packages/cli/LICENSE
 packages/cli/NOTICE
 packages/cli/CHANGELOG.md
+
+.env

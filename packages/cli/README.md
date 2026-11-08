@@ -1,6 +1,18 @@
 <!-- Generated from the repo's README.md by packages/cli/test/docs.test.ts. Do not edit by hand. -->
 
+<div align="center">
+
 # codeloom
+
+**Map a codebase into user journeys: UI page → API route → code → database.<br>For you, and for your AI agent over MCP.**
+
+[![npm version](https://img.shields.io/npm/v/codeloom.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/codeloom)
+[![npm downloads](https://img.shields.io/npm/dm/codeloom.svg)](https://www.npmjs.com/package/codeloom)
+[![CI](https://github.com/Shreyas1015/codeloom/actions/workflows/ci.yml/badge.svg)](https://github.com/Shreyas1015/codeloom/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/npm/l/codeloom.svg)](https://github.com/Shreyas1015/codeloom/blob/main/LICENSE)
+[![node](https://img.shields.io/node/v/codeloom.svg?logo=node.js)](https://nodejs.org)
+
+</div>
 
 codeloom maps a codebase into **user journeys**: a UI page, the API route it calls, the code that route
 runs, and the database tables or queues it touches. It works across separate frontend and backend repos.
@@ -15,6 +27,24 @@ web  /customers/new        (page)
    └ CustomersController.store → CustomerService.create
      └ customers, audit_logs   (db tables)
 ```
+
+## Table of contents
+
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Commands](#commands)
+- [Tours and progress](#tours-and-progress)
+- [Specs and views](#specs-and-views)
+- [MCP tools and prompts](#mcp-tools-and-prompts)
+- [Workspace file](#workspace-file)
+- [Trace check](#trace-check)
+- [Accuracy](#accuracy)
+- [Not yet](#not-yet)
+- [Credits](#credits)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Versioning](#versioning)
+- [Licence](#licence)
 
 ## Quick start
 
@@ -381,6 +411,19 @@ Known limits:
 The file map, tree-sitter parsing and layer detection come from
 [Understand Anything](https://github.com/Egonex-AI/Understand-Anything) (MIT), vendored in `packages/core`.
 Its licence notice is in [NOTICE](https://github.com/Shreyas1015/codeloom/blob/main/NOTICE).
+
+## Contributing
+
+Bug reports, framework requests and pull requests are welcome. See [CONTRIBUTING.md](https://github.com/Shreyas1015/codeloom/blob/main/CONTRIBUTING.md) for the
+repo layout and the checks a change must pass, and [CODE_OF_CONDUCT.md](https://github.com/Shreyas1015/codeloom/blob/main/CODE_OF_CONDUCT.md).
+
+## Security
+
+Please report security problems privately, not in a public issue. See [SECURITY.md](https://github.com/Shreyas1015/codeloom/blob/main/SECURITY.md).
+
+## Versioning
+
+codeloom follows [Semantic Versioning](https://semver.org). Changes are listed in [CHANGELOG.md](https://github.com/Shreyas1015/codeloom/blob/main/CHANGELOG.md).
 
 ## Licence
 
