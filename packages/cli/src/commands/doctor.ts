@@ -19,7 +19,9 @@ import {
   SummariesFileSchema,
   WorkspaceFileSchema,
 } from "../store/schemas.js";
+import { readSpecs } from "../store/specs.js";
 import { listTours, readTour, type StoreWorkspace, tourStaleStops } from "../store/tours.js";
+import { HOME_VIEW_ID, listViews, readView, strayViewFiles } from "../store/views.js";
 import { compare } from "../util.js";
 import { listFiles } from "../workspace/files.js";
 import { findWorkspaceRoot, loadWorkspace } from "../workspace/repos.js";
@@ -44,7 +46,7 @@ export interface DoctorReport { version: 1; items: DoctorItem[]; summary: { ok: 
 /** Check order: report items are sorted by this, then by repo id. */
 const CHECKS = [
   "git", "workspace", "config", "graph", "endpoints", "cache", "summaries",
-  "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index",
+  "chains", "journeys", "progress", "tours", "specs", "views", "hook", "gitignore", "mcp", "index",
 ] as const;
 type Check = (typeof CHECKS)[number];
 
@@ -274,6 +276,80 @@ function checkTours(d: Doctor, ws: StoreWorkspace): void {
   if (valid > 0 && gone.length === 0) d.add("tours", undefined, "ok", `${valid} tour${valid === 1 ? "" : "s"}`);
 }
 
+/** Journey ids in journeys.json; undefined when it cannot be read (the journeys check reports that). */
+function knownJourneys(root: string): Set<string> | undefined {
+  try {
+    return new Set((readJson(join(root, CODELOOM_DIR, FILES.journeys), JourneysFileSchema, { handWritten: true })?.journeys ?? []).map((j) => j.id));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `specs` check: .codeloom/specs.json (written only by save_spec_links) is valid; entries for journeys
+ * that no longer exist and doc links whose file is gone are warnings. A broken file is an error that --fix
+ * never repairs (it holds the team's confirmed links). */
+function checkSpecs(d: Doctor, ws: StoreWorkspace): void {
+  let specs;
+  try {
+    specs = readSpecs(ws.root);
+  } catch (err) {
+    return d.add("specs", undefined, "error", errText(err));
+  }
+  const ids = Object.keys(specs.journeys).sort(compare);
+  if (ids.length === 0) return d.add("specs", undefined, "ok", "no spec links yet");
+  const known = knownJourneys(ws.root);
+  const gone = known ? ids.filter((id) => !known.has(id)) : [];
+  for (const id of gone) {
+    d.add("specs", undefined, "warn", `spec links for a journey that no longer exists: ${id} (the dashboard lists them under an older journey; run the match-specs prompt on the new journey)`);
+  }
+  const abs = new Map(ws.repos.map((r) => [r.ref.id, r.abs]));
+  const missing: string[] = [];
+  let links = 0;
+  for (const id of ids) {
+    for (const l of specs.journeys[id]!.links) {
+      links++;
+      if (l.kind !== "doc") continue;
+      const at = l.ref.indexOf(":");
+      const repo = abs.get(l.ref.slice(0, at));
+      if (at <= 0 || repo === undefined || !existsSync(join(repo, l.ref.slice(at + 1)))) missing.push(`${l.ref} (${id})`);
+    }
+  }
+  if (missing.length > 0) {
+    d.add("specs", undefined, "warn", `linked docs that are gone: ${missing.join(", ")} (run the match-specs prompt on those journeys again)`);
+  }
+  if (gone.length === 0 && missing.length === 0) {
+    d.add("specs", undefined, "ok", `${ids.length} journey${ids.length === 1 ? "" : "s"} checked, ${links} link${links === 1 ? "" : "s"}`);
+  }
+}
+
+/** The `views` check: every .codeloom/views/<id>.json is a valid view whose id matches its file name. A
+ * broken view is an error --fix never repairs (it only breaks that view; Home falls back for `home`). */
+function checkViews(d: Doctor, root: string): void {
+  const ids = listViews(root);
+  const stray = strayViewFiles(root);
+  if (ids.length === 0 && stray.length === 0) return d.add("views", undefined, "ok", "no views yet");
+  let valid = 0;
+  let home = false;
+  for (const id of ids) {
+    const fallback = id === HOME_VIEW_ID ? "\nHome shows the built-in layout until it is fixed." : "";
+    const reset = `Fix it by hand, ask your agent to save it again (make-view), or delete it with "codeloom views reset ${id}".`;
+    try {
+      const v = readView(root, id)!;
+      if (v.id !== id) {
+        d.add("views", undefined, "error", `${CODELOOM_DIR}/views/${id}.json says its id is "${v.id}": the id must match the file name. ${reset}${fallback}`);
+        continue;
+      }
+      valid++;
+      if (id === HOME_VIEW_ID) home = true;
+    } catch (err) {
+      const text = errText(err).split("\n").filter((l) => !l.startsWith("Fix it by hand")).join("\n");
+      d.add("views", undefined, "error", `${text}\n${reset}${fallback}`);
+    }
+  }
+  if (stray.length > 0) d.add("views", undefined, "warn", `files in ${CODELOOM_DIR}/views that are not views (a view is <id>.json, id a-z 0-9 -): ${stray.join(", ")}`);
+  if (valid > 0) d.add("views", undefined, "ok", `${valid} view${valid === 1 ? "" : "s"}${home ? " (home replaces the built-in Home)" : ""}`);
+}
+
 /** `bin`: the codeloom bin running doctor (codeloomBin()), which an installed or repaired hook runs.
  * `pathEnv`: the PATH the hook would search for `codeloom`. */
 function checkHook(d: Doctor, repoAbs: string, id: string, wsRoot: string, bin: string | undefined, pathEnv: string): void {
@@ -381,7 +457,9 @@ export function runDoctor(start: string, opts: { fix?: boolean; bin?: string; pa
     const store: StoreWorkspace = { root: ws.root, name: ws.name, repos: repos.map((ref) => ({ ref, abs: join(ws.root, ref.path) })) };
     checkProgress(d, store);
     d.guard("tours", undefined, () => checkTours(d, store));
+    d.guard("specs", undefined, () => checkSpecs(d, store));
   }
+  d.guard("views", undefined, () => checkViews(d, ws.root));
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
   for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root, opts.bin, pathEnv));
   for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));

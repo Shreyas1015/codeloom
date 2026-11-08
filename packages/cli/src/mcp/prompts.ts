@@ -102,6 +102,68 @@ function checkMeText(journey: string): string {
 6. Finish with one line: passed or not, and what to re-read if not.`;
 }
 
+// ---- match-specs ----------------------------------------------------------------------------------
+
+const MATCH_SPECS_ARG_DESCRIPTION = "A journey id (j_…). Leave it out to work through every journey not checked yet.";
+
+function matchSpecsText(journey: string | undefined): string {
+  const which = journey ? `journey ${journey}` : "every journey that has not been checked yet";
+  const first = journey
+    ? `1. Work on journey ${journey} only.`
+    : `1. Call \`list_specs\` and take every journey with \`checked: false\`. Work through them one at a time, and do
+   steps 2 to 5 for each.`;
+  const id = journey ? `"${journey}"` : `"<journey id>"`;
+  return `Find the specs (docs and tickets) for ${which}, and save the ones that really describe it.
+
+${first}
+2. Call \`match_specs\` with \`{ journey: ${id} }\`. It returns candidate \`docs\` (files in the repos that mention
+   the journey's routes, pages, tables, queues or code, with the lines around each hit) and candidate
+   \`tickets\` (keys found in the commits that touched the journey's files), best first. They are only hints.
+3. Read the journey's code: call \`get_journey\` for its stops, then \`explain_context\` on its main stops (the
+   page, the route handler, the database write). Open a candidate doc in full when its snippets are not enough.
+4. Keep a doc only if it really describes what this journey does, not one that just mentions a shared table
+   or a common word. Keep a ticket only if its commits show it built or changed this journey. For each link
+   you keep, write a one-line \`reason\` in plain language.
+5. Save with \`save_spec_links\` \`{ journey: ${id}, links }\`. Each link is \`{ kind: "doc", ref: "<repo>:<path>",
+   reason }\` or \`{ kind: "ticket", ref: "<KEY>", reason }\`. When nothing fits, save \`links: []\`: that records
+   "checked, no spec", which is useful too. If save_spec_links reports a problem, fix that link and save again.
+6. Never invent refs. Use only the doc refs and ticket keys match_specs returned, or docs you opened in the
+   repo yourself. codeloom does not read ticket text; if you have your own tool for the ticket system you may
+   use it to write a better reason, never to add keys codeloom did not find.
+7. Finish with a short list: per journey, the links you saved (or "no spec").`;
+}
+
+// ---- make-view ------------------------------------------------------------------------------------
+
+const MAKE_VIEW_ARG_DESCRIPTION = 'What the view should show, in plain words (e.g. "customer journeys with no spec").';
+
+function makeViewText(request: string): string {
+  return `Build a codeloom dashboard view for this request: ${JSON.stringify(request)}
+
+1. Call \`workspace_overview\` for the repos, and \`list_views\` for the views that exist. Reuse an existing id
+   only when the request is to change that view.
+2. Build the view only from these widgets (each is \`{ type, ...fields }\`; a field with ? is optional):
+   - \`counts\` \`{ show?: ["files" | "pages" | "routes" | "tables" | "queues" | "journeys" | "understood" | "specLinked"] }\`: number tiles.
+   - \`journeys\` \`{ title?, filter?: { area?, repo?, spec?: "linked" | "candidates" | "none", level?: "none" | "seen" |
+     "toured" | "understood" | "rewalk", confidence?: "exact" | "param" | "guess", complete?: true | false },
+     sort?: "name" | "area" | "stops" | "confidence" | "progress" | "spec", limit?: 1-200 }\`: a journey list.
+   - \`map\` \`{ repo, overlay?: "layer" | "journey:<journey id>", dir? }\`: one repo's map, optionally with a
+     journey's path drawn on it, opened at a folder.
+   - \`progress\` \`{ by?: "repo" | "area" }\`: how much is seen, toured and understood.
+   - \`checks\` \`{ limit?: 1-50 }\`: the map's open problems (codeloom check items).
+   - \`specCoverage\` \`{ by?: "repo" | "area" }\`: how many journeys have a spec linked, waiting, or none.
+   - \`note\` \`{ markdown }\`: a short text block (up to 4000 characters, Markdown, no HTML).
+3. The view is \`{ id, title, description?, widgets }\`: \`id\` is 1 to 40 characters of a-z, 0-9 and -, with at
+   most 24 widgets. The id \`home\` replaces the dashboard's Home screen: use it only when asked to change Home
+   (\`codeloom views reset home\` brings the built-in Home back).
+4. Use only real repo ids, areas and journey ids (from \`workspace_overview\`, \`list_specs\` or \`get_progress\`).
+   Never invent them.
+5. Save it with \`save_view\` \`{ view }\`. If save_view reports a problem, fix that part and save again.
+6. If the request asks for something these widgets cannot show, say so plainly instead of faking it with a note.
+7. Tell me in one or two lines what the view shows and where it is: \`/views/<id>\` in the dashboard (the \`url\`
+   save_view returns; Home for \`home\`). \`codeloom dashboard\` opens the dashboard.`;
+}
+
 // ---- registration -------------------------------------------------------------------------------
 
 /** Prompts are plain text templates: no AI calls, no network access, no map reads. The agent that runs
@@ -151,6 +213,30 @@ export function registerPrompts(server: McpServer, _opts: ServerOptions): void {
     },
     ({ journey }): GetPromptResult => ({
       messages: [{ role: "user", content: { type: "text", text: checkMeText(journey) } }],
+    }),
+  );
+
+  server.registerPrompt(
+    "match-specs",
+    {
+      title: "Match specs",
+      description: "Find the docs and tickets that really describe a journey (or every unchecked one) and save them as its spec links.",
+      argsSchema: { journey: z.string().optional().describe(MATCH_SPECS_ARG_DESCRIPTION) },
+    },
+    ({ journey }): GetPromptResult => ({
+      messages: [{ role: "user", content: { type: "text", text: matchSpecsText(journey?.trim() || undefined) } }],
+    }),
+  );
+
+  server.registerPrompt(
+    "make-view",
+    {
+      title: "Make view",
+      description: "Turn a plain request into a dashboard view built from codeloom's widgets, save it, and give its link.",
+      argsSchema: { request: z.string().min(1).describe(MAKE_VIEW_ARG_DESCRIPTION) },
+    },
+    ({ request }): GetPromptResult => ({
+      messages: [{ role: "user", content: { type: "text", text: makeViewText(request) } }],
     }),
   );
 }

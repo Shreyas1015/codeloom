@@ -101,6 +101,8 @@ What `graph.json` holds (v0.2a):
 | `codeloom doctor` | Check the data files, hooks, `.gitignore` line and MCP entry. `--fix` repairs what is safe to repair. `--json` prints JSON. |
 | `codeloom dashboard` | Serve the dashboard on 127.0.0.1 and open it. `--port <port>` picks the port; `--no-open` only prints the URL. |
 | `codeloom serve` | Run the MCP server on stdio. `init` puts this in `.mcp.json` as `npx -y codeloom serve`. |
+| `codeloom views list` | List the dashboard views your agent saved, with their links. A broken view shows why. |
+| `codeloom views reset <id>` | Delete a view. `codeloom views reset home` brings back the built-in Home. Views are only ever written by your agent (`save_view`). |
 
 `check` starts with a summary like this:
 
@@ -166,8 +168,9 @@ workspace name so you can copy what you need (codeloom never moves it).
 ## MCP tools and prompts
 
 `codeloom serve` gives your agent these tools. They read the map fresh on every call. Only `save_journeys`,
-`save_summary` and `save_tour` write to the workspace, and `reindex` runs the indexer. `record_check` writes
-your personal progress, kept in `~/.codeloom` and never committed.
+`save_summary`, `save_tour`, `save_spec_links`, `save_view` and `delete_view` write to the workspace, and
+`reindex` runs the indexer. `record_check` writes your personal progress, kept in `~/.codeloom` and never
+committed.
 
 | Tool | What it returns |
 |---|---|
@@ -190,6 +193,12 @@ your personal progress, kept in `~/.codeloom` and never committed.
 | `save_tour` | Save a journey's tour to `.codeloom/tours/<journey>.json`. Stops must be the journey's own; codeloom computes the hashes. |
 | `get_progress` | Your progress per journey (seen, toured, understood), stops to re-walk, last check, totals per repo and area (a journey that needs a re-walk counts as toured), and what is left. |
 | `record_check` | Record a `check-me` result. A pass is the only way to mark a journey understood. |
+| `match_specs` | The docs and tickets codeloom found for one journey (docs that mention its routes, pages, tables, queues or code, with the lines around each hit; ticket keys from the commits that touched its files). Only hints. |
+| `save_spec_links` | Save the docs and tickets that really describe a journey to `.codeloom/specs.json`, each with a one-line reason. `[]` records "checked, no spec". |
+| `list_specs` | Spec coverage per journey (linked, candidates waiting, none; checked or not) with totals per repo and area. |
+| `save_view` | Save a dashboard view built from a fixed set of widgets to `.codeloom/views/<id>.json`. The id `home` replaces Home. |
+| `list_views` | The saved views with their dashboard links, or why one cannot be read. |
+| `delete_view` | Delete a saved view (not `home`: use `codeloom views reset home`). |
 
 | Prompt | What it asks the agent to do |
 |---|---|
@@ -197,6 +206,8 @@ your personal progress, kept in `~/.codeloom` and never committed.
 | `verify-journey` | Check one journey hop by hop against the code and report what agrees or looks doubtful. |
 | `write-tour` | Write a plain-language tour of one journey (flow, data journey, file notes, 3 check questions) and save it. |
 | `check-me` | Ask you 3 questions about one journey, one at a time, judge the answers against the code, and record the result. |
+| `match-specs` | For one journey (or every one not checked yet): read the candidate docs and tickets and the code, and save only the ones that really describe it. |
+| `make-view` | Turn a plain request ("customer journeys with no spec") into a dashboard view, save it and give you its `/views/<id>` link. |
 
 ## Workspace file
 

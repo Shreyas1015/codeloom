@@ -122,7 +122,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     expect(r.summary.warn + r.summary.error + r.summary.fixed).toBe(0);
     // every documented check ran
     const checks = new Set(r.items.map((i) => i.check));
-    for (const c of ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index"]) {
+    for (const c of ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "specs", "views", "hook", "gitignore", "mcp", "index"]) {
       expect(checks).toContain(c);
     }
     expect(r.items.filter((i) => i.check === "hook").map((i) => i.repo)).toEqual(IDS);
@@ -134,7 +134,7 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
 
   it("orders items by check order, then repo id", () => {
     const r = runDoctor(healthy, {});
-    const order = ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "hook", "gitignore", "mcp", "index"];
+    const order = ["git", "workspace", "config", "graph", "endpoints", "cache", "summaries", "chains", "journeys", "progress", "tours", "specs", "views", "hook", "gitignore", "mcp", "index"];
     const keys = r.items.map((i) => [order.indexOf(i.check), i.repo ?? ""] as const);
     const sorted = [...keys].sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
     expect(keys).toEqual(sorted);
@@ -319,6 +319,65 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     const warn = items.find((i) => i.status === "warn")!;
     expect(warn.message).toContain("tour for a journey that no longer exists: j_00000000dead");
     expect(warn.fix).toBeUndefined();
+  });
+
+  it("checks specs.json: none yet, valid, links to gone journeys or docs, broken (never repaired)", () => {
+    const root = shop();
+    const specs = (r: DoctorReport) => r.items.filter((i) => i.check === "specs");
+    expect(specs(runDoctor(root, {}))).toEqual([expect.objectContaining({ status: "ok", message: "no spec links yet" })]);
+    writeJsonAtomic(join(root, ".codeloom", "journeys.json"), {
+      version: 1,
+      journeys: [{ id: "j_0123456789ab", name: "Add a customer", area: "Customers", note: "", chainIds: [], status: "ok" }],
+    });
+    const at = "2026-11-08T10:00:00.000Z";
+    writeJsonAtomic(join(root, ".codeloom", "specs.json"), {
+      version: 1,
+      journeys: { j_0123456789ab: { links: [{ kind: "ticket", ref: "SHOP-12", reason: "x", savedAt: at }], checkedAt: at } },
+    });
+    expect(specs(runDoctor(root, {}))).toEqual([expect.objectContaining({ status: "ok", message: "1 journey checked, 1 link" })]);
+    writeJsonAtomic(join(root, ".codeloom", "specs.json"), {
+      version: 1,
+      journeys: {
+        j_0123456789ab: { links: [{ kind: "doc", ref: "demo-api:docs/gone.md", reason: "x", savedAt: at }], checkedAt: at },
+        j_00000000dead: { links: [], checkedAt: at },
+      },
+    });
+    const warns = specs(runDoctor(root, {})).filter((i) => i.status === "warn").map((i) => i.message);
+    expect(warns).toEqual([
+      expect.stringContaining("spec links for a journey that no longer exists: j_00000000dead"),
+      expect.stringContaining("demo-api:docs/gone.md (j_0123456789ab)"),
+    ]);
+    const path = join(root, ".codeloom", "specs.json");
+    writeFileSync(path, "{ nope");
+    const bad = specs(runDoctor(root, { fix: true }));
+    expect(bad).toEqual([expect.objectContaining({ status: "error", message: expect.stringContaining("specs.json is not valid JSON") })]);
+    expect(readFileSync(path, "utf8")).toBe("{ nope");
+  });
+
+  it("checks views: none yet, valid, broken files reported and never repaired", () => {
+    const root = shop();
+    const views = (r: DoctorReport) => r.items.filter((i) => i.check === "views");
+    expect(views(runDoctor(root, {}))).toEqual([expect.objectContaining({ status: "ok", message: "no views yet" })]);
+    const dir = join(root, ".codeloom", "views");
+    writeJsonAtomic(join(dir, "home.json"), { version: 1, id: "home", title: "Home", widgets: [{ type: "counts" }] });
+    expect(views(runDoctor(root, {}))).toEqual([expect.objectContaining({ status: "ok", message: "1 view (home replaces the built-in Home)" })]);
+    writeFileSync(join(dir, "audit.json"), JSON.stringify({ version: 1, id: "audit", title: "A", widgets: [{ type: "chart" }] }));
+    writeJsonAtomic(join(dir, "other.json"), { version: 1, id: "not-other", title: "A", widgets: [{ type: "counts" }] });
+    writeFileSync(join(dir, "Notes.txt"), "x");
+    const r = views(runDoctor(root, { fix: true }));
+    expect(r.map((i) => [i.status, i.message.split("\n")[0]])).toEqual([
+      ["error", expect.stringContaining("audit.json has an unexpected shape")],
+      ["error", expect.stringContaining('other.json says its id is "not-other"')],
+      ["warn", expect.stringContaining("Notes.txt")],
+      ["ok", "1 view (home replaces the built-in Home)"],
+    ]);
+    expect(r[0]!.message).toMatch(/codeloom views reset audit/);
+    expect(readFileSync(join(dir, "audit.json"), "utf8")).toContain("chart");
+    // a broken home view: Home falls back to the built-in layout, said plainly
+    writeFileSync(join(dir, "home.json"), "{}");
+    const home = views(runDoctor(root, {})).find((i) => i.message.includes("home.json"))!;
+    expect(home.status).toBe("error");
+    expect(home.message).toMatch(/Home shows the built-in layout until it is fixed/);
   });
 
   it("lists other progress files for the same workspace name (its repo set changed), never moving them", () => {

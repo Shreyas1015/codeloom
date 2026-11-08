@@ -1,8 +1,9 @@
-/** The MCP tool catalogue (v0.1 plan 2b, plus the v0.2b tour and progress tools). tools/list must equal
+/** The MCP tool catalogue (v0.1 plan 2b, plus the v0.2b tour and progress tools and the v0.3 spec and view tools). tools/list must equal
  * this set exactly, so a new tool has to be documented in the catalogue and added here (with its result schema in mcp-contract.test.ts). */
 export const CATALOGUE = [
   "build_tour_context",
   "check_chains",
+  "delete_view",
   "explain_context",
   "get_journey",
   "get_layers",
@@ -12,11 +13,16 @@ export const CATALOGUE = [
   "impact_of_diff",
   "index_status",
   "list_chains",
+  "list_specs",
+  "list_views",
+  "match_specs",
   "record_check",
   "reindex",
   "save_journeys",
+  "save_spec_links",
   "save_summary",
   "save_tour",
+  "save_view",
   "search",
   "trace_route",
   "workspace_overview",

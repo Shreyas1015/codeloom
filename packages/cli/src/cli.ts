@@ -6,6 +6,7 @@ import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { codeloomBin, formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { runServeCommand } from "./commands/serve.js";
+import { formatViewsList, runViewsReset } from "./commands/views.js";
 import { VERSION } from "./version.js";
 
 export { VERSION };
@@ -76,6 +77,23 @@ export function buildProgram(): Command {
     .option("--no-open", "print the URL but do not open a browser")
     .action(async (opts: { port?: string; open: boolean }) => {
       await runDashboard(process.cwd(), { port: parsePort(opts.port), open: opts.open });
+    });
+
+  const views = program
+    .command("views")
+    .description("List the dashboard views your agent saved, or delete one (views are written only through MCP)");
+  views
+    .command("list")
+    .description("List the saved views with their dashboard links")
+    .action(() => {
+      console.log(formatViewsList(process.cwd()));
+    });
+  views
+    .command("reset")
+    .description('Delete a view; "reset home" brings back the built-in Home')
+    .argument("<id>", "view id")
+    .action((id: string) => {
+      console.log(runViewsReset(process.cwd(), id));
     });
 
   return program;

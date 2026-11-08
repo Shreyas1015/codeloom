@@ -4,7 +4,7 @@
 // parsed text) and once with invalid input (isError, and no file under the workspace changes).
 // tools/list must equal the catalogue exactly, so a new tool has to be documented here first.
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -29,6 +29,8 @@ import {
 import { CheckRecordSchema } from "../src/store/progress.js";
 import { stopKey } from "../src/store/stop-key.js";
 import { CheckQuestionSchema } from "../src/store/tours.js";
+import { DocEvidenceSchema, TicketCandidateSchema, TicketEvidenceSchema } from "../src/store/spec-candidates.js";
+import { SpecLinkSchema } from "../src/store/specs.js";
 import { commitAll, materializeFixture } from "./helpers.js";
 import { CATALOGUE } from "./mcp-catalogue.js";
 
@@ -129,6 +131,10 @@ const TourContextStop = StopView.omit({ from: true })
   })
   .strict();
 const Levels = z.object({ total: int, none: int, seen: int, toured: int, understood: int, needsReWalk: int }).strict();
+const JourneyId = str.regex(/^j_[0-9a-f]{12}$/);
+const SpecStateEnum = z.enum(["linked", "candidates", "none"]);
+const Snippet = z.object({ startLine: int.positive(), endLine: int.positive(), text: str }).strict();
+const Coverage = z.object({ total: int, linked: int, candidates: int, none: int, checked: int }).strict();
 const Level = z.enum(["none", "seen", "toured", "understood"]);
 
 /** Any tool result may be cut to fit 1 MB (mcp/result.ts fitResponse): it then carries `truncated: true`
@@ -199,6 +205,83 @@ const RawSchemas: Record<string, z.ZodObject> = {
   record_check: z
     .object({ journeyId: str, verdict: z.enum(["pass", "fail"]), understood: z.boolean(), understoodAt: str.optional(), checks: int.positive() })
     .strict(),
+  // v0.3 specs
+  match_specs: z
+    .object({
+      journey: z.object({ id: JourneyId, name: str, area: str }).strict(),
+      state: SpecStateEnum,
+      checked: z.boolean(),
+      checkedAt: str.nullable(),
+      links: z.array(SpecLinkSchema.strict()),
+      docs: z.array(
+        z
+          .object({
+            ref: str,
+            repo: str,
+            file: str,
+            score: z.number(),
+            count: int.nonnegative(),
+            evidence: z.array(DocEvidenceSchema.extend({ snippet: Snippet.nullable() }).strict()),
+          })
+          .strict(),
+      ),
+      tickets: z.array(TicketCandidateSchema.extend({ evidence: z.array(TicketEvidenceSchema.strict()) }).strict()),
+      ticketPattern: str.min(1),
+      notes: z.array(str),
+    })
+    .strict(),
+  save_spec_links: z
+    .object({
+      journeyId: JourneyId,
+      links: z.array(SpecLinkSchema.strict()),
+      checkedAt: str,
+      replaced: z.boolean(),
+      path: z.literal(".codeloom/specs.json"),
+    })
+    .strict(),
+  list_specs: z
+    .object({
+      journeys: z.array(
+        z
+          .object({
+            journeyId: JourneyId,
+            name: str,
+            area: str,
+            repos: z.array(str),
+            state: SpecStateEnum,
+            checked: z.boolean(),
+            checkedAt: str.optional(),
+            links: z.array(SpecLinkSchema.strict()),
+            candidates: z.object({ docs: int.nonnegative(), tickets: int.nonnegative() }).strict(),
+          })
+          .strict(),
+      ),
+      totals: z.object({ all: Coverage, byRepo: z.record(str, Coverage), byArea: z.record(str, Coverage) }).strict(),
+      olderJourneys: z.array(z.object({ journeyId: str, checkedAt: str, links: z.array(SpecLinkSchema.strict()) }).strict()),
+      candidatesIndexed: z.boolean(),
+    })
+    .strict(),
+  // v0.3 views
+  save_view: z
+    .object({
+      id: str.regex(/^[a-z0-9-]{1,40}$/),
+      url: str.regex(/^\/(views\/[a-z0-9-]{1,40})?$/),
+      path: str.regex(/^\.codeloom\/views\/[a-z0-9-]{1,40}\.json$/),
+      replaced: z.boolean(),
+      widgets: int.min(1).max(24),
+    })
+    .strict(),
+  list_views: z
+    .object({
+      views: z.array(
+        z.union([
+          z.object({ id: str, url: str, title: str, description: str.optional(), widgets: int.positive() }).strict(),
+          z.object({ id: str, url: str, error: str }).strict(),
+        ]),
+      ),
+    })
+    .strict(),
+  delete_view: z.object({ id: str, deleted: z.literal(true) }).strict(),
   workspace_overview: z
     .object({
       name: str,
@@ -615,6 +698,59 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(c, root, "record_check", { journey: "j_000000000000", ...qa, verdict: "fail" });
   });
 
+  it("specs and views: valid calls return the documented shape; invalid input writes nothing", async () => {
+    const root = copyShop(shop);
+    const c = await connect(root);
+    const saved = (await valid(c, "save_journeys", { ops: [{ op: "create", name: "Add a customer", area: "Customers", chainIds: [chainId] }] })) as {
+      created: string[];
+    };
+    const jid = saved.created[0]!;
+    mkdirSync(join(root, "api", "docs"), { recursive: true });
+    writeFileSync(join(root, "api", "docs", "customers.md"), "# Customers\n\nPOST /api/customers adds a row to the customers table.\n");
+    writeFileSync(
+      join(root, ".codeloom", "spec-candidates.json"),
+      JSON.stringify({
+        version: 1,
+        journeys: {
+          [jid]: {
+            docs: [{ ref: "demo-api:docs/customers.md", score: 5, count: 2, evidence: [{ kind: "route", term: "POST /api/customers", file: "docs/customers.md", line: 3 }] }],
+            tickets: [{ ref: "SHOP-12", score: 1, count: 1, evidence: [{ commit: "abc1234", file: "app/controllers/customers_controller.ts", subject: "SHOP-12 add customers" }] }],
+          },
+        },
+      }),
+    );
+    // reading writes nothing
+    const before = hashTree(root);
+    const m = (await valid(c, "match_specs", { journey: jid })) as { state: string; docs: Array<{ evidence: Array<{ snippet: unknown }> }> };
+    expect(m.state).toBe("candidates");
+    expect(m.docs[0]!.evidence[0]!.snippet).not.toBeNull();
+    expect(((await valid(c, "list_specs")) as { journeys: unknown[] }).journeys).toHaveLength(1);
+    await valid(c, "list_specs", { repo: "demo-api", area: "Customers" });
+    expect(((await valid(c, "list_views")) as { views: unknown[] }).views).toEqual([]);
+    expect(hashTree(root)).toEqual(before);
+
+    const links = [{ kind: "doc", ref: "demo-api:docs/customers.md", reason: "Describes adding a customer." }, { kind: "ticket", ref: "SHOP-12", reason: "Built it." }];
+    expect(await valid(c, "save_spec_links", { journey: jid, links })).toMatchObject({ journeyId: jid, replaced: false });
+    expect(((await valid(c, "match_specs", { journey: jid })) as { state: string }).state).toBe("linked");
+    const view = { id: "no-spec-audit", title: "No-spec audit", widgets: [{ type: "specCoverage", by: "area" }, { type: "journeys", filter: { spec: "none" } }] };
+    expect(await valid(c, "save_view", { view })).toMatchObject({ id: "no-spec-audit", url: "/views/no-spec-audit" });
+    expect(((await valid(c, "list_views")) as { views: unknown[] }).views).toHaveLength(1);
+    expect(await valid(c, "delete_view", { id: "no-spec-audit" })).toEqual({ id: "no-spec-audit", deleted: true });
+    await valid(c, "save_view", { view: { ...view, id: "home" } });
+
+    await invalid(c, root, "match_specs", { journey: "j_000000000000" });
+    await invalid(c, root, "match_specs", {});
+    await invalid(c, root, "save_spec_links", { journey: jid, links: [{ kind: "doc", ref: "demo-api:docs/ghost.md", reason: "x" }] });
+    await invalid(c, root, "save_spec_links", { journey: jid, links: [{ kind: "ticket", ref: "CVE-2024", reason: "x" }] });
+    await invalid(c, root, "save_spec_links", { journey: "j_000000000000", links: [] });
+    await invalid(c, root, "list_specs", { repo: "nope" });
+    await invalid(c, root, "save_view", { view: { ...view, widgets: [{ type: "chart" }] } });
+    await invalid(c, root, "save_view", { view: { ...view, widgets: [{ type: "map", repo: "nope" }] } });
+    await invalid(c, root, "save_view", { view: { ...view, id: "Bad Id" } });
+    await invalid(c, root, "delete_view", { id: "home" });
+    await invalid(c, root, "delete_view", { id: "ghost" });
+  });
+
   it("every tool rejects invalid input with isError and changes no file", async () => {
     // tools with no input: point them at a folder that is not an indexed workspace
     expect(await invalid(emptyClient, empty, "workspace_overview")).toMatch(/codeloom/i);
@@ -642,11 +778,19 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     // the writers, against the shared shop too: nothing may be written on bad input
     await invalid(client, shop, "save_summary", { node: fnRef });
     await invalid(client, shop, "save_journeys", { ops: [{ op: "create", name: "", chainIds: [chainId] }] });
+    await invalid(client, shop, "match_specs", { journey: "x" });
+    await invalid(client, shop, "save_spec_links", { journey: "j_000000000000", links: "none" });
+    await invalid(client, shop, "list_specs", { repo: 5 });
+    await invalid(client, shop, "save_view", { view: { id: "x", title: "x", widgets: [] } });
+    await invalid(emptyClient, empty, "list_views");
+    await invalid(client, shop, "delete_view", { id: "../x" });
   });
 
   it("prompts/list and getPrompt", async () => {
     const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "name-journeys", "verify-journey", "write-tour"]);
+    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "make-view", "match-specs", "name-journeys", "verify-journey", "write-tour"]);
+    expect(prompts.find((p) => p.name === "match-specs")!.arguments).toEqual([expect.objectContaining({ name: "journey", required: false })]);
+    expect(prompts.find((p) => p.name === "make-view")!.arguments).toEqual([expect.objectContaining({ name: "request", required: true })]);
     for (const name of ["verify-journey", "write-tour", "check-me"]) {
       expect(prompts.find((p) => p.name === name)!.arguments, name).toEqual([expect.objectContaining({ name: "journey", required: true })]);
     }
@@ -766,6 +910,9 @@ describe("H5: every tool response stays under 1 MB on a 5000-chain map", { timeo
     await bounded("impact_of_diff");
     await bounded("list_chains", { unnamed: false, detail: true, limit: 500, offset: 4500 });
     await bounded("get_progress");
+    await bounded("match_specs", { journey: BIG_JOURNEY });
+    await bounded("list_specs");
+    await bounded("list_views");
     if (process.env.CODELOOM_SIZES) process.stderr.write(`${JSON.stringify(sizes, null, 2)}\n`);
   });
 });
