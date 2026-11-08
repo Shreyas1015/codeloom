@@ -30,8 +30,9 @@ function inside(base: string, p: string): boolean {
 export function safeRepoFile(repoAbs: string, rel: string): SafeRepoFile {
   if (rel === "" || rel.includes("\0") || isAbsolute(rel) || /^[\\/]/.test(rel) || /^[A-Za-z]:/.test(rel)) return { ok: false, reason: "outside" };
   const asked = rel.split(/[\\/]/).filter((s) => s !== "" && s !== ".");
-  if (asked.includes("..") || asked.length === 0) return { ok: false, reason: "outside" };
+  // hidden first, so `src/../.codeloom/x` is refused as codeloom's folder (the clearer message)
   if (hiddenSegments(asked)) return { ok: false, reason: "hidden" };
+  if (asked.includes("..") || asked.length === 0) return { ok: false, reason: "outside" };
   const abs = resolve(repoAbs, ...asked);
   if (!inside(resolve(repoAbs), abs)) return { ok: false, reason: "outside" };
   let realRoot: string;

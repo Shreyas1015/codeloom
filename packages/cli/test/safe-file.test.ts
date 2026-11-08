@@ -50,7 +50,7 @@ describe("safeRepoFile", () => {
       ["\\etc\\hosts", "outside"],
       ["C:/Windows/win.ini", "outside"],
       ["../billing/docs/invoices.md", "outside"],
-      ["docs/../.git/config", "outside"],
+      ["docs/../.git/config", "hidden"],
       ["docs/a\0b", "outside"],
       ["", "outside"],
       [".env", "hidden"],
