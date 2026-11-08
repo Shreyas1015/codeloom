@@ -6,11 +6,20 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import {
   buildSpecCandidates, buildTermIndex, journeyTerms, makeDocFilter, makeTicketMatcher, mergeBranch, normalizePath,
-  parseGitLog, scanDoc, type JourneyTerms,
+  parseGitLog, scanDoc, symbolTermOk, type JourneyTerms,
 } from "../src/specs/candidates.js";
-import { SpecCandidatesFileSchema, type Chain, type ChainStop, type Journey } from "../src/store/schemas.js";
+import { ticketKeyProblem } from "../src/store/specs.js";
+import {
+  DEFAULT_TICKET_PATTERN, SpecCandidatesFileSchema, SpecsConfigSchema, ticketPatternProblem, type Chain, type ChainStop, type Journey,
+} from "../src/store/schemas.js";
+import { gitEnv } from "../src/workspace/git.js";
 import { loadWorkspace } from "../src/workspace/repos.js";
 import { commitChange, commitTicketHistory, makeRepo, materializeFixture } from "./helpers.js";
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+const makeDefault = () => SpecsConfigSchema.parse({}).ticketPattern ?? DEFAULT_TICKET_PATTERN;
+const L2 = Math.log(2);
+const L3 = Math.log(3);
 
 const terms = (t: Partial<JourneyTerms>): JourneyTerms => ({
   journey: "j_000000000001", routes: [], pages: [], tables: [], queues: [], symbols: [], ...t,
@@ -99,6 +108,18 @@ describe("doc matching (spec §1)", () => {
   });
 });
 
+describe("symbol terms (final review §7)", () => {
+  it("rejects dotted names with a generic receiver or a generic method on a short receiver, and common English words", () => {
+    for (const no of ["console.log", "JSON.stringify", "res.json", "router.get", "app.use", "req.body.customer", "request", "response", "service",
+      "execute", "validate", "listen", "handler", "controller", "process", "Request", "Service.create"]) {
+      expect(symbolTermOk(no), no).toBe(false);
+    }
+    for (const yes of ["CustomerService.create", "CustomersController.store", "InvoiceService.pay", "useCreateCustomer", "billing.markInvoicePaid"]) {
+      expect(symbolTermOk(yes), yes).toBe(true);
+    }
+  });
+});
+
 describe("doc files (spec §1)", () => {
   it("takes docs/**, README*, adr/** and .md/.mdx/.txt, plus extra globs, minus ignoreDocs", () => {
     const f = makeDocFilter({ docs: ["specs/*.rst"], ignoreDocs: ["docs/generated/"] });
@@ -113,6 +134,38 @@ describe("tickets (spec §1)", () => {
   it("finds keys with the default pattern minus ignored prefixes", () => {
     const m = makeTicketMatcher(undefined);
     expect(m("SHOP-12 fix; see SHOP-13, shop-14, UTF-8, CVE-2024-1234, ISO-8601, SHA-256, RFC-7231, SHOP-12")).toEqual(["SHOP-12", "SHOP-13"]);
+  });
+
+  it("ignores TC, AC, ADR, QA and ID keys, and keys inside longer tokens (final review §12)", () => {
+    const m = makeTicketMatcher(undefined);
+    expect(m("SHOP-12 covers TC-1, AC-2, ADR-3, QA-4 and ID-5")).toEqual(["SHOP-12"]);
+    expect(m("order ORD-MH-26-001 shipped")).toEqual([]);
+    expect(m("x/SHOP-1 a#SHOP-2 b_SHOP-3 c-SHOP-4 SHOP-5x SHOP-6a (SHOP-7) SHOP-8: SHOP-9-fix")).toEqual(["SHOP-7", "SHOP-8", "SHOP-9"]);
+    // merge commits: the branch name is matched per / part
+    expect(mergeBranch("Merge branch 'feat/SHOP-14-show'")!.split("/").flatMap(m)).toEqual(["SHOP-14"]);
+    expect(ticketKeyProblem("MH-26", {})).toBeUndefined(); // a key typed alone is still fine
+    expect(ticketKeyProblem("TC-1", {})).toMatch(/ignored/);
+  });
+
+  it("refuses slow ticket patterns, long keys and scans only the first 4 KB of a commit (final review §3)", () => {
+    for (const bad of ["^(a+)+$", "(a*)*", "(a+)*", "(a*)+", "(?:x[a-z]{2,})+", "(a{2,}){3}", "(\\w+)\\1", "(?<k>A)\\k<k>", "A".repeat(101)]) {
+      expect(ticketPatternProblem(bad), bad).toBeDefined();
+      expect(SpecsConfigSchema.safeParse({ ticketPattern: bad }).success, bad).toBe(false);
+      expect(() => makeTicketMatcher({ ticketPattern: bad }), bad).toThrow(CodeloomError);
+    }
+    for (const ok of ["#\\d+", "\\bSHOP-\\d+\\b", "(?:SHOP|BILL)-\\d+", "[A-Z]+-\\d+", "(ab)?c+", "([A-Z]+)-\\d+"]) {
+      expect(ticketPatternProblem(ok), ok).toBeUndefined();
+    }
+    // the default pattern passes its own check
+    expect(SpecsConfigSchema.safeParse({}).success).toBe(true);
+    expect(ticketPatternProblem(makeDefault())).toBeUndefined();
+    // a long ref is refused before any regex runs
+    const t0 = performance.now();
+    expect(ticketKeyProblem(`SHOP-${"1".repeat(100_000)}`, { ticketPattern: "^(?:S|SH|SHO|SHOP)-\\d+$" })).toMatch(/longer than 64/);
+    expect(performance.now() - t0).toBeLessThan(50);
+    expect(makeTicketMatcher(undefined)(`SHOP-${"1".repeat(80)}`)).toEqual([]);
+    expect(makeTicketMatcher(undefined)(`${"x ".repeat(2100)}SHOP-99`)).toEqual([]);
+    expect(makeTicketMatcher(undefined)(`${"x ".repeat(100)}SHOP-99`)).toEqual(["SHOP-99"]);
   });
 
   it("uses the workspace pattern and prefixes when set", () => {
@@ -219,10 +272,13 @@ describe("spec-candidates.json from codeloom index", () => {
       { kind: "table", term: "audit_logs", file: "docs/customers.md", line: 6 },
     ]);
     expect(doc.count).toBe(5);
-    expect(doc.score).toBe(3 + 3 + 1 + 2 + 2);
+    // kind weight x rarity log(1 + 2 journeys / journeys using the term): the page, route, symbol and
+    // audit_logs are CREATE's own (ln 3); customers is shared with SHOW (ln 2).
+    expect(doc.score).toBe(round3(3 * L3 + 3 * L3 + 2 * L3 + 1 * L2 + 1 * L3));
     // SHOP-12 (subject) and SHOP-13 (body) touch CustomerService, SHOP-14 (merged branch name) the
     // controller both journeys use; UTF-8 / CVE are ignored.
-    expect(create.tickets.map((t) => [t.ref, t.score])).toEqual([["SHOP-12", 1], ["SHOP-13", 1], ["SHOP-14", 1]]);
+    // Each commit touched a file both journeys use (CustomerService, the controller): each weighs 1/2.
+    expect(create.tickets.map((t) => [t.ref, t.score])).toEqual([["SHOP-12", 0.5], ["SHOP-13", 0.5], ["SHOP-14", 0.5]]);
     expect(create.tickets[0]!.evidence).toEqual([
       { repo: "api", commit: expect.stringMatching(/^[0-9a-f]{7}$/), file: "app/services/customer_service.ts", subject: "SHOP-12 validate new customers" },
     ]);
@@ -286,8 +342,8 @@ describe("spec-candidates.json from codeloom index", () => {
     });
     const docs = out.journeys[CREATE]!.docs;
     expect(docs).toHaveLength(20);
-    expect(docs.slice(0, 13).every((d) => d.score === 3)).toBe(true);
-    expect(docs.slice(13).every((d) => d.score === 2)).toBe(true);
+    expect(docs.slice(0, 13).every((d) => d.score === round3(3 * L2))).toBe(true);
+    expect(docs.slice(13).every((d) => d.score === round3(L2))).toBe(true);
     expect(docs.map((d) => d.ref).slice(0, 3)).toEqual(["api:docs/d00.md", "api:docs/d02.md", "api:docs/d04.md"]);
     expect(docs.at(-1)!.ref).toBe("api:docs/d13.md");
   });
@@ -322,5 +378,97 @@ describe("spec-candidates.json from codeloom index", () => {
     expect(ms).toBeLessThan(15_000);
     expect(out.journeys["j_000000000007"]!.docs.length).toBe(20);
     expect(out.journeys["j_000000000007"]!.tickets.map((t) => t.ref)).toEqual(["SHOP-1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Ranking (final review §8, §11, §13): demo-shop-style Customer / Invoice data
+// ---------------------------------------------------------------------------------------------------
+
+const stop = (over: Partial<ChainStop>): ChainStop => ({
+  lane: "api", kind: "call", repo: "api", file: "a.ts", line: 1, symbol: "x", hop: { confidence: "exact" }, ...over,
+} as ChainStop);
+
+function routeChain(id: string, method: string, path: string, file: string, table: string): Chain {
+  return {
+    id, entry: `route:api:${method} ${path}`, routeKey: `api:${method} ${path}`, name: "n",
+    stops: [
+      stop({ kind: "route", file, symbol: "store", op: method, label: `${method} ${path}` }),
+      stop({ lane: "db", kind: "db", file, line: 2, symbol: "store", op: "insert", label: table }),
+    ],
+    unresolved: [], confidence: "exact", complete: true,
+  } as Chain;
+}
+
+const J_CREATE = "j_000000000011";
+const J_SHOW = "j_000000000012";
+const J_PAY = "j_000000000013";
+
+describe("ranking (final review §8, §11, §13)", () => {
+  it("each journey's own route doc ranks first, above docs that only name a shared table", () => {
+    const root = makeRepo({
+      "app/controllers/customers_controller.ts": "export const store = 1;\n",
+      "app/controllers/customer_show.ts": "export const show = 1;\n",
+      "docs/create.md": "# Create\n\nPOST /api/customers writes the customers table.\n",
+      "docs/show.md": "# Show\n\nGET /api/customers/:id reads the customers table.\n",
+      "docs/schema.md": Array.from({ length: 30 }, () => "customers").join("\n") + "\n",
+    });
+    const chains = [
+      routeChain("ch_000000000011", "POST", "/api/customers", "app/controllers/customers_controller.ts", "customers"),
+      routeChain("ch_000000000012", "GET", "/api/customers/:id", "app/controllers/customer_show.ts", "customers"),
+    ];
+    const journeys: Journey[] = [
+      { id: J_CREATE, name: "Create a customer", area: "customers", note: "", chainIds: [chains[0]!.id], status: "ok" },
+      { id: J_SHOW, name: "Show a customer", area: "customers", note: "", chainIds: [chains[1]!.id], status: "ok" },
+    ];
+    const files = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).trim().split("\n");
+    const out = buildSpecCandidates({ repos: [{ id: "api", abs: root, files }], chains, journeys });
+    expect(out.journeys[J_CREATE]!.docs[0]!.ref).toBe("api:docs/create.md");
+    expect(out.journeys[J_SHOW]!.docs[0]!.ref).toBe("api:docs/show.md");
+    // schema.md names customers 30 times, but only a shared table: below every doc with a route hit
+    const createDocs = out.journeys[J_CREATE]!.docs;
+    expect(createDocs.map((d) => d.ref)).toEqual(["api:docs/create.md", "api:docs/schema.md", "api:docs/show.md"]);
+    expect(createDocs.find((d) => d.ref === "api:docs/schema.md")!.score).toBeGreaterThan(createDocs[0]!.score);
+  });
+
+  it("a ticket whose commits touch only this journey outranks one whose commits touch every journey", () => {
+    const root = makeRepo({
+      "app/controllers/customers_controller.ts": "export const store = 1;\n",
+      "app/controllers/customer_show.ts": "export const show = 1;\n",
+      "app/controllers/invoices_controller.ts": "export const pay = 1;\n",
+    });
+    const all = ["app/controllers/customers_controller.ts", "app/controllers/customer_show.ts", "app/controllers/invoices_controller.ts"];
+    // SHOP-1 touches every journey's files, twice; SHOP-2 only the create controller, once.
+    commitChange(root, all, "SHOP-1 lint every controller");
+    commitChange(root, all, "SHOP-1 rename helpers");
+    commitChange(root, ["app/controllers/customers_controller.ts"], "SHOP-2 validate new customers");
+    const chains = [
+      routeChain("ch_000000000011", "POST", "/api/customers", all[0]!, "customers"),
+      routeChain("ch_000000000012", "GET", "/api/customers/:id", all[1]!, "customers"),
+      routeChain("ch_000000000013", "POST", "/billing/invoices/:id/pay", all[2]!, "invoices"),
+    ];
+    const journeys: Journey[] = chains.map((c, i) => ({ id: [J_CREATE, J_SHOW, J_PAY][i]!, name: "j", area: "", note: "", chainIds: [c.id], status: "ok" }));
+    const files = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).trim().split("\n");
+    const out = buildSpecCandidates({ repos: [{ id: "api", abs: root, files }], chains, journeys });
+    expect(out.journeys[J_CREATE]!.tickets.map((t) => [t.ref, t.score, t.count])).toEqual([["SHOP-2", 1, 1], ["SHOP-1", round3(2 / 3), 2]]);
+    expect(out.journeys[J_SHOW]!.tickets.map((t) => t.ref)).toEqual(["SHOP-1"]);
+  });
+
+  it("a git log bigger than the buffer skips that repo's tickets with a note, never silently", () => {
+    const root = makeRepo({ "app/controllers/customers_controller.ts": "export const store = 1;\n" });
+    for (let i = 0; i < 5; i++) commitChange(root, ["app/controllers/customers_controller.ts"], `SHOP-${i} change ${i}`);
+    const chains = [routeChain("ch_000000000011", "POST", "/api/customers", "app/controllers/customers_controller.ts", "customers")];
+    const journeys: Journey[] = [{ id: J_CREATE, name: "j", area: "", note: "", chainIds: [chains[0]!.id], status: "ok" }];
+    const files = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).trim().split("\n");
+    const notes: string[] = [];
+    const out = buildSpecCandidates({ repos: [{ id: "api", abs: root, files }], chains, journeys, notes, gitMaxBuffer: 64 });
+    expect(out.journeys[J_CREATE]!.tickets).toEqual([]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/git history of api is too big/);
+    const full: string[] = [];
+    expect(buildSpecCandidates({ repos: [{ id: "api", abs: root, files }], chains, journeys, notes: full }).journeys[J_CREATE]!.tickets).toHaveLength(5);
+    expect(full).toEqual([]);
+    // git never fetches missing objects of a partial clone
+    expect(gitEnv().GIT_NO_LAZY_FETCH).toBe("1");
   });
 });

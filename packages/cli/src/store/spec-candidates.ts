@@ -4,7 +4,7 @@ import { dataError } from "../errors.js";
 import { readJson } from "./json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "./paths.js";
 import {
-  DEFAULT_TICKET_IGNORE_PREFIXES, DEFAULT_TICKET_PATTERN, SpecCandidatesFileSchema, WorkspaceFileSchema,
+  DEFAULT_TICKET_IGNORE_PREFIXES, DEFAULT_TICKET_PATTERN, SpecCandidatesFileSchema, ticketPatternProblem, WorkspaceFileSchema,
   type SpecCandidatesFile,
 } from "./schemas.js";
 
@@ -14,6 +14,9 @@ import {
 
 export {
   DEFAULT_TICKET_PATTERN,
+  MAX_TICKET_KEY,
+  MAX_TICKET_PATTERN,
+  ticketPatternProblem,
   SpecCandidatesFileSchema,
   SpecDocCandidateSchema as DocCandidateSchema,
   SpecDocEvidenceSchema as DocEvidenceSchema,
@@ -45,13 +48,12 @@ export function readSpecCandidates(root: string): SpecCandidatesFile | null {
   return readJson(join(root, CODELOOM_DIR, SPEC_CANDIDATES_FILE), SpecCandidatesFileSchema);
 }
 
-/** Compile a ticket pattern; a bad regex is a data error naming the setting. */
+/** Compile a ticket pattern; a bad or unsafe regex (ticketPatternProblem: too long, nested quantifier,
+ * backreference) is a data error naming the setting. */
 export function compileTicketPattern(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern);
-  } catch (err) {
-    throw dataError(`specs.ticketPattern in ${WORKSPACE_FILE} is not a valid regular expression (${err instanceof Error ? err.message : String(err)}). Fix it by hand.`);
-  }
+  const problem = ticketPatternProblem(pattern);
+  if (problem) throw dataError(`specs.ticketPattern in ${WORKSPACE_FILE} ${problem}. Fix it by hand.`);
+  return new RegExp(pattern);
 }
 
 /** The ticket rules from the workspace file's `specs` block (validated with the rest of the workspace file),

@@ -7,11 +7,11 @@ import ignore from "ignore";
 import { BUILTIN_METHOD_NAMES } from "../linker/resolve-calls.js";
 import { BUILTIN_METHOD_NAMES as CHECK_BUILTIN_METHOD_NAMES, GLOBAL_BUILTINS } from "../check/noise.js";
 import { chainLookup } from "../mcp/state.js";
-import { CodeloomError } from "../errors.js";
+import { CodeloomError, dataError } from "../errors.js";
 import { readJson, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
 import {
-  ChainsFileSchema, DEFAULT_TICKET_IGNORE_PREFIXES, DEFAULT_TICKET_PATTERN, JourneysFileSchema,
+  ChainsFileSchema, DEFAULT_TICKET_IGNORE_PREFIXES, DEFAULT_TICKET_PATTERN, JourneysFileSchema, MAX_TICKET_KEY, ticketPatternProblem,
   type Chain, type Journey, type SpecCandidatesFile, type SpecDocCandidate, type SpecDocEvidence, type SpecDocHitKind,
   type SpecJourneyCandidates, type SpecsConfig, type SpecTicketCandidate, type SpecTicketEvidence,
 } from "../store/schemas.js";
@@ -24,7 +24,14 @@ export const MAX_EVIDENCE = 5;
 export const MAX_COMMITS = 500;
 const MAX_SUBJECT = 120;
 const MIN_BARE_SYMBOL = 6;
-const WEIGHT: Record<SpecDocHitKind, number> = { route: 3, page: 3, table: 2, queue: 2, symbol: 1 };
+/** Only the first 4 KB of a commit's subject and body are scanned for ticket keys. */
+export const MAX_COMMIT_TEXT = 4 * 1024;
+/** Most bytes one `git log` may print; past it the repo's tickets are skipped with a note. */
+export const GIT_LOG_MAX_BUFFER = 32 * 1024 * 1024;
+/** Per hit kind, times the term's rarity (termWeight): a route or page names a journey, a table rarely does. */
+const WEIGHT: Record<SpecDocHitKind, number> = { route: 3, page: 3, symbol: 2, table: 1, queue: 1 };
+/** Hit kinds that name the journey itself; a doc with none of them sorts below every doc with one. */
+const STRONG_KINDS: ReadonlySet<SpecDocHitKind> = new Set(["route", "page", "symbol"]);
 
 // ---------------------------------------------------------------------------------------------------
 // Journey terms
@@ -39,21 +46,34 @@ export interface JourneyTerms {
   symbols: string[];
 }
 
-/** Names too generic to mean anything as a bare word in a doc: the resolver's and check's built-in method
- * names, JS globals, and a few words every codebase uses. */
-const GENERIC_NAMES: ReadonlySet<string> = new Set([
-  ...BUILTIN_METHOD_NAMES, ...CHECK_BUILTIN_METHOD_NAMES, ...GLOBAL_BUILTINS,
-  "constructor", "default", "anonymous", "handler", "render", "module", "exports",
-]);
+/** Names too generic to mean anything in a doc (compared lowercased): the resolver's and check's built-in
+ * method names, JS globals, framework receivers (`res`, `router`, `app`) and plain English words every
+ * codebase uses. */
+const GENERIC_NAMES: ReadonlySet<string> = new Set(
+  [
+    ...BUILTIN_METHOD_NAMES, ...CHECK_BUILTIN_METHOD_NAMES, ...GLOBAL_BUILTINS,
+    "constructor", "default", "anonymous", "handler", "render", "module", "exports",
+    "request", "response", "service", "execute", "validate", "listen", "controller", "process",
+    "req", "res", "app", "router", "ctx", "server", "express", "next", "this", "self", "log", "json", "use", "send",
+  ].map((n) => n.toLowerCase()),
+);
+const generic = (name: string) => GENERIC_NAMES.has(name.toLowerCase());
 
 const SYMBOL_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
 
-/** A qualified symbol (`CustomerService.create`) always counts; a bare name only when it has at least 6
- * characters and is not a built-in / generic name. Anything that is not an identifier path never does. */
+/** A bare name counts when it has at least 6 characters and is not a generic name. A qualified symbol
+ * (`CustomerService.create`) counts unless a receiver part is generic (`console.log`, `JSON.stringify`,
+ * `res.json`, `router.get`, `app.use`), or its method is generic and its receiver is shorter than 6
+ * characters. Anything that is not an identifier path never counts. */
 export function symbolTermOk(symbol: string): boolean {
   if (!SYMBOL_RE.test(symbol)) return false;
-  if (symbol.includes(".")) return true;
-  return symbol.length >= MIN_BARE_SYMBOL && !GENERIC_NAMES.has(symbol);
+  const parts = symbol.split(".");
+  if (parts.length === 1) return symbol.length >= MIN_BARE_SYMBOL && !generic(symbol);
+  const method = parts[parts.length - 1]!;
+  const receivers = parts.slice(0, -1);
+  if (receivers.some(generic)) return false;
+  if (generic(method) && receivers[receivers.length - 1]!.length < MIN_BARE_SYMBOL) return false;
+  return true;
 }
 
 const PARAM_SEGMENT = /^(?::.+|\{[^}]*\}|\[{1,2}(?:\.\.\.)?[^\]]*\]{1,2}|<[^>]*>|\$\{[^}]*\}|\*)$/;
@@ -234,17 +254,22 @@ function readDoc(abs: string): string | null {
 // Tickets
 // ---------------------------------------------------------------------------------------------------
 
-/** The ticket keys in `text` (first-seen order, no repeats): matches of `specs.ticketPattern` (default
- * `\b[A-Z][A-Z0-9]+-\d+\b`) whose prefix (before the first `-`) is not in `specs.ignorePrefixes`
- * (default CVE, UTF, ISO, RFC, SHA). */
+/** The ticket keys in `text` (first-seen order, no repeats): matches of `specs.ticketPattern` (default:
+ * an uppercase key like SHOP-12 that is not part of a longer token) whose prefix (before the first `-`) is
+ * not in `specs.ignorePrefixes` (default AC, ADR, CVE, ID, ISO, QA, RFC, SHA, TC, UTF), at most 64
+ * characters long. Only the first 4 KB of `text` is scanned. An unsafe pattern (ticketPatternProblem) is a
+ * data error; the workspace schema refuses it first. */
 export function makeTicketMatcher(specs: SpecsConfig | undefined): (text: string) => string[] {
-  const pattern = new RegExp(specs?.ticketPattern ?? DEFAULT_TICKET_PATTERN, "g");
+  const source = specs?.ticketPattern ?? DEFAULT_TICKET_PATTERN;
+  const problem = ticketPatternProblem(source);
+  if (problem) throw dataError(`specs.ticketPattern ${problem}. Fix it by hand.`);
+  const pattern = new RegExp(source, "g");
   const ignored = new Set(specs?.ignorePrefixes ?? DEFAULT_TICKET_IGNORE_PREFIXES);
   return (text) => {
     const keys = new Set<string>();
-    for (const m of text.matchAll(pattern)) {
+    for (const m of text.slice(0, MAX_COMMIT_TEXT).matchAll(pattern)) {
       const key = m[0];
-      if (key === "" || ignored.has(key.split("-")[0]!)) continue;
+      if (key === "" || key.length > MAX_TICKET_KEY || ignored.has(key.split("-")[0]!)) continue;
       keys.add(key);
     }
     return [...keys];
@@ -281,7 +306,7 @@ const PATHS_PER_CALL = 1000;
  * objects takes seconds otherwise); `--full-history` keeps merge commits, listed with the files their
  * branch brought in (diff against the first parent), so a merged branch's name counts. No history (or
  * not a git repo) → []. */
-function repoLog(repoAbs: string, files: readonly string[]): LogCommit[] {
+function repoLog(repoAbs: string, files: readonly string[], maxBuffer: number, overflow: () => void): LogCommit[] {
   const base = [
     "-c", "core.quotePath=false", "--literal-pathspecs", "log", "-n", String(MAX_COMMITS), "--no-renames",
     "--name-only", "--full-history", LOG_FORMAT,
@@ -293,10 +318,14 @@ function repoLog(repoAbs: string, files: readonly string[]): LogCommit[] {
     let commits: LogCommit[] = [];
     for (const extra of [["--diff-merges=first-parent"], []]) {
       try {
-        commits = parseGitLog(git(repoAbs, [...base, ...extra, "HEAD", "--", ...paths], { maxBuffer: 256 * 1024 * 1024 }));
+        commits = parseGitLog(git(repoAbs, [...base, ...extra, "HEAD", "--", ...paths], { maxBuffer }));
         break;
       } catch (err) {
         if (err instanceof CodeloomError) throw err;
+        if ((err as NodeJS.ErrnoException).code === "ENOBUFS" || /maxBuffer/i.test(String((err as Error).message))) {
+          overflow();
+          return [];
+        }
       }
     }
     for (const c of commits) {
@@ -320,10 +349,29 @@ export interface CandidateRepo { id: string; abs: string; files: Iterable<string
 const byScoreThenRef = (a: { score: number; ref: string }, b: { score: number; ref: string }) =>
   b.score - a.score || compare(a.ref, b.ref);
 
-/** Build spec-candidates.json content for `journeys` (every one gets an entry, keys sorted). */
-export function buildSpecCandidates(input: {
-  repos: readonly CandidateRepo[]; chains: readonly Chain[]; journeys: readonly Journey[]; specs?: SpecsConfig;
-}): SpecCandidatesFile {
+/** Scores keep 3 decimals so the committed file is the same on every machine. */
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** A term shared by many journeys counts for little: log(1 + journeys / journeys using the term). */
+const termWeight = (journeys: number, using: number) => Math.log(1 + journeys / Math.max(1, using));
+
+export interface BuildSpecCandidatesInput {
+  repos: readonly CandidateRepo[];
+  chains: readonly Chain[];
+  journeys: readonly Journey[];
+  specs?: SpecsConfig;
+  /** Lines for the user (a git log too big to read, ...). */
+  notes?: string[];
+  /** Tests only: the git log output limit (default GIT_LOG_MAX_BUFFER). */
+  gitMaxBuffer?: number;
+}
+
+/** Build spec-candidates.json content for `journeys` (every one gets an entry, keys sorted). Docs score
+ * by hit kind times the term's rarity across journeys (termWeight); a doc with only table or queue hits
+ * sorts below any doc with a route, page or symbol hit. Tickets score by their commits, each commit
+ * weighing 1 / the number of journeys whose stop files it touched, so a key specific to a journey rises
+ * above keys of commits that touched shared files. */
+export function buildSpecCandidates(input: BuildSpecCandidatesInput): SpecCandidatesFile {
   const journeys = [...input.journeys].sort((a, b) => compare(a.id, b.id));
   const repos = [...input.repos].sort((a, b) => compare(a.id, b.id));
   const lookup = chainLookup(input.chains);
@@ -333,6 +381,12 @@ export function buildSpecCandidates(input: {
 
   // Docs: one pass over every doc against every journey's terms.
   const index = buildTermIndex(journeys.map((j) => journeyTerms(j.id, chainsOf.get(j.id)!)));
+  const using = (entries: ReadonlyArray<{ journey: string }> | undefined) => new Set((entries ?? []).map((e) => e.journey)).size;
+  const hitWeight = (h: DocHit): number => {
+    const isPath = h.kind === "route" || h.kind === "page";
+    const key = isPath ? normalizePath(h.term.replace(/^[A-Z]+ (?=\/)/, "")) : h.term;
+    return WEIGHT[h.kind] * termWeight(journeys.length, using(isPath ? index.paths.get(key) : index.words.get(key)));
+  };
   const docHits = new Map<string, Map<string, DocHit[]>>(); // journey -> doc ref -> hits
   const isDoc = makeDocFilter(input.specs);
   for (const repo of repos) {
@@ -357,10 +411,16 @@ export function buildSpecCandidates(input: {
     for (const c of chainsOf.get(j.id)!) for (const s of c.stops) allStopFiles.set(s.repo, (allStopFiles.get(s.repo) ?? new Set()).add(s.file));
   }
   const logs = new Map<string, { commits: LogCommit[]; byFile: Map<string, number[]> }>();
+  const maxBuffer = input.gitMaxBuffer ?? GIT_LOG_MAX_BUFFER;
   for (const repo of repos) {
     const files = allStopFiles.get(repo.id);
     if (!files) continue;
-    const commits = repoLog(repo.abs, [...files].sort(compare));
+    const overflow = () => {
+      input.notes?.push(
+        `spec candidates: the git history of ${repo.id} is too big to read (over ${Math.max(1, Math.round(maxBuffer / (1024 * 1024)))} MB of git log output); its ticket candidates were skipped.`,
+      );
+    };
+    const commits = repoLog(repo.abs, [...files].sort(compare), maxBuffer, overflow);
     const byFile = new Map<string, number[]>();
     commits.forEach((c, i) => c.files.forEach((f) => {
       const list = byFile.get(f);
@@ -369,18 +429,43 @@ export function buildSpecCandidates(input: {
     }));
     logs.set(repo.id, { commits, byFile });
   }
+  // How many journeys each commit touched (by their stop files), for the ticket weights.
+  const journeysPerCommit = new Map<string, Map<number, number>>(); // repo -> commit index -> journeys
+  for (const j of journeys) {
+    const seen = new Map<string, Set<number>>();
+    for (const c of chainsOf.get(j.id)!) {
+      for (const st of c.stops) {
+        const log = logs.get(st.repo);
+        if (!log) continue;
+        const set = seen.get(st.repo) ?? new Set<number>();
+        seen.set(st.repo, set);
+        for (const i of log.byFile.get(st.file) ?? []) set.add(i);
+      }
+    }
+    for (const [repo, set] of seen) {
+      const per = journeysPerCommit.get(repo) ?? new Map<number, number>();
+      journeysPerCommit.set(repo, per);
+      for (const i of set) per.set(i, (per.get(i) ?? 0) + 1);
+    }
+  }
 
   for (const j of journeys) {
-    const docs: SpecDocCandidate[] = [...(docHits.get(j.id) ?? new Map<string, DocHit[]>()).entries()].map(([ref, hits]) => ({
-      ref,
-      score: hits.reduce((n, h) => n + WEIGHT[h.kind], 0),
-      count: hits.length,
-      evidence: hits.slice(0, MAX_EVIDENCE).map((h): SpecDocEvidence => ({ kind: h.kind, term: h.term, file: ref.slice(ref.indexOf(":") + 1), line: h.line })),
-    }));
+    const docRows = [...(docHits.get(j.id) ?? new Map<string, DocHit[]>()).entries()].map(([ref, hits]) => {
+      const doc: SpecDocCandidate = {
+        ref,
+        score: round3(hits.reduce((n, h) => n + hitWeight(h), 0)),
+        count: hits.length,
+        evidence: hits.slice(0, MAX_EVIDENCE).map((h): SpecDocEvidence => ({ kind: h.kind, term: h.term, file: ref.slice(ref.indexOf(":") + 1), line: h.line })),
+      };
+      return { strong: hits.some((h) => STRONG_KINDS.has(h.kind)), doc };
+    });
+    const docs = docRows
+      .sort((a, b) => Number(b.strong) - Number(a.strong) || byScoreThenRef(a.doc, b.doc))
+      .map((r) => r.doc);
 
     const stopFiles = new Map<string, Set<string>>();
     for (const c of chainsOf.get(j.id)!) for (const s of c.stops) stopFiles.set(s.repo, (stopFiles.get(s.repo) ?? new Set()).add(s.file));
-    const tickets = new Map<string, SpecTicketEvidence[]>();
+    const tickets = new Map<string, { score: number; evidence: SpecTicketEvidence[] }>();
     for (const repo of repos) {
       const files = stopFiles.get(repo.id);
       if (!files) continue;
@@ -390,18 +475,25 @@ export function buildSpecCandidates(input: {
       for (const i of [...touched.keys()].sort((a, b) => a - b)) {
         const c = log.commits[i]!;
         const branch = c.merge ? mergeBranch(c.subject) : undefined;
-        const keys = new Set([...matchKeys(`${c.subject}\n${c.body}`), ...(branch ? matchKeys(branch) : [])]);
+        // A branch name is matched per `/` part, so `feat/SHOP-14-show` still yields SHOP-14.
+        const keys = new Set([...matchKeys(`${c.subject}\n${c.body}`), ...(branch ? branch.split("/").flatMap(matchKeys) : [])]);
         const file = touched.get(i)!.sort(compare)[0]!;
         const subject = c.subject.length > MAX_SUBJECT ? `${c.subject.slice(0, MAX_SUBJECT - 1)}…` : c.subject;
-        for (const key of keys) tickets.set(key, [...(tickets.get(key) ?? []), { repo: repo.id, commit: c.sha.slice(0, 7), file, subject }]);
+        const weight = 1 / Math.max(1, journeysPerCommit.get(repo.id)?.get(i) ?? 1);
+        for (const key of keys) {
+          const t = tickets.get(key) ?? { score: 0, evidence: [] };
+          t.score += weight;
+          t.evidence.push({ repo: repo.id, commit: c.sha.slice(0, 7), file, subject });
+          tickets.set(key, t);
+        }
       }
     }
-    const ticketCandidates: SpecTicketCandidate[] = [...tickets.entries()].map(([ref, ev]) => ({
-      ref, score: ev.length, count: ev.length, evidence: ev.slice(0, MAX_EVIDENCE),
+    const ticketCandidates: SpecTicketCandidate[] = [...tickets.entries()].map(([ref, t]) => ({
+      ref, score: round3(t.score), count: t.evidence.length, evidence: t.evidence.slice(0, MAX_EVIDENCE),
     }));
 
     out[j.id] = {
-      docs: docs.sort(byScoreThenRef).slice(0, MAX_CANDIDATES),
+      docs: docs.slice(0, MAX_CANDIDATES),
       tickets: ticketCandidates.sort(byScoreThenRef).slice(0, MAX_CANDIDATES),
     };
   }
@@ -410,10 +502,10 @@ export function buildSpecCandidates(input: {
 
 /** The `codeloom index` step (after the linker): read chains.json and journeys.json, build the candidates
  * and write `<ws>/.codeloom/spec-candidates.json` only when its content changes. Returns whether it wrote. */
-export function writeSpecCandidates(root: string, repos: readonly CandidateRepo[], specs?: SpecsConfig): boolean {
+export function writeSpecCandidates(root: string, repos: readonly CandidateRepo[], specs?: SpecsConfig, notes?: string[]): boolean {
   const dir = join(root, CODELOOM_DIR);
   const chains = readJson(join(dir, FILES.chains), ChainsFileSchema)?.chains ?? [];
   const journeys = readJson(join(dir, FILES.journeys), JourneysFileSchema, { handWritten: true })?.journeys ?? [];
-  const file = buildSpecCandidates({ repos, chains, journeys, ...(specs ? { specs } : {}) });
+  const file = buildSpecCandidates({ repos, chains, journeys, ...(specs ? { specs } : {}), ...(notes ? { notes } : {}) });
   return writeJsonIfChanged(join(dir, FILES.specCandidates), file);
 }

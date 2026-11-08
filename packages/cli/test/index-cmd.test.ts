@@ -136,6 +136,7 @@ describe("index summary: files vs parsed (H7)", () => {
       endpoints: { ...endpoints, repo: r.id },
     })),
     linker: { chains: 0, complete: 0, orphanedJourneys: 0, wrote: false },
+    specNotes: [],
   });
 
   it("explains, per repo, why files and parsed differ", () => {

@@ -10,6 +10,8 @@ export interface IndexRunResult {
   root: string;
   repos: Array<{ id: string; stats: IndexStats; endpoints: EndpointsFile }>;
   linker: LinkerSummary;
+  /** Lines for the user from the spec-candidates step (a git history too big to read, ...). */
+  specNotes: string[];
 }
 
 export async function runIndex(start: string): Promise<IndexRunResult> {
@@ -25,8 +27,9 @@ export async function runIndex(start: string): Promise<IndexRunResult> {
   const linker = runLinker(ws, indexed);
   // v0.3 §1: spec candidates for every journey, from repo docs and git history (after the linker, which
   // writes the chains and journeys they are built from).
-  writeSpecCandidates(ws.root, indexed.map((x) => ({ id: x.ref.id, abs: x.abs, files: x.result.files })), ws.specs);
-  return { root: ws.root, repos, linker };
+  const specNotes: string[] = [];
+  writeSpecCandidates(ws.root, indexed.map((x) => ({ id: x.ref.id, abs: x.abs, files: x.result.files })), ws.specs, specNotes);
+  return { root: ws.root, repos, linker, specNotes };
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -74,6 +77,7 @@ export function formatIndexSummary(r: IndexRunResult): string {
     `${r.repos.length} repos indexed in ${r.root}`,
     `${r.linker.chains} chains (${r.linker.complete} complete) written to .codeloom/chains.json`,
     ...orphanedNote,
+    ...r.specNotes,
     ...(skipped.length ? ["Skipped files:", ...skipped] : []),
   ].join("\n");
 }

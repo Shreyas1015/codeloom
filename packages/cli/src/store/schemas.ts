@@ -217,17 +217,84 @@ export type TracesConfig = z.infer<typeof TracesConfigSchema>;
 export const ExternalServiceSchema = z.object({ name: z.string().min(1), apiBase: z.array(z.string().min(1)) });
 export type ExternalService = z.infer<typeof ExternalServiceSchema>;
 
-/** The default ticket key pattern and ignored key prefixes (v0.3 spec §1). */
-export const DEFAULT_TICKET_PATTERN = "\\b[A-Z][A-Z0-9]+-\\d+\\b";
-export const DEFAULT_TICKET_IGNORE_PREFIXES: readonly string[] = ["CVE", "UTF", "ISO", "RFC", "SHA"];
+/** The default ticket key pattern and ignored key prefixes (v0.3 spec §1). A key must not sit inside a
+ * longer token: nothing alphanumeric, `-`, `/`, `#` or `_` before it, no letter or digit after it, so
+ * `ORD-MH-26-001` holds no key. */
+export const DEFAULT_TICKET_PATTERN = "(?<![A-Za-z0-9\\-/#_])[A-Z][A-Z0-9]+-\\d+(?![A-Za-z0-9])";
+export const DEFAULT_TICKET_IGNORE_PREFIXES: readonly string[] = ["AC", "ADR", "CVE", "ID", "ISO", "QA", "RFC", "SHA", "TC", "UTF"];
 
-function compiles(pattern: string): boolean {
+/** Longest ticket pattern and ticket key codeloom accepts (a guard against slow regexes). */
+export const MAX_TICKET_PATTERN = 100;
+export const MAX_TICKET_KEY = 64;
+
+/** Why a ticket pattern is unsafe or invalid (undefined when fine): over 100 characters, a backreference,
+ * or a nested quantifier (a group holding `+`, `*` or `{n,}` that is itself quantified, like `(a+)+`),
+ * which can take exponential time on a long commit message. */
+export function ticketPatternProblem(pattern: string): string | undefined {
+  if (pattern.length > MAX_TICKET_PATTERN) return `is longer than ${MAX_TICKET_PATTERN} characters`;
   try {
     new RegExp(pattern, "g");
-    return true;
   } catch {
-    return false;
+    return "is not a valid regular expression";
   }
+  // Walk the pattern: escapes, character classes and groups. `stack` holds, per open group, whether it
+  // contains an unbounded quantifier.
+  const stack: boolean[] = [];
+  let lastGroupUnbounded = false; // the group that just closed (for a quantifier right after it)
+  let afterGroup = false;
+  const unboundedAt = (i: number): number => {
+    // length of an unbounded quantifier at i (`+`, `*`, `{n,}`), else 0
+    const c = pattern[i];
+    if (c === "+" || c === "*") return 1;
+    const m = /^\{\d+,\}/.exec(pattern.slice(i));
+    return m ? m[0].length : 0;
+  };
+  const quantifierAt = (i: number): number => {
+    const u = unboundedAt(i);
+    if (u > 0) return u;
+    if (pattern[i] === "?") return 1;
+    const m = /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(i));
+    return m ? m[0].length : 0;
+  };
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (afterGroup) {
+      afterGroup = false;
+      const q = quantifierAt(i);
+      if (q > 0) {
+        if (lastGroupUnbounded && pattern[i] !== "?") return "has a nested quantifier (like (a+)+), which can be very slow";
+        if (lastGroupUnbounded || unboundedAt(i) > 0) if (stack.length > 0) stack[stack.length - 1] = true;
+        i += q - 1;
+        continue;
+      }
+    }
+    if (c === "\\") {
+      const next = pattern[i + 1] ?? "";
+      if (/[1-9]/.test(next) || next === "k") return "has a backreference, which can be very slow";
+      i++;
+      continue;
+    }
+    if (c === "[") {
+      for (i++; i < pattern.length && pattern[i] !== "]"; i++) if (pattern[i] === "\\") i++;
+      continue;
+    }
+    if (c === "(") {
+      stack.push(false);
+      continue;
+    }
+    if (c === ")") {
+      lastGroupUnbounded = stack.pop() ?? false;
+      if (lastGroupUnbounded && stack.length > 0) stack[stack.length - 1] = true;
+      afterGroup = true;
+      continue;
+    }
+    const u = unboundedAt(i);
+    if (u > 0) {
+      if (stack.length > 0) stack[stack.length - 1] = true;
+      i += u - 1;
+    }
+  }
+  return undefined;
 }
 
 /** Workspace `specs` (v0.3 §1): `docs` extra doc globs and `ignoreDocs` doc globs to skip (both
@@ -236,7 +303,14 @@ function compiles(pattern: string): boolean {
 export const SpecsConfigSchema = z.object({
   docs: z.array(z.string().min(1)).optional(),
   ignoreDocs: z.array(z.string().min(1)).optional(),
-  ticketPattern: z.string().min(1).refine(compiles, { message: "is not a valid regular expression" }).optional(),
+  ticketPattern: z
+    .string()
+    .min(1)
+    .superRefine((p, ctx) => {
+      const problem = ticketPatternProblem(p);
+      if (problem) ctx.addIssue({ code: "custom", message: problem });
+    })
+    .optional(),
   ignorePrefixes: z.array(z.string()).optional(),
 });
 export type SpecsConfig = z.infer<typeof SpecsConfigSchema>;

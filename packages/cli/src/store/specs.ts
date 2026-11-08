@@ -8,6 +8,7 @@ import { safeRepoFile } from "./safe-file.js";
 import {
   compileTicketPattern,
   DEFAULT_IGNORE_PREFIXES,
+  MAX_TICKET_KEY,
   DEFAULT_TICKET_PATTERN,
   type JourneySpecCandidates,
   readSpecsConfig,
@@ -76,8 +77,10 @@ export function specState(entry: JourneySpecs | undefined, candidates: JourneySp
 // ---- validation ------------------------------------------------------------------------------------
 
 /** Why a ticket key is not acceptable (undefined when it is): it must match the workspace ticket pattern as
- * a whole and must not start with an ignored prefix (CVE-…, RFC-…). Missing rules take the defaults. */
+ * a whole, be at most 64 characters (checked first, so a long ref never reaches the regex) and must not
+ * start with an ignored prefix (CVE-…, RFC-…). Missing rules take the defaults. */
 export function ticketKeyProblem(key: string, rules: Partial<TicketRules>): string | undefined {
+  if (key.length > MAX_TICKET_KEY) return `"${key.slice(0, 20)}…" is longer than ${MAX_TICKET_KEY} characters: it is not a ticket key.`;
   const pattern = rules.ticketPattern ?? DEFAULT_TICKET_PATTERN;
   const re = compileTicketPattern(pattern);
   const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
