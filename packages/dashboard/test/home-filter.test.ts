@@ -54,7 +54,7 @@ const rows: JourneyRow[] = [
   }),
 ];
 
-const all = { q: "", area: "", repo: "", confidence: "", complete: "" } as const;
+const all = { q: "", area: "", repo: "", confidence: "", complete: "", spec: "" } as const;
 
 describe("home filter", () => {
   it("collects sorted facets", () => {

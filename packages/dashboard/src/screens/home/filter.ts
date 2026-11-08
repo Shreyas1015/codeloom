@@ -1,4 +1,5 @@
 import type { Confidence, JourneyRow, Lane } from "@/api/types";
+import type { SpecMark } from "@/lib/specs";
 
 export const LANES: Lane[] = ["ui", "api", "code", "db", "queue"];
 
@@ -13,9 +14,11 @@ export interface JourneyFilter {
   repo: string;
   confidence: "" | Confidence;
   complete: CompleteFilter;
+  /** A spec mark; applies only when spec marks are known. */
+  spec: "" | SpecMark;
 }
 
-export const NO_FILTER: JourneyFilter = { q: "", area: "", repo: "", confidence: "", complete: "" };
+export const NO_FILTER: JourneyFilter = { q: "", area: "", repo: "", confidence: "", complete: "", spec: "" };
 
 const CONFIDENCE_RANK: Record<Confidence, number> = { exact: 0, param: 1, guess: 2 };
 
@@ -35,7 +38,9 @@ export function facets(rows: JourneyRow[]): { areas: string[]; repos: string[] }
   return { areas: sorted(areas), repos: sorted(repos) };
 }
 
-export function filterJourneys(rows: JourneyRow[], f: JourneyFilter): JourneyRow[] {
+/** `specs`: each journey's spec mark (from /api/specs). Without it the Spec filter does not apply; a journey
+ * the marks do not list counts as not checked. */
+export function filterJourneys(rows: JourneyRow[], f: JourneyFilter, specs?: ReadonlyMap<string, SpecMark>): JourneyRow[] {
   const words = f.q.toLowerCase().split(/\s+/).filter(Boolean);
   return rows.filter((r) => {
     if (f.area && r.area !== f.area) return false;
@@ -44,6 +49,7 @@ export function filterJourneys(rows: JourneyRow[], f: JourneyFilter): JourneyRow
     if (f.complete === "complete" && !r.complete) return false;
     if (f.complete === "api-only" && !r.apiOnly) return false;
     if (f.complete === "incomplete" && (r.complete || r.apiOnly)) return false;
+    if (f.spec && specs && (specs.get(r.id) ?? "unchecked") !== f.spec) return false;
     if (words.length) {
       const hay = [r.name, r.area, r.note, ...r.tables].join("\n").toLowerCase();
       if (!words.every((w) => hay.includes(w))) return false;

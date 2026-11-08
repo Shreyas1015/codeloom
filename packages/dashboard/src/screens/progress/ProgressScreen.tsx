@@ -1,10 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, TriangleAlert } from "lucide-react";
+import { useState } from "react";
 import { MapStateError } from "@/api/client";
-import { useProgress, useTour } from "@/api/queries";
+import { useProgress, useSpecs, useTour } from "@/api/queries";
 import type { JourneyProgressView, ProgressResponse } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
 import { ProgressLegend, ProgressStrip } from "@/components/gallery/ProgressStrip";
+import { coverageSentence, SpecCoverageTable } from "@/components/gallery/SpecCoverage";
+import { SpecsError } from "@/components/gallery/SpecsError";
+import { coverageParts, MATCH_SPECS } from "@/lib/specs";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { Breakable } from "@/lib/breakable";
 import { keyIdentity } from "@/lib/journey-stops";
@@ -132,6 +136,7 @@ function Body({ p }: { p: ProgressResponse }) {
           <RepoTable p={p} />
           <Areas p={p} />
           <WhatsLeft p={p} />
+          <SpecCoverageSection />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           <ReWalkPanel p={p} />
@@ -260,6 +265,59 @@ function WhatsLeft({ p }: { p: ProgressResponse }) {
             </div>
           ))}
         </div>
+      )}
+    </section>
+  );
+}
+
+/** How many journeys have a spec Claude linked, and what waits for a check. Team data from specs.json, so a
+ * broken file is a card here, never a broken Progress screen. */
+function SpecCoverageSection() {
+  const { data, error } = useSpecs();
+  const [by, setBy] = useState<"repo" | "area">("repo");
+  const parts = data ? coverageParts(data.totals.all) : undefined;
+  const waiting = parts ? parts.candidates + parts.unchecked : 0;
+  return (
+    <section aria-labelledby="progress-specs" className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div className="flex flex-col gap-0.5">
+          <h2 id="progress-specs" className={H2}>
+            Spec coverage
+          </h2>
+          {data ? (
+            <p className="text-[13.5px] text-muted-foreground">
+              {coverageSentence(data.totals.all)}
+              {parts!.candidates > 0 ? `; ${plural(parts!.candidates, "journey")} with candidates waiting for a check` : ""}.
+            </p>
+          ) : null}
+        </div>
+        {data ? (
+          <fieldset className="flex rounded-md border border-border bg-card p-0.5">
+            <legend className="sr-only">Group spec coverage</legend>
+            {(["repo", "area"] as const).map((v) => (
+              <label key={v} className="cursor-pointer">
+                <input type="radio" name="spec-coverage-by" value={v} checked={by === v} onChange={() => setBy(v)} className="peer sr-only" />
+                <span className="block rounded-[4px] px-2.5 py-1 text-[12.5px] font-semibold text-muted-foreground transition-colors peer-checked:bg-foreground peer-checked:text-card peer-focus-visible:outline-2 peer-focus-visible:outline-solid peer-focus-visible:outline-ring motion-reduce:transition-none">
+                  {v === "repo" ? "By repo" : "By area"}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        ) : null}
+      </div>
+      {error ? (
+        <SpecsError error={error} />
+      ) : !data ? (
+        <div aria-busy="true" aria-label="Loading spec coverage" className="h-24 rounded-xl bg-muted motion-safe:animate-pulse" />
+      ) : (
+        <>
+          <SpecCoverageTable specs={data} by={by} />
+          {waiting > 0 ? (
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
+              To check every journey not checked yet, ask Claude: <Command text={MATCH_SPECS} />
+            </p>
+          ) : null}
+        </>
       )}
     </section>
   );

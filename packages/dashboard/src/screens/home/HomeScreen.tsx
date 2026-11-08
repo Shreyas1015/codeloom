@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
-import { useJourneys, useOverview, useProgress } from "@/api/queries";
-import type { JourneysResponse, Overview, ProgressResponse } from "@/api/types";
+import { useJourneys, useOverview, useProgress, useSpecs } from "@/api/queries";
+import type { JourneysResponse, Overview, ProgressResponse, SpecsResponse } from "@/api/types";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { CountStrip, type Counts } from "@/components/gallery/CountStrip";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,8 @@ export function HomeScreen() {
   const journeys = useJourneys();
   // Progress is personal and optional here: when it cannot load, Home shows the map without it.
   const progress = useProgress().data;
+  // Spec states are optional too: a broken specs.json drops the badges and the Spec filter, nothing else.
+  const specs = useSpecs().data;
   const o = overview.data;
   const error = overview.error ?? journeys.error;
 
@@ -90,7 +92,7 @@ export function HomeScreen() {
       ) : !o || !journeys.data ? (
         <Skeleton />
       ) : (
-        <HomeBody overview={o} data={journeys.data} progress={progress} />
+        <HomeBody overview={o} data={journeys.data} progress={progress} specs={specs} />
       )}
     </section>
   );
@@ -115,7 +117,17 @@ function Understood({ progress }: { progress: ProgressResponse }) {
   );
 }
 
-function HomeBody({ overview, data, progress }: { overview: Overview; data: JourneysResponse; progress?: ProgressResponse }) {
+function HomeBody({
+  overview,
+  data,
+  progress,
+  specs,
+}: {
+  overview: Overview;
+  data: JourneysResponse;
+  progress?: ProgressResponse;
+  specs?: SpecsResponse;
+}) {
   const nothing = data.journeys.length === 0 && data.unnamedChains.length === 0;
   return (
     <>
@@ -131,7 +143,7 @@ function HomeBody({ overview, data, progress }: { overview: Overview; data: Jour
           <p className="text-[13.5px] text-muted-foreground">No named journeys yet.</p>
         </section>
       ) : (
-        <JourneyList rows={data.journeys} progress={progress} />
+        <JourneyList rows={data.journeys} progress={progress} specs={specs} />
       )}
       <UnnamedChains chains={data.unnamedChains} />
     </>
