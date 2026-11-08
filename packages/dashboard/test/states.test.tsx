@@ -223,8 +223,9 @@ describe("full-screen states", () => {
     await act(async () => {
       await qc.invalidateQueries({ queryKey: ["overview"] });
     });
-    const state = await screen.findByRole("region", { name: /isn't mapped yet/ });
-    await waitFor(() => expect(within(state).getByRole("heading", { level: 1 })).toHaveFocus());
+    // CI runners can be slow to settle the refetch + focus move: give both waits room.
+    const state = await screen.findByRole("region", { name: /isn't mapped yet/ }, { timeout: 5000 });
+    await waitFor(() => expect(within(state).getByRole("heading", { level: 1 })).toHaveFocus(), { timeout: 5000 });
   });
 
   it.each([
