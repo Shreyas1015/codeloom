@@ -1,3 +1,5 @@
+import { fencedBlock, outermost } from "./extract-json.js";
+
 export interface LLMFileAnalysis {
   fileSummary: string;
   tags: string[];
@@ -79,17 +81,11 @@ Respond ONLY with the JSON object, no additional text.`;
  * Extracts a JSON block from an LLM response, handling markdown fences.
  */
 function extractJson(response: string): string {
-  // Try to extract from markdown code fences
-  const fenceMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
-  }
+  const fenced = fencedBlock(response);
+  if (fenced !== undefined) return fenced;
 
-  // Try to find a raw JSON object
-  const objectMatch = response.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    return objectMatch[0].trim();
-  }
+  const object = outermost(response, "{", "}");
+  if (object !== undefined) return object;
 
   return response.trim();
 }

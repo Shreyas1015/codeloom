@@ -1,4 +1,5 @@
 import type { KnowledgeGraph, Layer } from "../types.js";
+import { fencedBlock, outermost } from "./extract-json.js";
 
 /**
  * LLM layer response structure — what the LLM returns for each layer.
@@ -183,16 +184,15 @@ export function parseLayerDetectionResponse(
 
   try {
     // Try to extract from markdown code fences
-    const fenceMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-    const jsonStr = fenceMatch ? fenceMatch[1].trim() : response.trim();
+    const jsonStr = fencedBlock(response) ?? response.trim();
 
     // Try to find a JSON array
-    const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
+    const array = outermost(jsonStr, "[", "]");
+    if (array === undefined) {
       return null;
     }
 
-    const parsed = JSON.parse(arrayMatch[0]);
+    const parsed = JSON.parse(array);
 
     if (!Array.isArray(parsed) || parsed.length === 0) {
       return null;
