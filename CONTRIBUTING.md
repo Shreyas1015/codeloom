@@ -41,8 +41,9 @@ CI runs all of these on Linux and macOS, on Node 20 and 22.
 
 ## Rules that tests enforce
 
-- **The README is the contract.** Every command, flag, MCP tool and prompt it names must exist, and every one
-  that exists must be named. Edit the root `README.md`, then rewrite the npm page copy:
+- **The docs are the contract.** Every command, flag, MCP tool and prompt must be in `docs/reference.md`, and
+  everything the README or the reference names must exist. Keep the README short: details go in `docs/`.
+  After editing the root `README.md`, rewrite the npm page copy:
   `CODELOOM_UPDATE_DOCS=1 pnpm --filter codeloom test docs`.
 - **Accuracy.** A change that drops precision below 95% or recall below 80% on any eval app fails CI. When
   you add a framework or pattern, add a labelled case under `fixtures/evals`.

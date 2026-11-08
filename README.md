@@ -12,12 +12,10 @@
 
 </div>
 
-codeloom maps a codebase into **user journeys**: a UI page, the API route it calls, the code that route
-runs, and the database tables or queues it touches. It works across separate frontend and backend repos.
-The map is built without AI, stays on your machine, and is shared with Claude (or any MCP agent) so the
-agent can name the journeys and explain them.
-
-A journey looks like this:
+codeloom maps your code into **user journeys**: the page a user opens, the API route it calls, the code that
+route runs, and the tables or queues it touches, even when the frontend and backend live in separate repos.
+The map is built without AI, stays on your machine, and is shared with your agent (Claude Code, or any MCP
+client) so it can name each journey and explain it to you.
 
 ```
 web  /customers/new        (page)
@@ -25,24 +23,6 @@ web  /customers/new        (page)
    └ CustomersController.store → CustomerService.create
      └ customers, audit_logs   (db tables)
 ```
-
-## Table of contents
-
-- [Quick start](#quick-start)
-- [How it works](#how-it-works)
-- [Commands](#commands)
-- [Tours and progress](#tours-and-progress)
-- [Specs and views](#specs-and-views)
-- [MCP tools and prompts](#mcp-tools-and-prompts)
-- [Workspace file](#workspace-file)
-- [Trace check](#trace-check)
-- [Accuracy](#accuracy)
-- [Not yet](#not-yet)
-- [Credits](#credits)
-- [Contributing](#contributing)
-- [Security](#security)
-- [Versioning](#versioning)
-- [Licence](#licence)
 
 ## Quick start
 
@@ -54,375 +34,68 @@ npx codeloom index        # build the map into .codeloom/
 npx codeloom dashboard    # open the map in your browser (127.0.0.1 only)
 ```
 
-Then open Claude Code in the same folder and run the `name-journeys` prompt. Claude Code lists MCP
-prompts as `/mcp__codeloom__name-journeys`. Claude groups the request chains into named journeys and saves
-them; the dashboard updates by itself.
+Then open Claude Code in the same folder and run `/mcp__codeloom__name-journeys`. Claude groups the request
+chains into named journeys, and the dashboard updates by itself.
 
-`init` also adds a post-commit git hook that re-indexes after each commit. The hook runs the codeloom
-that ran `init`, by its full path. With `npx` that is a copy in the npx cache, which can be cleared; then
-the hook falls back to `codeloom` on your `PATH`. To keep the hook working, install it globally:
-`npm i -g codeloom`.
+`init` also adds a git hook that re-indexes after each commit. Install codeloom globally
+(`npm i -g codeloom`) so the hook keeps working after the npx cache is cleared.
 
-## How it works
+## What you get
 
-1. **Adapters** read your JS/TS code with the TypeScript compiler (no AI) and find pages, HTTP calls,
-   API routes, database calls and queue calls.
-2. The **linker** joins them into **chains**: page → call → route → handler → functions → table or queue.
-   It follows imports and calls, and matches each UI call to a route, also across repos.
-3. Each hop gets a **confidence**:
-   - `exact`: the code proves the link.
-   - `param`: matched less directly: a fixed URL to a route parameter (`/customers/42` to `/customers/:id`),
-     a call made through your own wrapper function, or a function passed as a JSX prop.
-   - `guess`: a likely link (e.g. the only method in the repo with that name). Guesses are shown dashed and
-     never counted as found.
-4. Anything it cannot resolve is kept on the chain as **unresolved**, with a reason. `codeloom check`
-   lists them.
-5. **Journeys** are named groups of chains. Your agent writes them (through MCP); codeloom never invents names.
+- **Journeys across repos.** Each hop (page → call → route → handler → table) comes from reading the code and
+  is marked `exact`, `param` or `guess`. Nothing is made up: a hop codeloom cannot resolve is listed with the
+  reason.
+- **A dashboard.** Home lists every journey; a Journey shows it in UI / API / code / DB lanes; the Map shows a
+  repo from folders down to functions. See [docs/dashboard.md](docs/dashboard.md).
+- **Tours that stick.** Claude walks you through one journey (the flow, a sample request down to the SQL, the
+  traps per file), then quizzes you. Progress goes seen → toured → understood, and asks for a re-walk when
+  the code changes.
+- **Specs per journey.** codeloom finds the docs and ticket keys that mention each journey; Claude confirms
+  the real ones, so you can see which features have no spec.
+- **Views on request.** Ask Claude for a page ("customer journeys with no spec") and it builds one from
+  codeloom's widgets.
+- **A CI check.** `codeloom check --fail-under 80` fails the build when too few UI journeys reach the database.
 
-Everything is written to `.codeloom/` folders as JSON and committed with your code, except
-`.codeloom/fingerprints.json` (a local cache, git-ignored by `init`). Re-running `codeloom index` with no code
-change leaves every committed file unchanged.
-
-The file map (folders, files, functions) uses the tree-sitter parsers from
-[Understand Anything](https://github.com/Egonex-AI/Understand-Anything), so it covers more languages than JS/TS.
-Journeys need JS/TS.
-
-What `graph.json` holds (v0.2a):
-
-- **Method nodes.** Each class method and object-literal method is a `function` node (`function:<file>:<Class.method>`,
-  tag `method`). For a TypeScript overload, the node covers the implementation, not the signatures.
-- **Checked `calls` edges.** For JS/TS files, codeloom's own call resolver decides every `calls` edge. Each one has
-  a confidence in `description`: `exact` (weight 1) or `param` (weight 0.6; likely: passed or wired, not a direct
-  call). A tree-sitter call edge the resolver does not confirm is dropped. In other languages tree-sitter's edges
-  stay, marked `unverified` (weight 0.3), and the dashboard and MCP tools show them dashed and labelled.
-- **Nameless classes** (`const Customer = class { … }`) get the id `<anonymous@L12>` from the line they start on.
-  The id changes when lines above the class are added or removed.
-- **Skipped files.** Bundled or minified JavaScript (`*.min.js`, `*.bundle.js`, `*-bundle.js` — `.js`, `.cjs`,
-  `.mjs` only — or bundler output) stays on the map as a file but is not analysed: no methods, calls or
-  endpoints. `.claude/` and `.cursor/` folders are ignored by default.
-- **Wrapped default exports.** `export default connect(…)(Customer)` stands for `Customer`. Known wrappers
-  (`connect(…)(X)`, `memo`, `React.memo`, `forwardRef`, `withRouter`, `observer`, `inject(…)(X)`, `compose(…)(X)`,
-  and any `with…` such as `withAuth`) keep the link `exact`. Any other wrapper (`makeHandler(fn)`) gives `param`.
-  A wrapped value that is not a local function or class is not followed.
-
-`graph.json` grows with these: up to 1.8× on the test apps (see "graph.json size" in
-[fixtures/evals](fixtures/evals/README.md)).
-
-### What it finds
+## Supported
 
 | Part | Supported |
 |---|---|
 | UI pages | Next.js (`app/` and `pages/`), React Router |
-| HTTP calls | `fetch` (and `$fetch`, `ofetch`, `useFetch`), axios, ky, got, superagent, redaxios, wretch, clients made with `.create(...)`, and your own wrapper functions around them |
-| API routes | Express, Fastify, NestJS, Next.js API routes (`app/**/route.ts` and `pages/api`), AdonisJS |
-| Database | Prisma, Drizzle, TypeORM, Knex, AdonisJS Lucid, Mongoose (collections), raw SQL (pg, mysql2, better-sqlite3, postgres, sqlite3), `.sql` files, `schema.prisma` |
-| Queues | RabbitMQ through amqplib (`sendToQueue`, `publish`, `consume`, `bindQueue`) |
+| HTTP calls | fetch, axios, ky, got, superagent, redaxios, wretch, and your own wrappers around them |
+| API routes | Express, Fastify, NestJS, Next.js API routes, AdonisJS |
+| Database | Prisma, Drizzle, TypeORM, Knex, AdonisJS Lucid, Mongoose, raw SQL |
+| Queues | RabbitMQ (amqplib) |
 
-## Commands
+Journeys need JavaScript or TypeScript. The file map covers more languages, through tree-sitter.
 
-| Command | What it does |
-|---|---|
-| `codeloom init [dir]` | Set up a repo or a folder of repos: workspace file, `.codeloom/config.json` per repo, post-commit hook, `.gitignore` line, `.mcp.json` entry. |
-| `codeloom index` | Index every repo in the workspace. Only changed files are parsed again. `--quiet` prints nothing on success. |
-| `codeloom check` | Report how complete the map is: chains that run UI → API → DB, chains that run API → DB only (no UI caller), chains missing the DB step or broken at UI → API, how many routes have a UI caller, unresolved calls, guessed links. |
-| `codeloom check --json` | The same report as JSON. |
-| `codeloom check --fail-under 80` | Exit 1 when less than 80% of the chains that start in the UI are complete. Useful in CI. |
-| `codeloom check --traces` | Also compare the map with real traffic (see [Trace check](#trace-check)). |
-| `codeloom doctor` | Check the data files, hooks, `.gitignore` line and MCP entry. `--fix` repairs what is safe to repair. `--json` prints JSON. |
-| `codeloom dashboard` | Serve the dashboard on 127.0.0.1 and open it. `--port <port>` picks the port; `--no-open` only prints the URL. |
-| `codeloom serve` | Run the MCP server on stdio. `init` puts this in `.mcp.json` as `npx -y codeloom serve`. |
-| `codeloom views list` | List the dashboard views your agent saved, with their links. A broken view shows why. |
-| `codeloom views reset <id>` | Delete a view. `codeloom views reset home` brings back the built-in Home. Views are only ever written by your agent (`save_view`). |
+## Private by design
 
-`check` starts with a summary like this:
-
-```text
-7 journeys: 3 complete UI → API → DB, 2 API → DB only (no UI caller), 2 missing the DB step
-routes with a UI caller: 3/5
-complete: 100% of journeys that start in the UI (3/3)
-```
-
-A chain is complete only when it starts at a page or UI call and reaches a database table or queue. A
-route or queue consumer that reaches the database but that no UI code calls counts as API → DB only, and
-`--fail-under` leaves it out of the ratio. With no chain that starts in the UI, the ratio is 0%, so
-`--fail-under` fails: nothing is proven end to end.
-
-Exit codes: `0` ok, `1` `--fail-under` not met (or `doctor` found errors), `2` a data or usage error
-(missing or broken `.codeloom` files, bad flag value).
-
-The dashboard has five screens: Home (journey list), Journey (UI / API / code / DB lanes, plus its specs), Tour
-(walk one journey stop by stop), Map (one repo, folders to functions) and Progress (how much you understand),
-plus any views your agent saved. See
-[docs/dashboard.md](docs/dashboard.md).
-
-## Tours and progress
-
-A **tour** walks you through one journey in four parts: **Flow** (each stop's code beside a plain-language
-explanation), **Data journey** (one sample request followed stop by stop down to the SQL), **File notes**
-(traps and notes per file) and **Check yourself** (3 questions).
-
-Your agent writes the tour; codeloom never does. Two prompts do the work, in Claude Code:
-
-1. `/mcp__codeloom__write-tour <journey id>`: Claude reads the journey's code with `build_tour_context`,
-   writes the tour and saves it with `save_tour`. It may only use the journey's real stops and code.
-2. `/mcp__codeloom__check-me <journey id>`: Claude asks you the tour's 3 questions one at a time, judges your
-   answers against the code and records the result with `record_check`.
-
-The dashboard shows both commands with a copy button (the journey id is filled in).
-
-**Progress** has three levels per journey:
-
-| Level | How you get it |
-|---|---|
-| Seen | You opened the journey in the dashboard. |
-| Toured | You viewed all four parts of its tour in Tour mode. |
-| Understood | You passed `check-me` (all 3 answers acceptable). Nothing else sets it. |
-
-When the code under a journey you understood changes, the journey **needs a re-walk**: the dashboard lists
-only the stops whose file changed, and it counts as toured until you pass `check-me` again. A tour stop
-whose file changed since the tour was written is marked "may be out of date"; the tour stays usable. Stops
-are matched by lane, repo, file and symbol, so a line added above a stop moves it, never removes it.
-
-Where the files live:
-
-| What | Where | Shared? |
-|---|---|---|
-| Tours | `.codeloom/tours/<journey id>.json` in the workspace root | Committed: team knowledge. Written only by `save_tour`. |
-| Your progress | `~/.codeloom/progress/<workspace id>.json` (or under `$CODELOOM_HOME`) | Personal: never in your repo, never committed. |
-| Your place in a tour | the browser's local storage | This browser only. |
-
-The workspace id comes from the workspace name and its repo ids, so it stays the same across clones. If you
-add or remove a repo, the id changes; `codeloom doctor` lists your earlier progress file for the same
-workspace name so you can copy what you need (codeloom never moves it).
-`codeloom doctor` reports a broken progress or tour file; codeloom never overwrites one silently.
-
-## Specs and views
-
-**Specs.** On every `codeloom index`, codeloom looks for docs and tickets that may describe each journey,
-with no AI and no network:
-
-- **Docs** in each repo (`docs/**`, `README*`, `**/adr/**`, `*.md`, `*.mdx`, `*.txt`, up to 512 KB) that name
-  one of the journey's routes (`POST /api/customers`, with `:id`, `{id}` and `[id]` treated alike), pages,
-  tables, queues or code names (`CustomerService.create`), as whole words. A name many journeys share (a
-  `customers` table) counts for little, and a doc that names only tables or queues comes after any doc that
-  names a route, page or code name of the journey.
-- **Tickets**: keys like `SHOP-12` in the last 500 commits that changed the journey's stop files (subject,
-  body, merged branch name). A commit that touched many journeys' files counts for less, so keys specific
-  to the journey come first.
-
-These candidates go to `.codeloom/spec-candidates.json`. They are only hints. Run
-`/mcp__codeloom__match-specs <journey id>` (or with no id, for every journey not checked yet): Claude reads
-the candidates and the code, keeps only the ones that really describe the journey, each with a one-line
-reason, and saves them to `.codeloom/specs.json` (committed, shared with your team). Saving none records
-"checked, no spec". Each journey then shows one badge:
-
-| Badge | Meaning |
-|---|---|
-| Spec linked | Claude linked at least one doc or ticket. |
-| Spec candidates | Not checked yet; codeloom found docs or tickets that mention it. |
-| No spec | Checked, and nothing describes it. |
-| Spec not checked | Not checked, and nothing mentions it. |
-
-codeloom never fetches ticket text. Claude may summarise a ticket with its own tools into the reason.
-
-**Views.** Ask Claude for a dashboard page in plain words with `/mcp__codeloom__make-view <request>`, for
-example "customer journeys with no spec". Claude builds it from a fixed set of widgets (counts, a journey
-list with filters and sort, a map, progress, recent checks, spec coverage and a markdown note), saves it to
-`.codeloom/views/<id>.json` and gives you its link, `/views/<id>`. Views are listed in the dashboard's rail.
-A view with the id `home` replaces Home; `codeloom views reset home` brings the built-in Home back.
-
-The dashboard never writes specs or views: only your agent does, through MCP. A view or `specs.json` that
-cannot be read never breaks the dashboard: it shows what is wrong and `codeloom doctor` says why.
-
-| What | Where | Shared? |
-|---|---|---|
-| Spec candidates | `.codeloom/spec-candidates.json` | Committed. Rebuilt by `codeloom index`. |
-| Spec links | `.codeloom/specs.json` | Committed. Written only by `save_spec_links`. |
-| Views | `.codeloom/views/<id>.json` | Committed. Written only by `save_view`. |
-
-## MCP tools and prompts
-
-`codeloom serve` gives your agent these tools. They read the map fresh on every call. Only `save_journeys`,
-`save_summary`, `save_tour`, `save_spec_links`, `save_view` and `delete_view` write to the workspace, and
-`reindex` runs the indexer. `record_check` writes your personal progress, kept in `~/.codeloom` and never
-committed.
-
-| Tool | What it returns |
-|---|---|
-| `workspace_overview` | Start here: the repos, their size, and counts of pages, routes, tables, queues, chains and journeys. |
-| `index_status` | Per repo: the commit it was indexed at and whether the index is stale. |
-| `reindex` | Runs the indexer and linker again. |
-| `get_layers` | The architectural layers found in a repo, with node counts. |
-| `list_chains` | Request chains, filtered by repo, completeness, confidence, or unnamed. Paged. Compact rows (stops per lane, tables); `detail: true` adds the stops. |
-| `get_journey` | One journey (`j_…`) or chain (`ch_…`) laid out by lane, with what could not be resolved. |
-| `trace_route` | The chains that pass through a route, page, table or queue. |
-| `save_journeys` | Create, update, merge, split or delete journeys in `.codeloom/journeys.json`. |
-| `search` | Fuzzy search over files, functions, routes, pages, tables, queues, journeys and chains. |
-| `get_node` | One file, function or class: its edges and the chains and journeys it is part of. |
-| `get_neighbors` | The nodes around one node, 1 to 3 hops away. |
-| `explain_context` | One node's source, summary, neighbours, chains and journeys, in one call. |
-| `save_summary` | Save a short summary of a node to `.codeloom/summaries.json`. |
-| `check_chains` | The `codeloom check` summary, totals per item kind and up to 20 items per kind (optionally with the trace check). `kinds`, `limit` and `offset` page through the items. |
-| `impact_of_diff` | The files, nodes, chains and journeys a code change touches. |
-| `build_tour_context` | Everything needed to write a journey's tour: each stop's code, types, request/response shapes, DB detail, neighbours and file hash. |
-| `save_tour` | Save a journey's tour to `.codeloom/tours/<journey>.json`. Stops must be the journey's own; codeloom computes the hashes. |
-| `get_progress` | Your progress per journey (seen, toured, understood), stops to re-walk, last check, totals per repo and area (a journey that needs a re-walk counts as toured), and what is left. |
-| `record_check` | Record a `check-me` result. A pass is the only way to mark a journey understood. |
-| `match_specs` | The docs and tickets codeloom found for one journey (docs that mention its routes, pages, tables, queues or code, with the lines around each hit; ticket keys from the commits that touched its files). Only hints. |
-| `save_spec_links` | Save the docs and tickets that really describe a journey to `.codeloom/specs.json`, each with a one-line reason. `[]` records "checked, no spec". |
-| `list_specs` | Spec coverage per journey (linked, candidates waiting, none; checked or not) with totals per repo and area. |
-| `save_view` | Save a dashboard view built from a fixed set of widgets to `.codeloom/views/<id>.json`. The id `home` replaces Home. |
-| `list_views` | The saved views with their dashboard links, or why one cannot be read. |
-| `delete_view` | Delete a saved view (not `home`: use `codeloom views reset home`). |
-
-| Prompt | What it asks the agent to do |
-|---|---|
-| `name-journeys` | Group the unnamed chains into short, plain-language journeys and save them. |
-| `verify-journey` | Check one journey hop by hop against the code and report what agrees or looks doubtful. |
-| `write-tour` | Write a plain-language tour of one journey (flow, data journey, file notes, 3 check questions) and save it. |
-| `check-me` | Ask you 3 questions about one journey, one at a time, judge the answers against the code, and record the result. |
-| `match-specs` | For one journey (or every one not checked yet): read the candidate docs and tickets and the code, and save only the ones that really describe it. |
-| `make-view` | Turn a plain request ("customer journeys with no spec") into a dashboard view, save it and give you its `/views/<id>` link. |
-
-## Workspace file
-
-`codeloom init` writes `codeloom.workspace.json`. You can edit it:
-
-```json
-{
-  "version": 1,
-  "name": "demo-shop",
-  "repos": [
-    { "id": "web", "path": "web", "role": "ui" },
-    { "id": "api", "path": "api", "role": "api", "apiBase": ["NEXT_PUBLIC_API_URL", "api.demo-shop.test"] },
-    { "id": "billing", "path": "billing", "role": "worker" }
-  ],
-  "links": [
-    { "from": "web:lib/legacy.ts#saveLegacy", "to": "route:api:POST /api/customers" }
-  ],
-  "external": [
-    { "name": "Payments", "apiBase": ["PAYMENTS_URL", "pay.example.com"] }
-  ]
-}
-```
-
-- `role` (optional): `ui`, `api`, `worker` or `lib`. A hint for which repo a UI call goes to.
-- `apiBase` (optional): env var names or hosts whose calls go to this repo.
-- `links`: hops you add by hand when codeloom cannot see them. Each end is one of:
-  - `<repo>:<file>#<function>`
-  - `route:<repo>:<METHOD> <path>`
-  - `queue:<repo>:<queue>`
-
-  A manual link is `exact`. `codeloom check` lists links that could not be resolved or match no chain.
-- `specs` (optional): how codeloom looks for spec candidates. `docs`: extra doc globs; `ignoreDocs`: globs
-  to skip; `ticketPattern`: the ticket key regex (default: an uppercase key like `SHOP-12` that is not part of a
-  longer token such as `ORD-MH-26-001`; at most 100 characters, with no nested quantifiers like `(a+)+` and
-  no backreferences); `ignorePrefixes`: key prefixes that are not tickets (default `AC`, `ADR`, `CVE`, `ID`,
-  `ISO`, `QA`, `RFC`, `SHA`, `TC`, `UTF`). For example
-  `"specs": { "ticketPattern": "\\bSHOP-\\d+\\b", "ignoreDocs": ["docs/archive/**"] }`.
-- `external` (optional): other services the UI calls that are not repos in this workspace. A call whose
-  env var or host is in an entry's `apiBase` is a call to that `name`, never matched to a route.
-
-Calls to other services: a UI call that goes to a host or env var that no repo's `apiBase` names is a call
-to another service, not a broken link. `codeloom check` lists these under "Calls to other services" (by
-`external` name, else by env var or host) and never counts them as broken; the dashboard shows
-"calls <name>" on the journeys whose pages make them. An env var call is only treated this way when it
-matches no route and some repo has an `apiBase`, so give your own backends an `apiBase` to tell them apart.
-
-## Trace check
-
-`codeloom check --traces` compares the map with runtime traces: routes confirmed by traffic, links seen in
-traffic but missing from the map, and routes never hit. It never changes the exit code. Add a `traces`
-entry to `codeloom.workspace.json`.
-
-From Grafana Tempo:
-
-```json
-"traces": {
-  "kind": "tempo",
-  "url": "http://localhost:3200",
-  "headersEnv": "TEMPO_HEADERS",
-  "services": { "demo-shop-api": "api" },
-  "lookback": "1h"
-}
-```
-
-From an OTLP JSON file (`.json`, or `.jsonl` / `.ndjson` with one export per line), relative to the workspace root:
-
-```json
-"traces": { "kind": "otlp-file", "path": "traces/export.json", "services": { "demo-shop-api": "api" } }
-```
-
-- `services` maps a trace's `service.name` to a repo id. Without it, the service name is used as the repo id.
-- `headersEnv` names an environment variable holding request headers, OTEL style:
-  `TEMPO_HEADERS="Authorization=Bearer%20abc,X-Scope-OrgID=demo"`. Header values are never printed.
-- `lookback` is how far back to search: a number followed by `m`, `h` or `d`. Default `1h`.
-- Tempo requests time out after 10 seconds. If Tempo cannot be reached, the trace check is skipped.
-
-This is the only network call codeloom makes, and only when you ask for it.
+- No AI and no telemetry. The only network call is the trace check, and only when you ask for it.
+- The map is plain JSON in `.codeloom/`, committed with your code. Your own progress stays in `~/.codeloom`.
+- The dashboard listens on 127.0.0.1 only.
 
 ## Accuracy
 
-codeloom's linker is scored in CI against hand-written answer keys for three open-source apps
-([fixtures/evals](fixtures/evals/README.md)). CI fails below 95% precision or 80% recall for any app and hop
-type. Precision counts `exact` and `param` hops only.
+CI scores the linker against hand-labelled answers for three open-source apps, and fails below 95% precision
+or 80% recall. Today every score is 100%. These are small apps, so expect lower numbers on large ones; the
+known limits are in [docs/how-it-works.md](docs/how-it-works.md#accuracy).
 
-| App | UI → API | Route → handler | Handler → DB |
-|---|---|---|---|
-| prisma-rest-nextjs | 4/4 | 5/5 | 5/5 |
-| realworld | 22/22 | 21/21 | 32/32 |
-| realworld-nest | no UI | 4/4 | 3/3 |
+## Docs
 
-Precision and recall are 100% in every cell (scores from 2026-11-01). These are small apps; expect lower
-numbers on large ones.
-
-Known limits:
-
-- Class components and Redux are followed at `param`: lifecycle methods and `render`, `this.handleX` handlers,
-  `this.props.onX()` when the JSX passes a function, `connect(mapState, mapDispatch)`, `dispatch(thunk())`,
-  `createAsyncThunk` and RTK Query `createApi` endpoints (with `fetchBaseQuery`) and their generated hooks.
-  RTK Query `injectEndpoints` and custom `baseQuery` functions are not read. In realworld, 21 of the 22 UI
-  calls are now reached from a page; the last one (deleting a comment) is more than 6 calls below its page.
-- A method call on an object whose class codeloom cannot see (for example, one passed in as a parameter) is
-  linked only when exactly one method in the repo has that name, and then only as a `guess`. Common
-  built-in and ORM method names (`map`, `then`, `create`, `save`, …) are never guessed.
-- Tested on a real two-repo app (a React UI and an AdonisJS API, about 3,000 files): about 120 UI → API links
-  were found and all checked links were right, but some UI calls still have no page (v0.2a now follows a
-  handler passed as a plain function argument). Calls to a backend that is not in the workspace show as calls
-  to other services only when your repos declare an `apiBase` (or the service is listed under `external`);
-  otherwise they still show as UI calls that match no route.
-- A component reused for "create" and "edit" can link its edit path to the create call (marked `param`).
-- When two routes match a call equally well, the one with a fixed segment (not a parameter) at the first
-  place where they differ wins, at `param` (`GET /invoices/summary` picks `/invoices/:id` over
-  `/:kind/summary`). A real tie (for example `/items/:id` and `/items/:slug`) stays a `guess`.
-
-## Not yet
-
-- Journeys only for JavaScript and TypeScript code.
-- Queues: RabbitMQ (amqplib) only.
-- The dashboard writes only your own progress (seen, toured); journeys, tours, spec links and views come
-  from your agent. Team-shared progress comes later.
-- Ticket text is never fetched; views use only the fixed widget set (no custom panels or HTML).
-
-## Credits
-
-The file map, tree-sitter parsing and layer detection come from
-[Understand Anything](https://github.com/Egonex-AI/Understand-Anything) (MIT), vendored in `packages/core`.
-Its licence notice is in [NOTICE](NOTICE).
+- [Working with your agent](docs/guide.md): tours, progress, specs and views
+- [Reference](docs/reference.md): commands, MCP tools and prompts, the workspace file, the trace check
+- [How it works](docs/how-it-works.md): the linker, confidence levels, `graph.json`, accuracy and limits
+- [Dashboard](docs/dashboard.md): every screen
+- [Changelog](CHANGELOG.md)
 
 ## Contributing
 
-Bug reports, framework requests and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-repo layout and the checks a change must pass, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Bug reports, framework requests and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and
+the [code of conduct](CODE_OF_CONDUCT.md). Please report security problems privately, as described in
+[SECURITY.md](SECURITY.md).
 
-## Security
+## Credits and licence
 
-Please report security problems privately, not in a public issue. See [SECURITY.md](SECURITY.md).
-
-## Versioning
-
-codeloom follows [Semantic Versioning](https://semver.org). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
-
-## Licence
-
-[MIT](LICENSE)
+The file map, tree-sitter parsing and layer detection come from
+[Understand Anything](https://github.com/Egonex-AI/Understand-Anything) (MIT), vendored in `packages/core`
+([NOTICE](NOTICE)). codeloom is [MIT](LICENSE) licensed and follows [Semantic Versioning](https://semver.org).
