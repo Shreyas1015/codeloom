@@ -438,12 +438,164 @@ export interface ProgressWriteResponse {
   journey: JourneyProgressView;
 }
 
-// ---- /api/events (SSE) --------------------------------------------------------------------------
+// ---- /api/specs, /api/views, /api/docs (v0.3, read only) ---------------------------------------
+
+/** linked: ≥ 1 saved link. candidates: not checked yet, and codeloom found candidates. none: checked
+ * with no links ("no spec"), or not checked and nothing found (`checked` tells them apart). */
+export type SpecState = "linked" | "candidates" | "none";
+
+/** A confirmed link (written by the save_spec_links MCP tool). `ref`: "repo:path" for a doc, the key for a ticket. */
+export interface SpecLink {
+  kind: "doc" | "ticket";
+  ref: string;
+  reason: string;
+  savedAt: string;
+}
+
+export interface SpecCoverage {
+  total: number;
+  linked: number;
+  candidates: number;
+  none: number;
+  checked: number;
+}
+
+/** One row of GET /api/specs (list_specs). */
+export interface JourneySpecRow {
+  journeyId: string;
+  name: string;
+  area: string;
+  repos: string[];
+  state: SpecState;
+  checked: boolean;
+  /** Set when checked. */
+  checkedAt?: string;
+  links: SpecLink[];
+  /** How many candidates wait (docs and tickets). */
+  candidates: { docs: number; tickets: number };
+}
+
+/** GET /api/specs[?repo=&area=] — list_specs: every journey's spec state, coverage totals, and the saved
+ * links of journeys that no longer exist (`olderJourneys`). Unknown repo → 404; a broken specs.json → 409 bad-data. */
+export interface SpecsResponse {
+  journeys: JourneySpecRow[];
+  totals: { all: SpecCoverage; byRepo: Record<string, SpecCoverage>; byArea: Record<string, SpecCoverage> };
+  olderJourneys: Array<{ journeyId: string; checkedAt: string; links: SpecLink[] }>;
+  /** false: no spec-candidates.json yet (run codeloom index). */
+  candidatesIndexed: boolean;
+}
+
+export type SpecDocHitKind = "route" | "page" | "table" | "queue" | "symbol";
+
+/** A doc candidate: `ref` "repo:path", split into `repo` and `file` (open it with /api/docs). */
+export interface SpecDocCandidate {
+  ref: string;
+  repo: string;
+  file: string;
+  /** Weighted hits (route 3, page 3, table 2, queue 2, symbol 1): only for ordering. */
+  score: number;
+  /** Total hits. */
+  count: number;
+  /** The first 5 hits; `file` is the doc's path in its repo. */
+  evidence: Array<{ kind: SpecDocHitKind; term: string; file: string; line: number }>;
+}
+
+/** A ticket candidate: a key found in the commits that touched the journey's files. */
+export interface SpecTicketCandidate {
+  ref: string;
+  /** Distinct commits. */
+  score: number;
+  count: number;
+  /** The first 5 commits: `file` is the journey file it changed, in `repo`. */
+  evidence: Array<{ repo: string; commit: string; file: string; subject: string }>;
+}
+
+/** GET /api/specs/:journeyId — one journey's spec state, saved links and full candidates (best first).
+ * A journey that is gone but still has saved links: `journeyExists` false, `journey` null, no candidates.
+ * Neither in journeys.json nor in specs.json → 404; a malformed id → 400. */
+export interface JourneySpecsResponse {
+  journeyId: string;
+  journeyExists: boolean;
+  journey: { id: string; name: string; area: string } | null;
+  state: SpecState;
+  checked: boolean;
+  checkedAt: string | null;
+  links: SpecLink[];
+  candidates: { docs: SpecDocCandidate[]; tickets: SpecTicketCandidate[] };
+  /** false: no spec-candidates.json yet (run codeloom index). */
+  candidatesIndexed: boolean;
+}
+
+export type ViewCountKey = "files" | "pages" | "routes" | "tables" | "queues" | "journeys" | "understood" | "specLinked";
+export type ViewLevel = ProgressLevel | "rewalk";
+
+/** The fixed widget set (store/views.ts WidgetSchema). */
+export type Widget =
+  | { type: "counts"; show?: ViewCountKey[] }
+  | {
+      type: "journeys";
+      title?: string;
+      filter?: { area?: string; repo?: string; spec?: SpecState; level?: ViewLevel; confidence?: Confidence; complete?: boolean };
+      sort?: "name" | "area" | "stops" | "confidence" | "progress" | "spec";
+      limit?: number;
+    }
+  | { type: "map"; repo: string; overlay?: "layer" | `journey:${string}`; dir?: string }
+  | { type: "progress"; by?: "repo" | "area" }
+  | { type: "checks"; limit?: number }
+  | { type: "specCoverage"; by?: "repo" | "area" }
+  /** Markdown, rendered without raw HTML. */
+  | { type: "note"; markdown: string };
+
+export type WidgetType = Widget["type"];
+
+/** `.codeloom/views/<id>.json`. */
+export interface ViewFile {
+  version: 1;
+  id: string;
+  title: string;
+  description?: string;
+  widgets: Widget[];
+}
+
+/** One entry of GET /api/views: a readable view, or the error that makes its file unreadable. `url` is
+ * where the dashboard shows it ("/" for home, else /views/<id>). */
+export type ViewSummary =
+  | { id: string; url: string; title: string; description?: string; widgets: number }
+  | { id: string; url: string; error: string };
+
+/** GET /api/views — every view file, sorted by id. */
+export interface ViewsResponse {
+  views: ViewSummary[];
+}
+
+/** GET /api/views/:id — always 200 for a view file that exists: `view` when it is valid; `view: null` and
+ * `error` (with a codeloom doctor hint) when it is broken, so the UI shows an error card. `home` with no
+ * file: `view: null` and no `error` (render the built-in Home). Another missing view → 404; a bad id → 400. */
+export interface ViewResponse {
+  id: string;
+  url: string;
+  view: ViewFile | null;
+  error?: string;
+}
+
+/** GET /api/docs?repo=&file= — a doc's whole text (≤ 512 KB, not binary). Path safety as /api/code:
+ * outside the repo / absolute → 400; git internals, .env and .codeloom files → 400; missing → 404. */
+export interface DocResponse {
+  repo: string;
+  file: string;
+  text: string;
+  /** Number of lines. */
+  lines: number;
+  bytes: number;
+}
+
+// ---- /api/events (SSE)--------------------------------------------------------------------------
 
 /** What changed: the workspace file, the workspace's chains or journeys, one repo's map files
- * (graph, endpoints, summaries, config: `repo:<id>`), the workspace's tours (`.codeloom/tours/`), or
- * your progress file for this workspace (`progress`). */
-export type ChangeKey = "workspace" | "chains" | "journeys" | "tours" | "progress" | `repo:${string}`;
+ * (graph, endpoints, summaries, config: `repo:<id>`), the workspace's tours (`.codeloom/tours/`),
+ * your progress file for this workspace (`progress`), the spec candidates or confirmed spec links
+ * (`.codeloom/spec-candidates.json`, `.codeloom/specs.json`: `specs`), or the views (`.codeloom/views/`). */
+export type ChangeKey = "workspace" | "chains" | "journeys" | "tours" | "progress" | "specs" | "views" | `repo:${string}`;
 
 /** GET /api/events — a `text/event-stream`: `event: change` frames whose data is this (keys sorted), and
  * a `: ping` comment every 25 s. */

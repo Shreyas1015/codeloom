@@ -14,6 +14,11 @@ import { journeyPlacedStops, markSeen, markToured, progressView, TOUR_PHASES } f
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
 import { CODELOOM_DIR } from "../store/paths.js";
 import { JOURNEY_ID_RE, readTour, tourRemovedStops, tourStaleStops } from "../store/tours.js";
+import { listSpecs } from "../mcp/tools/specs.js";
+import { DOCTOR_HINT } from "../store/json.js";
+import { readSpecCandidates } from "../store/spec-candidates.js";
+import { readSpecs, specState } from "../store/specs.js";
+import { HOME_VIEW_ID, listViews, readView, VIEW_ID_RE, VIEWS_DIR, viewUrl } from "../store/views.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
 import { loadWorkspace } from "../workspace/repos.js";
@@ -22,6 +27,13 @@ import type {
   ChainsResult,
   CodeResponse,
   Confidence,
+  DocResponse,
+  JourneySpecsResponse,
+  SpecsResponse,
+  ViewFile,
+  ViewResponse,
+  ViewsResponse,
+  ViewSummary,
   ExternalCallView,
   GraphEdgeAgg,
   GraphFile,
@@ -365,13 +377,13 @@ export function sliceCode(file: string, source: string, start: number, end: numb
   return { file, startLine: start, endLine, text, truncated: cut || endLine < wantEnd };
 }
 
-/** /api/code: a slice of one file, resolved inside the repo root (the explain_context check, plus a
- * realpath check so a symlink cannot lead outside). Escape / absolute path → 400; missing → 404. */
-export function readCode(start: string, url: URL): CodeResponse {
+/** The real path of `file` (a `file` query param) inside repo `repo` (a `repo` query param), for
+ * /api/code and /api/docs: resolved inside the repo root (the explain_context check, plus a realpath check
+ * so a symlink cannot lead outside), never git internals, .env files or codeloom's own folder. Escape /
+ * absolute path / not a file → 400; unknown repo or missing file → 404. */
+function repoFile(start: string, url: URL): { repoId: string; file: string; real: string; size: number } {
   const repoId = requiredParam(url, "repo");
   const file = requiredParam(url, "file");
-  const from = intParam(url, "start", 1, Number.MAX_SAFE_INTEGER) ?? 1;
-  const to = intParam(url, "end", 1, Number.MAX_SAFE_INTEGER);
   const ws = loadWorkspace(start);
   const ref = ws.repos.find((r) => r.id === repoId);
   if (!ref) throw new HttpError(404, `Unknown repo "${repoId}". Repos in this workspace: ${ws.repos.map((r) => r.id).join(", ")}.`);
@@ -402,8 +414,106 @@ export function readCode(start: string, url: URL): CodeResponse {
   if (hidden(realpathSync(root), real)) throw refused;
   const st = statSync(real);
   if (!st.isFile()) throw new HttpError(400, `Bad file "${file}": not a file.`);
-  if (st.size > CODE_MAX_BYTES) throw new HttpError(400, `Bad file "${file}": too large to show (${st.size} bytes).`);
+  return { repoId, file, real, size: st.size };
+}
+
+/** /api/code: a slice of one file (path safety: repoFile). */
+export function readCode(start: string, url: URL): CodeResponse {
+  const from = intParam(url, "start", 1, Number.MAX_SAFE_INTEGER) ?? 1;
+  const to = intParam(url, "end", 1, Number.MAX_SAFE_INTEGER);
+  const { file, real, size } = repoFile(start, url);
+  if (size > CODE_MAX_BYTES) throw new HttpError(400, `Bad file "${file}": too large to show (${size} bytes).`);
   return sliceCode(file, readFileSync(real, "utf8"), from, to);
+}
+
+/** Docs bigger than this are not shown (the indexer does not scan them for spec candidates either). */
+export const DOC_MAX_BYTES = 512 * 1024;
+
+/** /api/docs: a doc's whole text, for a linked or candidate spec doc (path safety: repoFile, the same as
+ * /api/code). Over 512 KB or binary (a NUL byte) → 400. */
+export function readDoc(start: string, url: URL): DocResponse {
+  const { repoId, file, real, size } = repoFile(start, url);
+  if (size > DOC_MAX_BYTES) throw new HttpError(400, `Bad file "${file}": too large to show as a doc (${size} bytes; at most ${DOC_MAX_BYTES}).`);
+  const buf = readFileSync(real);
+  if (buf.includes(0)) throw new HttpError(400, `Bad file "${file}": not a text file.`);
+  const text = buf.toString("utf8");
+  const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+  return { repo: repoId, file, text, lines, bytes: size };
+}
+
+// ---- /api/specs and /api/views (v0.3; read only: specs.json and views are written only through MCP) ----
+
+function specsFor(start: string, url: URL): SpecsResponse {
+  const args: { repo?: string; area?: string } = {};
+  const repo = strParam(url, "repo");
+  const area = strParam(url, "area");
+  if (repo !== undefined) args.repo = repo;
+  if (area !== undefined) args.area = area;
+  return as<SpecsResponse>(listSpecs(start, args));
+}
+
+/** GET /api/specs/:journeyId: the saved links and every candidate (no snippets: the Specs tab opens a doc
+ * with /api/docs). A journey that is gone but has saved links still answers (journeyExists false). */
+export function journeySpecs(start: string, journeyId: string): JourneySpecsResponse {
+  const id = parseBody(JourneyIdSchema, journeyId, "journey id");
+  const state = loadMapState(start);
+  const journey = state.journeys.find((j) => j.id === id);
+  const entry = readSpecs(state.ws.root).journeys[id];
+  if (!journey && !entry) throw new HttpError(404, `Unknown journey "${id}".`);
+  const file = readSpecCandidates(state.ws.root);
+  const cands = journey ? file?.journeys[id] : undefined;
+  const { state: spec, checked } = specState(entry, cands);
+  return {
+    journeyId: id,
+    journeyExists: journey !== undefined,
+    journey: journey ? { id: journey.id, name: journey.name, area: journey.area } : null,
+    state: spec,
+    checked,
+    checkedAt: entry?.checkedAt ?? null,
+    links: entry?.links ?? [],
+    candidates: {
+      docs: (cands?.docs ?? []).map((d) => {
+        const at = d.ref.indexOf(":");
+        return { ref: d.ref, repo: at < 0 ? "" : d.ref.slice(0, at), file: d.ref.slice(at + 1), score: d.score, count: d.count, evidence: d.evidence };
+      }),
+      tickets: cands?.tickets ?? [],
+    },
+    candidatesIndexed: file !== null,
+  };
+}
+
+/** One view file read and checked: the view, or why it cannot be shown (a bad file, a bad widget, or an
+ * id that does not match its file name). Never throws for a broken file. */
+function viewOrError(root: string, id: string): { view: ViewFile | null; error?: string } {
+  try {
+    const v = readView(root, id);
+    if (v && v.id !== id) return { view: null, error: `The view file ${VIEWS_DIR}/${id}.json has the id "${v.id}"; a view's id must match its file name.` };
+    return { view: v as ViewFile | null };
+  } catch (err) {
+    return { view: null, error: (err instanceof Error ? err.message : String(err)).split("\n").filter((l) => l !== DOCTOR_HINT).join("\n") };
+  }
+}
+
+function viewsFor(start: string): ViewsResponse {
+  const { root } = loadWorkspace(start);
+  return {
+    views: listViews(root).map((id): ViewSummary => {
+      const { view, error } = viewOrError(root, id);
+      if (!view) return { id, url: viewUrl(id), error: error ?? "The view file is missing." };
+      return { id, url: viewUrl(id), title: view.title, ...(view.description !== undefined ? { description: view.description } : {}), widgets: view.widgets.length };
+    }),
+  };
+}
+
+/** GET /api/views/:id: 200 with the view, or 200 with `{ view: null, error }` for a broken file (the UI
+ * shows an error card; it never breaks the dashboard). Missing home → view null (the built-in Home). */
+export function viewFor(start: string, id: string): ViewResponse {
+  if (!VIEW_ID_RE.test(id)) throw new HttpError(400, `Bad view id "${id}": a view id is 1 to 40 characters: a-z, 0-9 and -.`);
+  const { root } = loadWorkspace(start);
+  const { view, error } = viewOrError(root, id);
+  if (error !== undefined) return { id, url: viewUrl(id), view: null, error: `${error}\n${DOCTOR_HINT}` };
+  if (!view && id !== HOME_VIEW_ID) throw new HttpError(404, `Unknown view "${id}". Views: ${listViews(root).join(", ") || "none"}.`);
+  return { id, url: viewUrl(id), view };
 }
 
 // ---- route table ----------------------------------------------------------------------------------
@@ -610,6 +720,11 @@ export const API_ROUTES: ApiRoute[] = [
   { path: "/api/code", handler: ({ start, url }) => readCode(start, url) },
   { path: "/api/progress", handler: ({ start }): ProgressResponse => progressView(loadMapState(start)) },
   { path: "/api/tours/:journeyId", handler: ({ start, params }) => tourFor(start, params.journeyId!) },
+  { path: "/api/specs", handler: ({ start, url }) => specsFor(start, url) },
+  { path: "/api/specs/:journeyId", handler: ({ start, params }) => journeySpecs(start, params.journeyId!) },
+  { path: "/api/views", handler: ({ start }) => viewsFor(start) },
+  { path: "/api/views/:id", handler: ({ start, params }) => viewFor(start, params.id!) },
+  { path: "/api/docs", handler: ({ start, url }) => readDoc(start, url) },
   // The only writes anywhere: personal progress (never journeys, tours or "understood").
   { path: "/api/progress/seen", method: "POST", handler: ({ start, body }) => postSeen(start, body) },
   { path: "/api/progress/toured", method: "POST", handler: ({ start, body }) => postToured(start, body) },

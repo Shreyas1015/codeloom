@@ -210,6 +210,55 @@ describe("watchMap", () => {
     expect(calls).toEqual([["tours"]]);
   });
 
+  // v0.3: spec candidates (codeloom index) and confirmed links (save_spec_links) → [specs]; views → [views].
+  it("spec-candidates.json and specs.json → [specs]", async () => {
+    const root = makeWorkspace();
+    const { calls } = await collect(root);
+    writeJsonAtomic(join(root, ".codeloom", "spec-candidates.json"), { version: 1, journeys: {} });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["specs"]]);
+    calls.length = 0;
+    writeJsonAtomic(join(root, ".codeloom", "specs.json"), { version: 1, journeys: {} });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["specs"]]);
+  });
+
+  it("specs files in a single-repo workspace (repo at the root) → [specs], not repo:<id>", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-events-one-"));
+    mkdirSync(join(root, ".codeloom"));
+    writeFileSync(join(root, "codeloom.workspace.json"), wsFile([{ id: "solo", path: "." }]));
+    const { calls } = await collect(root);
+    writeJsonAtomic(join(root, ".codeloom", "specs.json"), { version: 1, journeys: {} });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["specs"]]);
+  });
+
+  it("a view written to .codeloom/views/ → [views] (temp files ignored); the folder appearing later is picked up", async () => {
+    const root = makeWorkspace();
+    const { calls } = await collect(root);
+    writeJsonAtomic(join(root, ".codeloom", "views", "home.json"), { version: 1 });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls.flat()).toContain("views");
+    expect(calls.flat()).not.toContain("tours");
+    calls.length = 0;
+    writeFileSync(join(root, ".codeloom", "views", "audit.json.1.2.tmp"), "{}");
+    await sleep(DEBOUNCE * 4);
+    expect(calls).toEqual([]);
+    writeJsonAtomic(join(root, ".codeloom", "views", "audit.json"), { version: 1 });
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["views"]]);
+    calls.length = 0;
+    rmSync(join(root, ".codeloom", "views", "audit.json"));
+    await waitFor(calls);
+    await sleep(DEBOUNCE * 3);
+    expect(calls).toEqual([["views"]]);
+  });
+
   describe("progress (the personal file under CODELOOM_HOME)", () => {
     const saved = process.env.CODELOOM_HOME;
     afterEach(() => {

@@ -16,13 +16,19 @@ const ofRepo = (name: string, repo: string) => (key: QueryKey) => key[0] === nam
  * - tours → tour/*, journey/*
  * - progress → progress, overview, journeys
  * - chains, journeys and repo:<id> also → progress, tour/* (a journey's stops and their file hashes may have
- *   moved, which changes needs-re-walk, stale and removed stops) */
+ *   moved, which changes needs-re-walk, stale and removed stops)
+ * - specs (spec-candidates.json, specs.json) → specs/*, spec/*; chains and journeys also → specs/*, spec/*
+ *   (the journey list and each journey's repos)
+ * - views (.codeloom/views/) → views, view/*
+ * - repo:<id> also → doc/<id>/* (like code/<id>/*) */
 export function invalidationFilters(keys: readonly ChangeKey[]): Invalidation {
   if (keys.includes("workspace")) return "all";
   const preds: Array<(key: QueryKey) => boolean> = [];
   if (keys.includes("chains") || keys.includes("journeys")) preds.push(named("overview"), named("journeys"), named("journey"), named("graph"), named("node"), named("search"));
   if (keys.includes("tours")) preds.push(named("tour"), named("journey"));
   if (keys.includes("progress")) preds.push(named("progress"), named("overview"), named("journeys"));
+  if (keys.some((k) => k === "specs" || k === "chains" || k === "journeys")) preds.push(named("specs"), named("spec"));
+  if (keys.includes("views")) preds.push(named("views"), named("view"));
   if (keys.some((k) => k === "chains" || k === "journeys" || k.startsWith("repo:"))) preds.push(named("progress"), named("tour"));
   for (const k of keys) {
     if (!k.startsWith("repo:")) continue;
@@ -35,6 +41,7 @@ export function invalidationFilters(keys: readonly ChangeKey[]): Invalidation {
       ofRepo("layers", repo),
       (key) => key[0] === "layers" && key[1] === null,
       ofRepo("code", repo),
+      ofRepo("doc", repo),
       named("search"),
     );
   }

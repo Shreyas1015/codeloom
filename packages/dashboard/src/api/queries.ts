@@ -2,8 +2,10 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { apiGet, apiPost } from "./client.js";
 import type {
   CodeResponse,
+  DocResponse,
   GraphLevel,
   JourneyResult,
+  JourneySpecsResponse,
   JourneysResponse,
   LayersResult,
   NeighborsResult,
@@ -13,8 +15,11 @@ import type {
   ProgressWriteResponse,
   SearchKind,
   SearchResult,
+  SpecsResponse,
   TouredRequest,
   TourResponse,
+  ViewResponse,
+  ViewsResponse,
 } from "./types.js";
 
 export type NeighborDirection = "in" | "out" | "both";
@@ -33,6 +38,11 @@ export const queryKeys = {
   search: (q: string, kinds: SearchKind[], repo: string | null) => ["search", q, kinds, repo] as const,
   progress: () => ["progress"] as const,
   tour: (journeyId: string) => ["tour", journeyId] as const,
+  specs: (repo: string | null, area: string | null) => ["specs", repo, area] as const,
+  spec: (journeyId: string) => ["spec", journeyId] as const,
+  views: () => ["views"] as const,
+  view: (id: string) => ["view", id] as const,
+  doc: (repo: string, file: string) => ["doc", repo, file] as const,
 };
 
 const enc = encodeURIComponent;
@@ -114,7 +124,49 @@ export function useTour(journeyId: string | undefined) {
   });
 }
 
-/** After a progress write: the screens that show levels refetch (the watcher would also say so, later). */
+/** Spec coverage: every journey's spec state (linked, candidates, none), links, candidate counts, totals,
+ * and the links of journeys that no longer exist. Optionally only one repo and/or area. Read only. */
+export function useSpecs(filter: { repo?: string; area?: string } = {}) {
+  return useQuery({
+    queryKey: queryKeys.specs(filter.repo ?? null, filter.area ?? null),
+    queryFn: () => apiGet<SpecsResponse>("/api/specs", { repo: filter.repo, area: filter.area }),
+  });
+}
+
+/** One journey's saved spec links and every candidate doc and ticket. Disabled until `journeyId` is known. */
+export function useJourneySpecs(journeyId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.spec(journeyId ?? ""),
+    queryFn: () => apiGet<JourneySpecsResponse>(`/api/specs/${enc(journeyId!)}`),
+    enabled: !!journeyId,
+  });
+}
+
+/** Every saved view (title, widget count, url), or the error that makes its file unreadable. */
+export function useViews() {
+  return useQuery({ queryKey: queryKeys.views(), queryFn: () => apiGet<ViewsResponse>("/api/views") });
+}
+
+/** One view: `view`, or `view: null` with `error` for a broken file (show an error card). For `home`
+ * with no file, `view: null` and no error: render the built-in Home. Disabled until `id` is known. */
+export function useView(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.view(id ?? ""),
+    queryFn: () => apiGet<ViewResponse>(`/api/views/${enc(id!)}`),
+    enabled: !!id,
+  });
+}
+
+/** A doc's whole text (a linked or candidate spec doc), read only. Disabled until `repo` and `file` are known. */
+export function useDoc(repo: string | undefined, file: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.doc(repo ?? "", file ?? ""),
+    queryFn: () => apiGet<DocResponse>("/api/docs", { repo: repo!, file: file! }),
+    enabled: !!repo && !!file,
+  });
+}
+
+/** After a progress write:the screens that show levels refetch (the watcher would also say so, later). */
 function useProgressWrite<V>(post: (v: V) => Promise<ProgressWriteResponse>) {
   const queryClient = useQueryClient();
   return useMutation({

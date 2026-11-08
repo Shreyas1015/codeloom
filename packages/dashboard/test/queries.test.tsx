@@ -16,7 +16,12 @@ import {
   useOverview,
   useProgress,
   useSearch,
+  useSpecs,
   useTour,
+  useView,
+  useViews,
+  useDoc,
+  useJourneySpecs,
 } from "@/api/queries";
 
 function stubFetch(body: unknown = { ok: true }) {
@@ -183,5 +188,61 @@ describe("tours and progress hooks", () => {
     expect(JSON.parse(String(fetch.mock.calls[1]![1]!.body))).toEqual({ journey: "j_000000000001", phases: ["flow", "data-journey", "file-notes", "check"] });
     const stale = queryClient.getQueryCache().getAll().filter((q) => q.state.isInvalidated).map((q) => String(q.queryKey[0])).sort();
     expect(stale).toEqual(["journeys", "overview", "progress"]);
+  });
+});
+
+describe("specs, views and docs hooks (v0.3, read only)", () => {
+  it("useSpecs → /api/specs, key [specs, null, null]; with repo and area → ?repo=&area=", async () => {
+    const r = await run(() => useSpecs(), { journeys: [] });
+    expect(r.url).toBe("/api/specs");
+    expect(r.keys).toEqual([["specs", null, null]]);
+    const f = await run(() => useSpecs({ repo: "api", area: "customers" }), { journeys: [] });
+    expect(f.url).toBe("/api/specs?repo=api&area=customers");
+    expect(f.keys).toEqual([["specs", "api", "customers"]]);
+  });
+
+  it("useJourneySpecs(id) → /api/specs/<encoded id>, key [spec, id]", async () => {
+    const r = await run(() => useJourneySpecs("j_00000000c0de"), { journeyId: "j_00000000c0de" });
+    expect(r.url).toBe("/api/specs/j_00000000c0de");
+    expect(r.keys).toEqual([["spec", "j_00000000c0de"]]);
+  });
+
+  it("useViews → /api/views, key [views]; useView(id) → /api/views/<id>, key [view, id]", async () => {
+    const all = await run(() => useViews(), { views: [] });
+    expect(all.url).toBe("/api/views");
+    expect(all.keys).toEqual([["views"]]);
+    const one = await run(() => useView("no-spec-audit"), { id: "no-spec-audit", url: "/views/no-spec-audit", view: null });
+    expect(one.url).toBe("/api/views/no-spec-audit");
+    expect(one.keys).toEqual([["view", "no-spec-audit"]]);
+  });
+
+  it("useDoc(repo, file) → /api/docs?repo=&file=, key [doc, repo, file]", async () => {
+    const r = await run(() => useDoc("api", "docs/customers.md"), { text: "# Customers" });
+    expect(r.url).toBe("/api/docs?repo=api&file=docs%2Fcustomers.md");
+    expect(r.keys).toEqual([["doc", "api", "docs/customers.md"]]);
+  });
+
+  it("with a missing id, repo or file they do not fetch", async () => {
+    const fetch = stubFetch();
+    const { wrapper } = setup();
+    renderHook(
+      () => {
+        useJourneySpecs(undefined);
+        useView(undefined);
+        useDoc(undefined, "a.md");
+        useDoc("api", undefined);
+      },
+      { wrapper },
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("queryKeys builds the new keys (the repo right after the name)", () => {
+    expect(queryKeys.specs(null, null)).toEqual(["specs", null, null]);
+    expect(queryKeys.spec("j")).toEqual(["spec", "j"]);
+    expect(queryKeys.views()).toEqual(["views"]);
+    expect(queryKeys.view("home")).toEqual(["view", "home"]);
+    expect(queryKeys.doc("api", "d.md")).toEqual(["doc", "api", "d.md"]);
   });
 });

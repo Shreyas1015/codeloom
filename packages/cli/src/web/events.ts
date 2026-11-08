@@ -2,6 +2,8 @@ import { existsSync, type FSWatcher, readFileSync, watch as fsWatch } from "node
 import { basename, dirname, join, resolve } from "node:path";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { progressPath } from "../store/progress.js";
+import { SPECS_FILE } from "../store/specs.js";
+import { VIEWS_DIR } from "../store/views.js";
 import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
 import { TOURS_DIR } from "../store/tours.js";
 import { compare } from "../util.js";
@@ -78,7 +80,8 @@ function readRepos(start: string, previous: WatchedWorkspace | null): WatchedWor
 
 /** Watch a workspace's map files and call `onChange` with the sorted set of changed keys, once per burst
  * (debounced). Watches the workspace root folder (for the workspace file and its .codeloom appearing), the
- * root .codeloom (chains.json → chains, journeys.json → journeys), its tours/ folder (→ tours), this
+ * root .codeloom (chains.json → chains, journeys.json → journeys, spec-candidates.json and specs.json → specs),
+ * its tours/ folder (→ tours) and views/ folder (→ views), this
  * workspace's progress file under CODELOOM_HOME or ~/.codeloom (→ progress) and, for each repo, its folder (for
  * .codeloom appearing) and its .codeloom (any map file → repo:<id>; fingerprints.json, rewritten by every
  * re-index → progress + tours). *.tmp files are ignored. A workspace file change re-reads the repo list and re-arms the watchers. Never reads the map
@@ -128,7 +131,7 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
     const rootRepo = repos.find((r) => resolve(root, r.path) === root);
     const want = new Map<string, Spec>();
 
-    const rootDirKeys = (): ChangeKey[] => ["chains", "journeys", "tours", ...(rootRepo ? [`repo:${rootRepo.id}` as ChangeKey] : [])];
+    const rootDirKeys = (): ChangeKey[] => ["chains", "journeys", "specs", "tours", "views", ...(rootRepo ? [`repo:${rootRepo.id}` as ChangeKey] : [])];
     want.set(root, {
       sig: `root:${rootRepo?.id ?? ""}`,
       onName: (name) => {
@@ -152,7 +155,12 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
           sync();
           return emit(["tours"]);
         }
-        if (name === FILES.chains) emit(["chains"]);
+        if (name === VIEWS_DIR) {
+          sync();
+          return emit(["views"]);
+        }
+        if (name === FILES.specCandidates || name === SPECS_FILE) emit(["specs"]);
+        else if (name === FILES.chains) emit(["chains"]);
         else if (name === FILES.journeys) emit(["journeys"]);
         else if (rootRepo) emit([`repo:${rootRepo.id}`]);
       },
@@ -161,6 +169,12 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
       sig: "tours",
       onName: (name) => {
         if (name === null || !ignored(name)) emit(["tours"]);
+      },
+    });
+    want.set(join(root, CODELOOM_DIR, VIEWS_DIR), {
+      sig: "views",
+      onName: (name) => {
+        if (name === null || !ignored(name)) emit(["views"]);
       },
     });
     // Personal progress lives outside the workspace (CODELOOM_HOME or ~/.codeloom): watch its folder for

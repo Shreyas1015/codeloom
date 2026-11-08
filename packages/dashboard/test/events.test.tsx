@@ -247,6 +247,58 @@ describe("tours and progress keys", () => {
   });
 });
 
+describe("specs, views and docs keys (v0.3)", () => {
+  const V3: QueryKey[] = [
+    ...KEYS,
+    ["progress"],
+    ["tour", "j_a"],
+    ["specs", null, null],
+    ["specs", "api", null],
+    ["spec", "j_a"],
+    ["spec", "j_c"],
+    ["views"],
+    ["view", "home"],
+    ["view", "audit"],
+    ["doc", "api", "docs/a.md"],
+    ["doc", "web", "README.md"],
+  ];
+
+  it("specs → every specs/* and spec/* (and nothing else)", () => {
+    const { es, invalidated } = setup(V3);
+    act(() => es().change(["specs"]));
+    expect(invalidated()).toEqual(str([["specs", null, null], ["specs", "api", null], ["spec", "j_a"], ["spec", "j_c"]]));
+  });
+
+  it("views → views and every view/* (and nothing else)", () => {
+    const { es, invalidated } = setup(V3);
+    act(() => es().change(["views"]));
+    expect(invalidated()).toEqual(str([["views"], ["view", "home"], ["view", "audit"]]));
+  });
+
+  it("journeys and chains also make specs stale (the journey list and their repos changed)", () => {
+    for (const key of ["journeys", "chains"]) {
+      const { es, invalidated } = setup(V3);
+      act(() => es().change([key]));
+      expect(invalidated(), key).toEqual(expect.arrayContaining(str([["specs", null, null], ["specs", "api", null], ["spec", "j_a"], ["spec", "j_c"]])));
+      expect(invalidated(), key).not.toContain(JSON.stringify(["views"]));
+    }
+  });
+
+  it("repo:<id> → that repo's docs (like its code), not other repos' docs", () => {
+    const { es, invalidated } = setup(V3);
+    act(() => es().change(["repo:api"]));
+    expect(invalidated()).toContain(JSON.stringify(["doc", "api", "docs/a.md"]));
+    expect(invalidated()).not.toContain(JSON.stringify(["doc", "web", "README.md"]));
+    expect(invalidated()).not.toContain(JSON.stringify(["views"]));
+  });
+
+  it("workspace → everything, specs, views and docs included", () => {
+    const { es, invalidated } = setup(V3);
+    act(() => es().change(["workspace"]));
+    expect(invalidated()).toEqual(str(V3));
+  });
+});
+
 describe("invalidationFilters", () => {
   it("maps workspace to everything", () => {
     expect(invalidationFilters(["workspace"])).toBe("all");
