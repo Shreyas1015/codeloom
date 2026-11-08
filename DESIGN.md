@@ -271,7 +271,14 @@ and give the full text as a tooltip.
   beside a 320px sticky stop inspector (from 1024px). Lanes share the width equally but never drop below 184px;
   below that the board scrolls sideways instead of cutting names. The Specs tab drops the inspector: the spec
   state and the match-specs command, linked docs and tickets with Claude's reason (or, before a check, the
-  candidates with their evidence), and an opened doc read-only in a sticky column beside the list.
+  candidates with their evidence), and an opened doc read-only in a sticky column beside the list. Doc names
+  are underlined at rest (a hairline underline that darkens on hover and stays dark while that doc is open);
+  an evidence row says only "line n", since its doc is named above it. Prose docs (`.md`, `.mdx`, `.txt`)
+  wrap in the viewer; code keeps its lines and scrolls sideways.
+- **Views:** the view's title as the nameplate, its description and where it is saved as captions, then its
+  widgets in order, 22px apart. A journeys widget about specs (filtered or sorted by spec) opens each journey
+  on its Specs tab. Home with a `home` view shows one quiet loading bar until it knows which layout to show,
+  never the built-in Home's skeleton first.
 - **Map:** toolbar (repo segmented buttons, Layers, journey overlay, search), then a canvas beside a 330px
   inspector. Each folder level opens at the largest zoom between 0.9x and 1.1x at which every card fits,
   top-aligned and centred; a level that is wider starts top-left at 0.9x and pans. Cards are 232px wide in
@@ -370,6 +377,10 @@ failure (oxblood). No border-left accent stripes.
   dashed oxblood edge on white ("No spec"). Not checked: slate on sage mist ("Spec not checked").
 - Shown only once the state is known: no placeholder while loading, and none when specs.json can't be read
   (the Specs tab and Progress say why in a dashed oxblood card with `codeloom doctor`).
+- **Failure cards** (a spec file, a view file or one widget that can't be read): a 12px white card with a
+  dashed oxblood edge, the failure in oxblood words, `codeloom doctor`, and codeloom's own message on sage
+  mist. Never oxblood text on the oxblood wash (4.3:1). A failure stays in its own place: the rest of the
+  screen renders.
 - The Spec coverage table uses the four badges as its column headers, so the header is the legend.
 
 ### Confidence Line

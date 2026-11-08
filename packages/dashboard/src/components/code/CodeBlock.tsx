@@ -28,11 +28,13 @@ export interface CodeBlockProps {
   lang?: BlockLang;
   /** Used for the label and, when `lang` is not given, to pick the language. */
   file?: string;
+  /** Wrap long lines instead of scrolling sideways: for prose (a markdown spec doc), not code. */
+  wrap?: boolean;
   className?: string;
 }
 
 /** Code with line numbers and a highlighted range. Shows plain text at once; Shiki colours arrive from a lazy chunk. */
-export function CodeBlock({ code, startLine = 1, highlight, lang, file, className }: CodeBlockProps) {
+export function CodeBlock({ code, startLine = 1, highlight, lang, file, wrap = false, className }: CodeBlockProps) {
   const resolved: BlockLang = lang ?? (file ? langForFile(file) : "text");
   const [tokens, setTokens] = useState<{ code: string; lang: BlockLang; lines: Token[][] } | null>(null);
 
@@ -59,12 +61,12 @@ export function CodeBlock({ code, startLine = 1, highlight, lang, file, classNam
   const width = String(endLine).length;
 
   return (
-    <section aria-label={label} data-slot="code-block" data-lang={resolved} data-highlighted={coloured ? "true" : "false"} className={cn("min-w-0", className)}>
+    <section aria-label={label} data-slot="code-block" data-lang={resolved} data-highlighted={coloured ? "true" : "false"} data-wrap={wrap ? "true" : undefined} className={cn("min-w-0", className)}>
       <pre
         tabIndex={0}
         className="overflow-x-auto rounded-lg border border-secondary bg-background py-2.5 font-mono text-xs leading-[1.65] text-foreground outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <code className="block min-w-max">
+        <code className={cn("block", !wrap && "min-w-max")}>
           {plain.map((text, i) => {
             const n = startLine + i;
             const on = highlight !== undefined && n >= highlight.from && n <= highlight.to;
@@ -83,7 +85,7 @@ export function CodeBlock({ code, startLine = 1, highlight, lang, file, classNam
                 >
                   {n}
                 </span>
-                <span data-slot="line-code" className="whitespace-pre">
+                <span data-slot="line-code" className={wrap ? "min-w-0 whitespace-pre-wrap break-words" : "whitespace-pre"}>
                   {coloured?.[i]
                     ? coloured[i]!.map((t, j) => (
                         <span key={j} data-token="" style={{ color: t.color, fontStyle: t.italic ? "italic" : undefined, fontWeight: t.bold ? 600 : undefined }}>

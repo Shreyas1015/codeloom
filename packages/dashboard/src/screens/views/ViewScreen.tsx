@@ -26,7 +26,7 @@ export function ViewBody({ view, home = false }: { view: ViewFile; home?: boolea
         <p className="text-[12.5px] text-muted-foreground">
           {home ? (
             <>
-              {workspace ? `${workspace} · ` : ""}a custom Home made by your agent. <code className="font-mono text-[11.5px]">codeloom views reset home</code> brings back the built-in one.
+              {workspace ? `${workspace} · a` : "A"} custom Home made by your agent. <code className="font-mono text-[11.5px]">codeloom views reset home</code> brings back the built-in one.
             </>
           ) : (
             <>
@@ -54,7 +54,7 @@ export function ViewBody({ view, home = false }: { view: ViewFile; home?: boolea
 export function ViewErrorCard({ id, error }: { id: string; error: string }) {
   const h = useId();
   return (
-    <section role="alert" aria-labelledby={h} className="flex max-w-[64ch] flex-col items-start gap-3 rounded-xl border border-destructive/40 bg-card px-6 py-5">
+    <section role="alert" aria-labelledby={h} className="flex max-w-[64ch] flex-col items-start gap-3 rounded-xl border border-dashed border-destructive bg-card px-6 py-5">
       <span aria-hidden className="grid size-10 place-items-center rounded-xl bg-destructive-soft text-destructive">
         <FileWarning className="size-5" />
       </span>

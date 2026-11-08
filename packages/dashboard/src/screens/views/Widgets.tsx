@@ -58,7 +58,7 @@ function Loading({ label, height = "h-24" }: { label: string; height?: string })
 function WidgetError({ error, what, file }: { error: Error; what: string; file: string }) {
   const bad = error instanceof MapStateError && error.code === "bad-data";
   return (
-    <div role="alert" className="flex flex-col items-start gap-2 rounded-xl border border-destructive/40 bg-destructive-soft px-5 py-4 text-[13.5px]">
+    <div role="alert" className="flex flex-col items-start gap-2 rounded-xl border border-dashed border-destructive bg-card px-5 py-4 text-[13.5px]">
       <b className="flex items-center gap-1.5 text-destructive">
         <FileWarning aria-hidden className="size-4 shrink-0" />
         {bad ? `${what} can't be read` : `${what} could not load`}
@@ -86,7 +86,7 @@ export class WidgetBoundary extends Component<{ children: ReactNode }, { error?:
   render() {
     if (this.state.error)
       return (
-        <p role="alert" className="flex items-center gap-1.5 rounded-xl border border-destructive/40 bg-destructive-soft px-5 py-4 text-[13.5px]">
+        <p role="alert" className="flex items-center gap-1.5 rounded-xl border border-dashed border-destructive bg-card px-5 py-4 text-[13.5px]">
           <TriangleAlert aria-hidden className="size-4 shrink-0 text-destructive" />
           This widget could not be shown: {this.state.error.message}
         </p>
@@ -192,7 +192,14 @@ function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
       ) : (
         <ul aria-label={title} className={cn(PANEL, "divide-y divide-border overflow-hidden")}>
           {shown.map((r) => (
-            <JourneyItem key={r.id} r={r} spec={specRows?.get(r.id)} level={levels ? (levels.get(r.id) ?? null) : undefined} />
+            <JourneyItem
+              key={r.id}
+              r={r}
+              spec={specRows?.get(r.id)}
+              level={levels ? (levels.get(r.id) ?? null) : undefined}
+              // a widget about specs opens each journey on its Specs tab
+              specsTab={!!widget.filter?.spec || widget.sort === "spec"}
+            />
           ))}
         </ul>
       )}
@@ -200,12 +207,13 @@ function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
   );
 }
 
-function JourneyItem({ r, spec, level }: { r: JourneyRow; spec?: JourneySpecRow; level?: JourneyProgressView | null }) {
+function JourneyItem({ r, spec, level, specsTab }: { r: JourneyRow; spec?: JourneySpecRow; level?: JourneyProgressView | null; specsTab: boolean }) {
   return (
     <li>
       <Link
         to="/journeys/$id"
         params={{ id: r.id }}
+        search={specsTab ? { tab: "specs" } : {}}
         className="flex flex-col gap-2 px-5 py-3 transition-colors outline-none hover:bg-muted/50 focus-visible:bg-accent-soft focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring md:grid md:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_120px] md:items-center md:gap-4.5"
       >
         <span className="flex min-w-0 flex-col">

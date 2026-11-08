@@ -228,6 +228,38 @@ describe("rail Views section", () => {
   });
 });
 
+describe("views design pass", () => {
+  it("a widget's data error is a dashed oxblood card on white, like every other failure card", async () => {
+    renderAt("/views/audit", {
+      "/api/views/audit": { body: ok("audit", [{ type: "progress" }]) },
+      "/api/progress": { status: 409, body: { error: "progress file broken", code: "bad-data" } },
+    });
+    const alert = await screen.findByRole("alert");
+    expect(alert.className).toMatch(/border-dashed/);
+    expect(alert.className).toMatch(/bg-card/);
+    expect(alert.className).not.toMatch(/bg-destructive-soft/);
+  });
+
+  it("a broken view file's card has a dashed oxblood edge", async () => {
+    renderAt("/views/broken", { "/api/views/broken": { body: { id: "broken", url: "/views/broken", view: null, error: "bad" } } });
+    const card = await screen.findByRole("alert");
+    expect(card.className).toMatch(/border-dashed/);
+  });
+
+  it("journey rows in a spec-filtered widget open the journey's Specs tab", async () => {
+    renderAt("/views/audit", { "/api/views/audit": { body: ok("audit", [{ type: "journeys", title: "No spec", filter: { spec: "none" } }]) } });
+    const list = await screen.findByRole("list", { name: "No spec" });
+    const link = await within(list).findByRole("link", { name: /Admin voids an invoice/ });
+    expect(link.getAttribute("href")).toMatch(/\/journeys\/j_void\?tab=specs$/);
+  });
+
+  it("the home view's caption reads as a sentence before the workspace name loads", async () => {
+    renderAt("/", { "/api/overview": "pending", "/api/views/home": { body: ok("home", [{ type: "note", markdown: "Hi." }], "Team home") } });
+    await screen.findByRole("heading", { level: 1, name: "Team home" });
+    expect(screen.getByText(/custom Home made by your agent/).textContent).toMatch(/^A custom Home/);
+  });
+});
+
 describe("Home and the home view", () => {
   it("renders the home view when it is valid", async () => {
     renderAt("/", { "/api/views/home": { body: ok("home", [{ type: "note", markdown: "Welcome to **demo-shop**." }], "Team home") } });

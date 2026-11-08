@@ -24,8 +24,11 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "n
 
 const H3 = "text-[15px] font-bold";
 const PANEL = "rounded-xl border border-border bg-card";
+// a doc name is a link to read it beside the list: underlined at rest (hairline), darker on hover
 const OPEN =
-  "rounded-sm text-left outline-offset-2 hover:underline underline-offset-3 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring";
+  "rounded-sm text-left underline decoration-border decoration-1 underline-offset-3 outline-offset-2 transition-colors hover:decoration-foreground motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-[current=true]:decoration-foreground aria-[current=true]:decoration-2";
+/** Prose docs wrap in the viewer; anything else keeps its lines. */
+const isProse = (file: string) => /\.(md|mdx|markdown|txt)$/i.test(file) || !/\.[a-z0-9]+$/i.test(file.split("/").pop() ?? "");
 
 const EVIDENCE_WORD: Record<SpecDocCandidate["evidence"][number]["kind"], string> = {
   route: "Route",
@@ -48,8 +51,8 @@ export function SpecsTab({ journeyId }: { journeyId: string }) {
     <div className={cn("grid items-start gap-5", open ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]" : "max-w-[86ch]")}>
       <div className="flex min-w-0 flex-col gap-5">
         <Summary s={data} />
-        {data.links.length > 0 ? <Linked links={data.links} onOpen={setOpen} /> : null}
-        {!data.checked ? <Candidates s={data} onOpen={setOpen} /> : null}
+        {data.links.length > 0 ? <Linked links={data.links} open={open} onOpen={setOpen} /> : null}
+        {!data.checked ? <Candidates s={data} open={open} onOpen={setOpen} /> : null}
       </div>
       {open ? <DocViewer doc={open} onClose={() => setOpen(null)} /> : null}
     </div>
@@ -60,7 +63,7 @@ function Summary({ s }: { s: JourneySpecsResponse }) {
   const mark = specMark(s);
   const found = s.candidates.docs.length + s.candidates.tickets.length;
   const text: Record<typeof mark, ReactNode> = {
-    linked: `Claude linked ${plural(s.links.length, "spec")}${s.checkedAt ? ` on ${day(s.checkedAt)}` : ""}. Each says why it fits.`,
+    linked: `Claude linked ${linkedWhat(s.links)}${s.checkedAt ? ` on ${day(s.checkedAt)}` : ""}. Each says why it fits.`,
     none: `Checked${s.checkedAt ? ` on ${day(s.checkedAt)}` : ""}: no doc or ticket describes this journey.`,
     candidates: `Not checked yet. codeloom found ${plural(s.candidates.docs.length, "doc")} and ${plural(s.candidates.tickets.length, "ticket")} that mention this journey's routes, pages, tables or code. Claude decides which really describe it.`,
     unchecked: s.candidatesIndexed
@@ -87,21 +90,33 @@ function Summary({ s }: { s: JourneySpecsResponse }) {
   );
 }
 
-function DocButton({ repo, file, line, onOpen, children }: OpenDoc & { onOpen: (d: OpenDoc) => void; children: ReactNode }) {
+/** "1 doc and 2 tickets": what Claude linked, by kind. */
+function linkedWhat(links: SpecLink[]): string {
+  const docs = links.filter((l) => l.kind === "doc").length;
+  const tickets = links.length - docs;
+  return [docs ? plural(docs, "doc") : "", tickets ? plural(tickets, "ticket") : ""].filter(Boolean).join(" and ");
+}
+
+type Opener = { open: OpenDoc | null; onOpen: (d: OpenDoc) => void };
+
+function DocButton({ repo, file, line, open, onOpen, children, className }: OpenDoc & Opener & { children: ReactNode; className?: string }) {
+  // the doc's own name is current while that doc is open; an evidence line is current while open at it
+  const current = !!open && open.repo === repo && open.file === file && (line === undefined || open.line === line);
   return (
     <button
       type="button"
+      aria-current={current ? "true" : undefined}
       aria-label={line === undefined ? `Open ${file}` : `Open ${file} at line ${line}`}
       title={`${repo}/${file}${line === undefined ? "" : `:${line}`}`}
       onClick={() => onOpen({ repo, file, ...(line === undefined ? {} : { line }) })}
-      className={OPEN}
+      className={cn(OPEN, className)}
     >
       {children}
     </button>
   );
 }
 
-function Linked({ links, onOpen }: { links: SpecLink[]; onOpen: (d: OpenDoc) => void }) {
+function Linked({ links, open, onOpen }: { links: SpecLink[] } & Opener) {
   const docs = links.filter((l) => l.kind === "doc");
   const tickets = links.filter((l) => l.kind === "ticket");
   return (
@@ -117,7 +132,7 @@ function Linked({ links, onOpen }: { links: SpecLink[]; onOpen: (d: OpenDoc) => 
               return (
                 <li key={l.ref} className="flex flex-col gap-1 px-4.5 py-3">
                   {ref ? (
-                    <DocButton repo={ref.repo} file={ref.file} onOpen={onOpen}>
+                    <DocButton repo={ref.repo} file={ref.file} open={open} onOpen={onOpen}>
                       <span className="flex items-start gap-1.5 font-mono text-[12.5px] font-semibold">
                         <FileText aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
                         <Breakable text={ref.file} />
@@ -153,7 +168,7 @@ function Linked({ links, onOpen }: { links: SpecLink[]; onOpen: (d: OpenDoc) => 
   );
 }
 
-function Candidates({ s, onOpen }: { s: JourneySpecsResponse; onOpen: (d: OpenDoc) => void }) {
+function Candidates({ s, open, onOpen }: { s: JourneySpecsResponse } & Opener) {
   const { docs, tickets } = s.candidates;
   if (docs.length + tickets.length === 0) return null;
   return (
@@ -165,7 +180,7 @@ function Candidates({ s, onOpen }: { s: JourneySpecsResponse; onOpen: (d: OpenDo
           </h3>
           <ul aria-label="Candidate docs" className={cn(PANEL, "divide-y divide-border")}>
             {docs.map((d) => (
-              <DocCandidate key={d.ref} d={d} onOpen={onOpen} />
+              <DocCandidate key={d.ref} d={d} open={open} onOpen={onOpen} />
             ))}
           </ul>
         </section>
@@ -186,12 +201,12 @@ function Candidates({ s, onOpen }: { s: JourneySpecsResponse; onOpen: (d: OpenDo
   );
 }
 
-function DocCandidate({ d, onOpen }: { d: SpecDocCandidate; onOpen: (doc: OpenDoc) => void }) {
+function DocCandidate({ d, open, onOpen }: { d: SpecDocCandidate } & Opener) {
   const more = d.count - d.evidence.length;
   return (
     <li className="flex flex-col gap-1.5 px-4.5 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-        <DocButton repo={d.repo} file={d.file} onOpen={onOpen}>
+        <DocButton repo={d.repo} file={d.file} open={open && open.line === undefined ? open : null} onOpen={onOpen}>
           <span className="flex items-start gap-1.5 font-mono text-[12.5px] font-semibold">
             <FileText aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
             <Breakable text={d.file} />
@@ -205,13 +220,11 @@ function DocCandidate({ d, onOpen }: { d: SpecDocCandidate; onOpen: (doc: OpenDo
         {d.evidence.map((e) => (
           <li key={`${e.kind}:${e.term}:${e.line}`} className="grid grid-cols-[76px_minmax(0,1fr)_auto] items-baseline gap-x-3 text-[12.5px]">
             <span className="text-muted-foreground">{EVIDENCE_WORD[e.kind]}</span>
-            <span className="truncate font-mono text-[11.5px]" title={e.term}>
-              {e.term}
+            <span className="min-w-0 font-mono text-[11.5px]" title={e.term}>
+              <Breakable text={e.term} />
             </span>
-            <DocButton repo={d.repo} file={e.file} line={e.line} onOpen={onOpen}>
-              <span className="font-mono text-[11.5px] text-muted-foreground">
-                {e.file}:{e.line}
-              </span>
+            <DocButton repo={d.repo} file={e.file} line={e.line} open={open} onOpen={onOpen} className="text-[12.5px] whitespace-nowrap text-muted-foreground">
+              line <span className="font-mono text-[11.5px] tabular-nums">{e.line}</span>
             </DocButton>
           </li>
         ))}
@@ -264,7 +277,9 @@ function DocViewer({ doc, onClose }: { doc: OpenDoc; onClose: () => void }) {
           <h3 id={id} className="font-mono text-[12.5px] font-semibold">
             <Breakable text={doc.file} />
           </h3>
-          <span className="font-mono text-[11.5px] text-muted-foreground">{doc.repo} · read only</span>
+          <span className="text-[12.5px] text-muted-foreground">
+            <span className="font-mono text-[11.5px]">{doc.repo}</span> · read only
+          </span>
         </div>
         <Button type="button" variant="ghost" size="icon-xs" aria-label="Close doc" onClick={onClose} className="text-muted-foreground hover:text-foreground">
           <X aria-hidden />
@@ -278,7 +293,7 @@ function DocViewer({ doc, onClose }: { doc: OpenDoc; onClose: () => void }) {
         <p className="text-[13px] text-muted-foreground">Opening…</p>
       ) : (
         <div ref={box} className="max-h-[70vh] overflow-y-auto">
-          <CodeBlock code={data.text} file={data.file} highlight={doc.line === undefined ? undefined : { from: doc.line, to: doc.line }} />
+          <CodeBlock code={data.text} file={data.file} wrap={isProse(data.file)} highlight={doc.line === undefined ? undefined : { from: doc.line, to: doc.line }} />
         </div>
       )}
     </aside>

@@ -195,7 +195,7 @@ describe("Journey: spec badge and the Specs tab", () => {
     const docs = await within(panel).findByRole("list", { name: "Candidate docs" });
     expect(docs).toHaveTextContent("docs/invoices.md");
     expect(docs).toHaveTextContent("POST /api/invoices");
-    expect(docs).toHaveTextContent("docs/invoices.md:3");
+    expect(docs).toHaveTextContent("line 3");
     const tickets = within(panel).getByRole("list", { name: "Candidate tickets" });
     expect(tickets).toHaveTextContent("SHOP-12");
     expect(tickets).toHaveTextContent("a1b2c3d");
@@ -206,6 +206,29 @@ describe("Journey: spec badge and the Specs tab", () => {
     await userEvent.click(within(docs).getByRole("button", { name: "Open docs/invoices.md at line 3" }));
     const viewer = await within(panel).findByRole("region", { name: /docs\/invoices\.md/ });
     await waitFor(() => expect(viewer.querySelector('[data-line="3"]')).toHaveAttribute("data-highlighted"));
+  });
+
+  it("design pass: counts docs and tickets apart, wraps a prose doc, marks the open doc, keeps 'read only' out of mono", async () => {
+    renderAt("/journeys/j_invoice?tab=specs", routes(() => json(invoiceLinked)));
+    const panel = await screen.findByRole("tabpanel", { name: "Specs" });
+    const state = await within(panel).findByRole("region", { name: "Spec state" });
+    expect(state).toHaveTextContent("Claude linked 1 doc and 1 ticket");
+    const open = within(panel).getByRole("button", { name: "Open docs/invoices.md" });
+    expect(open).not.toHaveAttribute("aria-current");
+    await userEvent.click(open);
+    const viewer = await within(panel).findByRole("region", { name: /docs\/invoices\.md, lines/ });
+    expect(viewer).toHaveAttribute("data-wrap", "true");
+    expect(within(panel).getByRole("button", { name: "Open docs/invoices.md" })).toHaveAttribute("aria-current", "true");
+    const readOnly = within(panel).getByText(/read only/);
+    expect(readOnly.className).not.toMatch(/font-mono/);
+  });
+
+  it("design pass: an evidence line names its line, not the doc again, and the term wraps instead of truncating", async () => {
+    renderAt("/journeys/j_invoice?tab=specs", routes(() => json(invoiceCandidates)));
+    const docs = await within(await screen.findByRole("tabpanel", { name: "Specs" })).findByRole("list", { name: "Candidate docs" });
+    const evidence = within(docs).getByRole("button", { name: "Open docs/invoices.md at line 3" });
+    expect(evidence).toHaveTextContent(/^line 3$/);
+    expect(docs.querySelector(".truncate")).toBeNull();
   });
 
   it("a broken specs.json is an error card in the tab, not a broken screen", async () => {
