@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { JourneyProgressView, JourneyRow, Overview, SpecsResponse } from "@/api/types";
-import { countCells, coverageRows, filterViewJourneys, sortViewJourneys, viewLevel } from "@/screens/views/model";
+import type { JourneyProgressView, JourneyRow, Overview } from "@/api/types";
+import { countCells, filterViewJourneys, sortViewJourneys, viewLevel } from "@/screens/views/model";
 
 function row(p: Partial<JourneyRow> & { id: string; name: string }): JourneyRow {
   return {
@@ -96,14 +96,5 @@ describe("views model", () => {
     ]);
     expect(countCells(overview, undefined, {}).map((c) => c.key)).toEqual(["files", "pages", "routes", "tables", "queues", "journeys"]);
     expect(countCells(overview, ["understood"], {})[0]!.value).toBeUndefined();
-  });
-
-  it("coverage rows by repo and by area (no area last)", () => {
-    const cov = (total: number, linked: number) => ({ total, linked, candidates: 0, none: total - linked, checked: linked });
-    const data = {
-      totals: { all: cov(3, 1), byRepo: { web: cov(2, 1), api: cov(3, 1) }, byArea: { "": cov(1, 0), Invoices: cov(2, 1) } },
-    } as unknown as SpecsResponse;
-    expect(coverageRows(data, "repo").map((r) => r.key)).toEqual(["api", "web"]);
-    expect(coverageRows(data, "area").map((r) => r.key)).toEqual(["Invoices", ""]);
   });
 });

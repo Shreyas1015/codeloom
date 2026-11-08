@@ -1,6 +1,6 @@
 /** Pure helpers behind the view widgets: journey filters and sorts that also know your progress and spec
  * state, count cells, and spec coverage rows. */
-import type { JourneyProgressView, JourneyRow, Overview, SpecCoverage, SpecsResponse, SpecState, ViewCountKey, ViewLevel, Widget } from "@/api/types";
+import type { JourneyProgressView, JourneyRow, Overview, SpecState, ViewCountKey, ViewLevel, Widget } from "@/api/types";
 import { displayLevel } from "@/lib/progress";
 import { sortJourneys } from "@/screens/home/filter";
 
@@ -81,12 +81,4 @@ export function countCells(o: Overview, show: ViewCountKey[] | undefined, extra:
     return sum(k);
   };
   return [...new Set(show?.length ? show : DEFAULT_COUNTS)].map((key) => ({ key, caption: COUNT_CAPTION[key], value: value(key) }));
-}
-
-/** Spec coverage per repo (by id) or per area (by name, no area last). */
-export function coverageRows(data: Pick<SpecsResponse, "totals">, by: "repo" | "area"): Array<{ key: string; coverage: SpecCoverage }> {
-  const src = by === "repo" ? data.totals.byRepo : data.totals.byArea;
-  return Object.keys(src)
-    .sort((a, b) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b, "en"))
-    .map((key) => ({ key, coverage: src[key]! }));
 }

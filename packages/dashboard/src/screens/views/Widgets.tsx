@@ -6,15 +6,19 @@ import { FileWarning, TriangleAlert } from "lucide-react";
 import { Component, type ErrorInfo, lazy, type ReactNode, Suspense, useId, useMemo } from "react";
 import { MapStateError } from "@/api/client";
 import { useJourneys, useOverview, useProgress, useSpecs } from "@/api/queries";
-import type { JourneyProgressView, JourneyRow, SpecCoverage, SpecState, Widget } from "@/api/types";
+import type { JourneyProgressView, JourneyRow, JourneySpecRow, Widget } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
+import { coverageSentence, SpecCoverageTable } from "@/components/gallery/SpecCoverage";
+import { SpecBadge } from "@/components/gallery/SpecBadge";
+import { SpecsError } from "@/components/gallery/SpecsError";
+import { MATCH_SPECS } from "@/lib/specs";
 import { LevelStrip, ProgressStrip } from "@/components/gallery/ProgressStrip";
 import { displayLevel, stripCounts } from "@/lib/progress";
 import { cn } from "@/lib/utils";
 import { LaneCounts } from "@/screens/home/parts";
 import { areaRows, recentChecks, repoRows } from "@/screens/progress/model";
 import { NoteMarkdown } from "./NoteMarkdown";
-import { countCells, coverageRows, filterViewJourneys, type JourneysWidget, sortViewJourneys } from "./model";
+import { countCells, filterViewJourneys, type JourneysWidget, sortViewJourneys } from "./model";
 import { EmptyCard, H2, PANEL } from "./parts";
 
 // React Flow is the biggest dependency in the app; a map widget loads it only when a view has one.
@@ -162,15 +166,13 @@ function CountsWidget({ show }: { show: Extract<Widget, { type: "counts" }>["sho
 
 // ---- journeys -----------------------------------------------------------------------------------
 
-// TODO(v0.3 Task 4): swap this plain label for <SpecBadge state=… /> once Task 4's SpecBadge is merged.
-const SPEC_WORD: Record<SpecState, string> = { linked: "Spec linked", candidates: "Candidates waiting", none: "No spec" };
-
 function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
   const journeys = useJourneys();
   const progress = useProgress();
   const specs = useSpecs();
   const levels = useMemo(() => (progress.data ? new Map(progress.data.journeys.map((v) => [v.journeyId, v])) : undefined), [progress.data]);
-  const specStates = useMemo(() => (specs.data ? new Map(specs.data.journeys.map((r) => [r.journeyId, r.state])) : undefined), [specs.data]);
+  const specRows = useMemo(() => (specs.data ? new Map(specs.data.journeys.map((r) => [r.journeyId, r])) : undefined), [specs.data]);
+  const specStates = useMemo(() => (specRows ? new Map([...specRows].map(([id, r]) => [id, r.state])) : undefined), [specRows]);
   const title = widget.title ?? "User journeys";
   const rows = useMemo(() => {
     if (!journeys.data) return [];
@@ -184,13 +186,13 @@ function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
   if (!journeys.data) return <Frame title={title}><Loading label="Loading journeys" /></Frame>;
   return (
     <Frame title={title} caption={rows.length > limit ? `Showing ${fmt(limit)} of ${fmt(rows.length)}` : undefined}>
-      {widget.filter?.spec && specs.error ? <WidgetError error={specs.error} what="Spec links" file=".codeloom/specs.json" /> : null}
+      {widget.filter?.spec && specs.error ? <SpecsError error={specs.error} /> : null}
       {shown.length === 0 ? (
         <EmptyCard>No journeys match this widget's filter.</EmptyCard>
       ) : (
         <ul aria-label={title} className={cn(PANEL, "divide-y divide-border overflow-hidden")}>
           {shown.map((r) => (
-            <JourneyItem key={r.id} r={r} spec={specStates?.get(r.id)} level={levels ? (levels.get(r.id) ?? null) : undefined} />
+            <JourneyItem key={r.id} r={r} spec={specRows?.get(r.id)} level={levels ? (levels.get(r.id) ?? null) : undefined} />
           ))}
         </ul>
       )}
@@ -198,7 +200,7 @@ function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
   );
 }
 
-function JourneyItem({ r, spec, level }: { r: JourneyRow; spec?: SpecState; level?: JourneyProgressView | null }) {
+function JourneyItem({ r, spec, level }: { r: JourneyRow; spec?: JourneySpecRow; level?: JourneyProgressView | null }) {
   return (
     <li>
       <Link
@@ -211,9 +213,8 @@ function JourneyItem({ r, spec, level }: { r: JourneyRow; spec?: SpecState; leve
           <small className="truncate text-[12.5px] text-muted-foreground">{r.area || "No area"}</small>
         </span>
         <LaneCounts stops={r.stops} />
-        <span data-spec={spec ?? "unknown"} className={cn("text-[12.5px]", spec === "linked" ? "font-semibold text-foreground" : "text-muted-foreground")}>
-          {spec ? SPEC_WORD[spec] : ""}
-        </span>
+        {/* the badge only once the state is known: never a placeholder */}
+        <span>{spec ? <SpecBadge state={spec.state} checked={spec.checked} /> : null}</span>
         {level !== undefined ? <LevelStrip level={level ? displayLevel(level) : "none"} changed={level?.needsReWalk.length ?? 0} /> : <span />}
       </Link>
     </li>
@@ -331,85 +332,33 @@ function ChecksWidget({ limit }: { limit: number }) {
 
 // ---- spec coverage ------------------------------------------------------------------------------
 
-const COVER = [
-  { key: "linked", word: "Linked", cls: "bg-primary" },
-  { key: "candidates", word: "Candidates waiting", cls: "bg-connector" },
-] as const;
-
-/** Linked and candidate journeys as one bar; the bare track is the journeys with no spec. */
-function CoverageBar({ c }: { c: SpecCoverage }) {
-  const pct = (n: number) => `${c.total > 0 ? (n / c.total) * 100 : 0}%`;
-  const label = c.total === 0 ? "No journeys" : `${fmt(c.linked)} linked, ${fmt(c.candidates)} with candidates, ${fmt(c.none)} with no spec, of ${plural(c.total, "journey")}`;
-  return (
-    <div role="img" aria-label={label} title={label} className="flex h-3.5 w-full min-w-1 gap-px overflow-hidden rounded-[3px] bg-muted">
-      {COVER.filter((s) => c[s.key] > 0).map((s) => (
-        <i key={s.key} data-segment={s.key} style={{ width: pct(c[s.key]) }} className={cn("block h-full", s.cls)} />
-      ))}
-    </div>
-  );
-}
-
+/** Task 4's coverage table (the same one Progress shows), with the coverage sentence and the prompt that
+ * checks the journeys nobody checked yet. */
 function SpecCoverageWidget({ by }: { by: "repo" | "area" }) {
   const { data, error } = useSpecs();
   const title = by === "repo" ? "Spec coverage by repo" : "Spec coverage by area";
-  if (error) return <Frame title={title}><WidgetError error={error} what="Spec links" file=".codeloom/specs.json" /></Frame>;
-  if (!data) return <Frame title={title}><Loading label="Loading spec coverage" /></Frame>;
-  const all = data.totals.all;
-  const rows = coverageRows(data, by);
-  const th = "px-5 py-2 text-left text-xs font-semibold text-muted-foreground";
-  const td = "px-5 py-3 align-middle";
+  if (error)
+    return (
+      <Frame title={title}>
+        <SpecsError error={error} />
+      </Frame>
+    );
+  if (!data)
+    return (
+      <Frame title={title}>
+        <Loading label="Loading spec coverage" />
+      </Frame>
+    );
+  const waiting = data.journeys.filter((j) => !j.checked).length;
   return (
-    <Frame
-      title={title}
-      caption={
-        <>
-          {fmt(all.linked)} of {plural(all.total, "journey")} have a spec linked
-          {data.candidatesIndexed ? "" : ". Run codeloom index to find candidate docs and tickets"}.
-        </>
-      }
-    >
-      <ul aria-label="Legend" className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted-foreground">
-        {COVER.map((s) => (
-          <li key={s.key} className="flex items-center gap-1.5">
-            <i aria-hidden className={cn("size-2.5 rounded-[2px]", s.cls)} />
-            {s.word}
-          </li>
-        ))}
-        <li className="flex items-center gap-1.5">
-          <i aria-hidden className="size-2.5 rounded-[2px] bg-muted ring-1 ring-border" />
-          No spec
-        </li>
-      </ul>
-      {rows.length === 0 ? (
-        <EmptyCard>No journeys yet.</EmptyCard>
-      ) : (
-        <div className={cn(PANEL, "overflow-x-auto")}>
-          <table aria-label={title} className="w-full min-w-[520px] border-collapse text-[13.5px]">
-            <thead className="border-b border-border bg-muted/40">
-              <tr>
-                <th scope="col" className={cn(th, "w-[170px]")}>{by === "repo" ? "Repo" : "Area"}</th>
-                <th scope="col" className={th}>Journeys</th>
-                <th scope="col" className={cn(th, "w-[80px]")}>Linked</th>
-                <th scope="col" className={cn(th, "w-[100px]")}>Candidates</th>
-                <th scope="col" className={cn(th, "w-[80px]")}>No spec</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {rows.map(({ key, coverage: c }) => (
-                <tr key={key}>
-                  <td className={cn(td, by === "repo" ? "font-mono text-[12.5px] font-semibold" : "font-semibold", !key && "text-muted-foreground")}>{key || "No area"}</td>
-                  <td className={td}>
-                    <CoverageBar c={c} />
-                  </td>
-                  <td className={cn(td, "font-semibold tabular-nums")}>{fmt(c.linked)}</td>
-                  <td className={cn(td, "tabular-nums")}>{fmt(c.candidates)}</td>
-                  <td className={cn(td, "tabular-nums")}>{fmt(c.none)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+    <Frame title={title} caption={`${coverageSentence(data.totals.all)}${data.candidatesIndexed ? "." : ". Run codeloom index to find candidate docs and tickets."}`}>
+      <SpecCoverageTable specs={data} by={by} />
+      {waiting > 0 ? (
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
+          To check every journey not checked yet, ask Claude: <Command text={MATCH_SPECS} />
+        </p>
+      ) : null}
     </Frame>
   );
 }
+

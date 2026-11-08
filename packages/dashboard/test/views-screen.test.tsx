@@ -203,7 +203,7 @@ describe("/views/$id", () => {
       "/api/views/audit": { body: ok("audit", [{ type: "specCoverage" }, { type: "note", markdown: "still here" }]) },
       "/api/specs": { status: 409, body: { error: "specs.json: bad JSON", code: "bad-data" } },
     });
-    expect(await screen.findByText("Spec links can't be read")).toBeInTheDocument();
+    expect(await screen.findByText("The spec links file can't be read")).toBeInTheDocument();
     expect(screen.getByText("still here")).toBeInTheDocument();
   });
 });
