@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — 2026-11-08 (GitHub release; not yet on npm)
+## 0.3.0 — 2026-11-08 (GitHub release and npm)
 
 Specs per journey and views Claude can make:
 
