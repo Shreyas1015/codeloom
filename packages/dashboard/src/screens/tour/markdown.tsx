@@ -57,10 +57,11 @@ function blocks(text: string, headings: boolean): Block[] {
   return out;
 }
 
-/** A link target that is safe to follow: an in-app path (`/map`, not `//host`) or http(s). Anything else
+/** A link target that is safe to follow: an in-app path (`/map`, not `//host` or `/\\host`, which
+ * browsers treat as another host) or http(s). Anything else
  * (javascript:, data:, relative paths) is not a link. */
 export function safeHref(url: string): { href: string; external: boolean } | undefined {
-  if (/^\/(?!\/)/.test(url)) return { href: url, external: false };
+  if (/^\/(?![/\\])/.test(url)) return { href: url, external: false };
   if (/^https?:\/\/[^\s/]/i.test(url)) return { href: url, external: true };
   return undefined;
 }
