@@ -1,7 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChartNoAxesColumn, House, Map as MapIcon } from "lucide-react";
+import { ChartNoAxesColumn, House, LayoutDashboard, Map as MapIcon, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Overview, RepoRole } from "@/api/types";
+import type { Overview, RepoRole, ViewSummary } from "@/api/types";
 import { cn } from "@/lib/utils";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -66,17 +66,21 @@ export function Rail({
   failed = false,
   livePaused = false,
   understood,
+  views,
 }: {
   overview: Overview | undefined;
   failed?: boolean;
   livePaused?: boolean;
   /** Understood journeys as a whole percent (Progress's count); left out until progress loads. */
   understood?: number;
+  /** The saved views (GET /api/views); the section is left out while there are none. */
+  views?: ViewSummary[];
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const under = (p: string) => pathname === p || pathname.startsWith(`${p}/`);
   const onMap = under("/map");
   const onProgress = under("/progress");
+  const onViews = under("/views");
   // Tour mode is a journey, not Home: no rail item is current there
   const onTour = /^\/journeys\/[^/]+\/tour\/?$/.test(pathname);
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
@@ -108,7 +112,7 @@ export function Rail({
       )}
 
       <nav aria-label="Main" className="flex flex-col gap-0.5">
-        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress && !onTour} />
+        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress && !onTour && !onViews} />
         <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
         <NavItem
           to="/progress"
@@ -119,6 +123,8 @@ export function Rail({
           current={onProgress}
         />
       </nav>
+
+      {views && views.length > 0 && <ViewsList views={views} pathname={pathname} />}
 
       {overview && overview.repos.length > 0 && (
         <div>
@@ -177,5 +183,48 @@ export function Rail({
         )}
       </div>
     </aside>
+  );
+}
+
+/** The views your agent saved, by id. A view whose file cannot be read stays listed, marked, and opens its
+ * error card. The `home` view lives at `/`, so it links there. */
+function ViewsList({ views, pathname }: { views: ViewSummary[]; pathname: string }) {
+  return (
+    <div>
+      <h2 id="rail-views" className="px-2.5 pb-1.5 text-xs font-semibold text-rail-muted">
+        Views
+      </h2>
+      <ul aria-labelledby="rail-views" className="flex flex-col gap-px">
+        {views.map((v) => {
+          const broken = "error" in v;
+          const current = v.url !== "/" && pathname === v.url;
+          return (
+            <li key={v.id}>
+              <Link
+                {...(v.url === "/" ? { to: "/" as const } : { to: "/views/$id" as const, params: { id: v.id } })}
+                aria-current={current ? "page" : undefined}
+                title={broken ? v.error : (v.description ?? v.title)}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors hover:bg-rail-active/60 hover:text-rail-strong focus-visible:outline-rail-ring",
+                  current && "bg-rail-active font-semibold text-rail-strong hover:bg-rail-active",
+                )}
+              >
+                {broken ? (
+                  <TriangleAlert aria-hidden className="size-3.5 shrink-0 text-rail-muted" />
+                ) : (
+                  <LayoutDashboard aria-hidden className="size-3.5 shrink-0" strokeWidth={1.6} />
+                )}
+                <span className="truncate">{broken ? v.id : v.title}</span>
+                {broken ? (
+                  <span className="ml-auto shrink-0 text-xs text-rail-muted">can't be read</span>
+                ) : v.url === "/" ? (
+                  <span className="ml-auto shrink-0 text-xs text-rail-muted">Home</span>
+                ) : null}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
