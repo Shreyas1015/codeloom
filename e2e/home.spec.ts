@@ -23,9 +23,9 @@ test("Home shows the six workspace counts and the unnamed chains hint", async ({
   const totals = home.getByRole("list", { name: "Totals" });
   const cells = totals.getByRole("listitem");
   await expect(cells).toHaveCount(6);
-  // demo-shop: 23 files, 3 pages, 5 routes, 5 tables, 3 queues, no journeys yet
+  // demo-shop: 24 files (with api/docs/customers.md), 3 pages, 5 routes, 5 tables, 3 queues, no journeys yet
   const expected: Array<[string, string]> = [
-    ["23", "Files"],
+    ["24", "Files"],
     ["3", "UI pages"],
     ["5", "API routes"],
     ["5", "DB tables"],

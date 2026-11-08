@@ -31,9 +31,9 @@ test("Map shows the api repo's folders, drills in, and the journey overlay marks
   const map = page.getByTestId("screen-map");
   await expect(map.getByRole("group", { name: "Repo" }).getByRole("button", { name: "api" })).toHaveAttribute("aria-pressed", "true");
 
-  // the api repo root: three folders and package.json
-  for (const name of ["app", "database", "start"]) await expect(folder(page, name)).toBeVisible();
-  await expect(page.locator('[data-card="folder"]')).toHaveCount(3);
+  // the api repo root: four folders (docs holds the spec doc) and package.json
+  for (const name of ["app", "database", "docs", "start"]) await expect(folder(page, name)).toBeVisible();
+  await expect(page.locator('[data-card="folder"]')).toHaveCount(4);
   await expect(file(page, "package.json")).toBeVisible();
 
   // drill in: Enter on a folder opens it
