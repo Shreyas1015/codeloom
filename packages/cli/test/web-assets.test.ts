@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,8 +25,22 @@ function fakeMonorepo(opts: { bundled?: boolean; dashboard?: boolean }): string 
 }
 
 describe("locateDashboardAssets", () => {
-  it("prefers the bundled dist/dashboard when it has index.html", () => {
+  it("prefers the bundled dist/dashboard when it has index.html (and is not older)", () => {
     const cli = fakeMonorepo({ bundled: true, dashboard: true });
+    const same = new Date("2026-11-08T00:00:00Z");
+    utimesSync(join(cli, "dist", "dashboard", "index.html"), same, same);
+    utimesSync(join(cli, "..", "dashboard", "dist", "index.html"), same, same);
+    expect(locateDashboardAssets(cli)).toBe(join(cli, "dist", "dashboard"));
+  });
+
+  it("when both are built, takes the one with the newer index.html (a fresh dashboard build beats a stale bundled copy)", () => {
+    const cli = fakeMonorepo({ bundled: true, dashboard: true });
+    const bundled = join(cli, "dist", "dashboard", "index.html");
+    const dev = join(cli, "..", "dashboard", "dist", "index.html");
+    utimesSync(bundled, new Date("2026-11-01T00:00:00Z"), new Date("2026-11-01T00:00:00Z"));
+    utimesSync(dev, new Date("2026-11-08T00:00:00Z"), new Date("2026-11-08T00:00:00Z"));
+    expect(locateDashboardAssets(cli)).toBe(join(cli, "..", "dashboard", "dist"));
+    utimesSync(bundled, new Date("2026-11-09T00:00:00Z"), new Date("2026-11-09T00:00:00Z"));
     expect(locateDashboardAssets(cli)).toBe(join(cli, "dist", "dashboard"));
   });
 

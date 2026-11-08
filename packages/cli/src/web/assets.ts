@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodeloomError } from "../errors.js";
@@ -16,16 +16,27 @@ export function cliRootFrom(moduleDir: string): string {
 /** The cli package folder (the published package root when bundled). */
 const CLI_ROOT = cliRootFrom(dirname(fileURLToPath(import.meta.url)));
 
-/** The built dashboard folder: packages/cli/dist/dashboard (bundled into the published package) if it has
- * index.html, else <monorepo>/packages/dashboard/dist. (dist/web holds the compiled server code, never the
- * dashboard.) Neither → CodeloomError naming both places and the build command.
- * `cliRoot` is the cli package folder (tests pass a fake one). */
+/** The built dashboard folder: packages/cli/dist/dashboard (bundled into the published package) or
+ * <monorepo>/packages/dashboard/dist, whichever has index.html; when both do, the one whose index.html is
+ * newer (a fresh `pnpm --filter @codeloom/dashboard build` must win over an old bundled copy; ties go to
+ * the bundled one). (dist/web holds the compiled server code, never the dashboard.) Neither →
+ * CodeloomError naming both places and the build command. `cliRoot` is the cli package folder (tests pass
+ * a fake one). */
 export function locateDashboardAssets(cliRoot: string = CLI_ROOT): string {
   const candidates = [join(cliRoot, "dist", "dashboard"), join(cliRoot, "..", "dashboard", "dist")];
-  for (const dir of candidates) {
-    if (existsSync(join(dir, "index.html"))) return dir;
-  }
+  const built = candidates
+    .map((dir) => ({ dir, mtime: mtimeOf(join(dir, "index.html")) }))
+    .filter((c): c is { dir: string; mtime: number } => c.mtime !== null);
+  if (built.length > 0) return built.reduce((best, c) => (c.mtime > best.mtime ? c : best)).dir;
   throw new CodeloomError(
     `The dashboard is not built (no index.html in ${candidates.join(" or ")}). Run "pnpm --filter @codeloom/dashboard build".`,
   );
+}
+
+function mtimeOf(file: string): number | null {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
 }
