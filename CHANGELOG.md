@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 — 2026-11-08 (GitHub release and npm)
+
+Security fixes and a shorter README:
+
+- Security: the 10 regexes CodeQL flagged in the file map's parsers (`js/polynomial-redos`) no longer take
+  polynomial time on hostile input. Replies are read with string search, and a Makefile line with no colon or
+  a Markdown file of unclosed brackets stays fast, with the same results as before.
+- Docs: the README is short; the full reference (commands, MCP tools and prompts, the workspace file, the
+  trace check) is in `docs/reference.md`, with `docs/how-it-works.md` and `docs/guide.md` beside it.
+- Repo: SECURITY.md, CONTRIBUTING.md and a code of conduct. Releases are published to npm from GitHub Actions
+  through trusted publishing, with provenance.
+
 ## 0.3.0 — 2026-11-08 (GitHub release and npm)
 
 Specs per journey and views Claude can make:

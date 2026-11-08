@@ -1,6 +1,6 @@
 {
   "name": "codeloom",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Map a codebase into user journeys, for you and your AI agent.",
   "keywords": [
     "code map",
