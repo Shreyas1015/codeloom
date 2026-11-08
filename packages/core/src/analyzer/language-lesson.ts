@@ -1,5 +1,6 @@
 import type { GraphNode, GraphEdge } from "../types.js";
 import type { LanguageConfig } from "../languages/types.js";
+import { fencedBlock, outermost } from "./extract-json.js";
 
 export interface LanguageLessonResult {
   languageNotes: string;
@@ -158,15 +159,11 @@ Respond ONLY with the JSON object, no additional text.`;
  * Extracts a JSON block from an LLM response, handling markdown fences.
  */
 function extractJson(response: string): string {
-  const fenceMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
-  }
+  const fenced = fencedBlock(response);
+  if (fenced !== undefined) return fenced;
 
-  const objectMatch = response.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    return objectMatch[0].trim();
-  }
+  const object = outermost(response, "{", "}");
+  if (object !== undefined) return object;
 
   return response.trim();
 }

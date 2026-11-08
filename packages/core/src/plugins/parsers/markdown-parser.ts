@@ -22,7 +22,8 @@ export class MarkdownParser implements AnalyzerPlugin {
 
   extractReferences(filePath: string, content: string): ReferenceResolution[] {
     const refs: ReferenceResolution[] = [];
-    const linkRegex = /!?\[([^\]]*)\]\(([^)]+)\)/g;
+    // Bounded lengths keep a file of unclosed brackets linear (unbounded, it takes polynomial time).
+    const linkRegex = /!?\[([^\]]{0,1000})\]\(([^)]{1,2000})\)/g;
     let match;
     while ((match = linkRegex.exec(content)) !== null) {
       const target = match[2];

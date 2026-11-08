@@ -1,4 +1,5 @@
 import type { KnowledgeGraph, TourStep } from "../types.js";
+import { fencedBlock, outermost } from "./extract-json.js";
 
 /**
  * Builds an LLM prompt asking for a guided tour of the project.
@@ -74,16 +75,15 @@ export function parseTourGenerationResponse(response: string): TourStep[] {
 
   try {
     // Try to extract from markdown code fences
-    const fenceMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-    const jsonStr = fenceMatch ? fenceMatch[1].trim() : response.trim();
+    const jsonStr = fencedBlock(response) ?? response.trim();
 
     // Try to find a JSON object with steps
-    const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (!objectMatch) {
+    const object = outermost(jsonStr, "{", "}");
+    if (object === undefined) {
       return [];
     }
 
-    const parsed = JSON.parse(objectMatch[0]);
+    const parsed = JSON.parse(object);
 
     if (!parsed || !Array.isArray(parsed.steps)) {
       return [];

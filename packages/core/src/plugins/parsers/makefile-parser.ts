@@ -25,7 +25,8 @@ export class MakefileParser implements AnalyzerPlugin {
     const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
       // Match target: dependencies (not variable assignments or comments)
-      const match = lines[i].match(/^([a-zA-Z_.][a-zA-Z0-9_.-]*)(?:\s+.*)?:/);
+      // `\s[^:]*` rather than `\s+.*`: same matches, without polynomial time on a long line with no colon.
+      const match = lines[i].match(/^([a-zA-Z_.][a-zA-Z0-9_.-]*)(?:\s[^:]*)?:/);
       if (match && !lines[i].includes(":=") && !lines[i].includes("?=")) {
         const name = match[1];
         // Skip special Make targets (.PHONY, .DEFAULT, .SUFFIXES, etc.)
