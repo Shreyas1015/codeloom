@@ -120,8 +120,9 @@ route or queue consumer that reaches the database but that no UI code calls coun
 Exit codes: `0` ok, `1` `--fail-under` not met (or `doctor` found errors), `2` a data or usage error
 (missing or broken `.codeloom` files, bad flag value).
 
-The dashboard has five screens: Home (journey list), Journey (UI / API / code / DB lanes), Tour (walk one
-journey stop by stop), Map (one repo, folders to functions) and Progress (how much you understand). See
+The dashboard has five screens: Home (journey list), Journey (UI / API / code / DB lanes, plus its specs), Tour
+(walk one journey stop by stop), Map (one repo, folders to functions) and Progress (how much you understand),
+plus any views your agent saved. See
 [docs/dashboard.md](docs/dashboard.md).
 
 ## Tours and progress
@@ -164,6 +165,47 @@ The workspace id comes from the workspace name and its repo ids, so it stays the
 add or remove a repo, the id changes; `codeloom doctor` lists your earlier progress file for the same
 workspace name so you can copy what you need (codeloom never moves it).
 `codeloom doctor` reports a broken progress or tour file; codeloom never overwrites one silently.
+
+## Specs and views
+
+**Specs.** On every `codeloom index`, codeloom looks for docs and tickets that may describe each journey,
+with no AI and no network:
+
+- **Docs** in each repo (`docs/**`, `README*`, `**/adr/**`, `*.md`, `*.mdx`, `*.txt`, up to 512 KB) that name
+  one of the journey's routes (`POST /api/customers`, with `:id`, `{id}` and `[id]` treated alike), pages,
+  tables, queues or code names (`CustomerService.create`), as whole words.
+- **Tickets**: keys like `SHOP-12` in the commits (subject, body, merged branch name) that touched the
+  journey's files, over the last 500 commits per repo.
+
+These candidates go to `.codeloom/spec-candidates.json`. They are only hints. Run
+`/mcp__codeloom__match-specs <journey id>` (or with no id, for every journey not checked yet): Claude reads
+the candidates and the code, keeps only the ones that really describe the journey, each with a one-line
+reason, and saves them to `.codeloom/specs.json` (committed, shared with your team). Saving none records
+"checked, no spec". Each journey then shows one badge:
+
+| Badge | Meaning |
+|---|---|
+| Spec linked | Claude linked at least one doc or ticket. |
+| Spec candidates | Not checked yet; codeloom found docs or tickets that mention it. |
+| No spec | Checked, and nothing describes it. |
+| Spec not checked | Not checked, and nothing mentions it. |
+
+codeloom never fetches ticket text. Claude may summarise a ticket with its own tools into the reason.
+
+**Views.** Ask Claude for a dashboard page in plain words with `/mcp__codeloom__make-view <request>`, for
+example "customer journeys with no spec". Claude builds it from a fixed set of widgets (counts, a journey
+list with filters and sort, a map, progress, recent checks, spec coverage and a markdown note), saves it to
+`.codeloom/views/<id>.json` and gives you its link, `/views/<id>`. Views are listed in the dashboard's rail.
+A view with the id `home` replaces Home; `codeloom views reset home` brings the built-in Home back.
+
+The dashboard never writes specs or views: only your agent does, through MCP. A view or `specs.json` that
+cannot be read never breaks the dashboard: it shows what is wrong and `codeloom doctor` says why.
+
+| What | Where | Shared? |
+|---|---|---|
+| Spec candidates | `.codeloom/spec-candidates.json` | Committed. Rebuilt by `codeloom index`. |
+| Spec links | `.codeloom/specs.json` | Committed. Written only by `save_spec_links`. |
+| Views | `.codeloom/views/<id>.json` | Committed. Written only by `save_view`. |
 
 ## MCP tools and prompts
 
@@ -239,6 +281,10 @@ committed.
   - `queue:<repo>:<queue>`
 
   A manual link is `exact`. `codeloom check` lists links that could not be resolved or match no chain.
+- `specs` (optional): how codeloom looks for spec candidates. `docs`: extra doc globs; `ignoreDocs`: globs
+  to skip; `ticketPattern`: the ticket key regex (default `\b[A-Z][A-Z0-9]+-\d+\b`); `ignorePrefixes`: key
+  prefixes that are not tickets (default `CVE`, `UTF`, `ISO`, `RFC`, `SHA`). For example
+  `"specs": { "ticketPattern": "\\bSHOP-\\d+\\b", "ignoreDocs": ["docs/archive/**"] }`.
 - `external` (optional): other services the UI calls that are not repos in this workspace. A call whose
   env var or host is in an entry's `apiBase` is a call to that `name`, never matched to a route.
 
@@ -319,8 +365,11 @@ Known limits:
 
 - Journeys only for JavaScript and TypeScript code.
 - Queues: RabbitMQ (amqplib) only.
-- The dashboard writes only your own progress (seen, toured); journeys and tours come from your agent. Spec
-  badges, custom views and team-shared progress come later.
+- The dashboard writes only your own progress (seen, toured); journeys, tours, spec links and views come
+  from your agent. Team-shared progress comes later.
+- Spec candidates for a journey your agent just named appear after the next `codeloom index` (the
+  post-commit hook runs it).
+- Ticket text is never fetched; views use only the fixed widget set (no custom panels or HTML).
 
 ## Credits
 

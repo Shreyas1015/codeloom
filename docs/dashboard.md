@@ -1,6 +1,6 @@
 # The codeloom dashboard
 
-A local page that shows your workspace's user journeys and how much of them you understand. Your agent names and edits journeys and writes tours through MCP; the page only records your own progress (seen, toured), and it updates by itself.
+A local page that shows your workspace's user journeys and how much of them you understand. Your agent names and edits journeys, writes tours, links specs and saves views through MCP; the page only records your own progress (seen, toured), and it updates by itself.
 
 ## Run it
 
@@ -20,12 +20,13 @@ It listens on `127.0.0.1` only. The URL carries a one-time token; after the firs
 | Screen | What you see |
 |---|---|
 | **Home** (`/`) | Counts (files, pages, routes, tables, queues, journeys), the journey you last opened, all journeys with filters, search and sort (`j` / `k`, Enter), and chains no journey names yet. Each is marked Complete (UI → API → DB), API → DB (reaches the database, but no UI code calls it) or Incomplete. |
-| **Journey** (`/journeys/<id>`) | UI → API → Code → DB lanes with numbered stops. Lines show real hops only: solid when exact, thinner for a param match, dashed when guessed. Unresolved hops are listed in red. Click a stop (or use ← / →) to see its code. |
+| **Journey** (`/journeys/<id>`) | UI → API → Code → DB lanes with numbered stops. Lines show real hops only: solid when exact, thinner for a param match, dashed when guessed. Unresolved hops are listed in red. Click a stop (or use ← / →) to see its code. The **Specs** tab (`?tab=specs`) shows the journey's docs and tickets. See below. |
 | **Map** (`/map`) | One repo at a time: folders → files → functions. Double-click a folder to open it. Pick a journey to highlight its files, or colour by layer. Search jumps to a file. |
 | **Tour** (`/journeys/<id>/tour`) | Walk one journey: Flow → Data journey → File notes → Check yourself. See below. |
-| **Progress** (`/progress`) | How many journeys you understand, per repo and per area, what needs a re-walk, your recent checks and what is left. See below. |
+| **Progress** (`/progress`) | How many journeys you understand, per repo and per area, what needs a re-walk, your recent checks, what is left and spec coverage. See below. |
+| **Views** (`/views/<id>`) | Pages your agent made from codeloom's widgets. Listed under **Views** in the rail. See below. |
 
-Home also shows your understood % in the header, a three-step progress strip on each journey row, and the Continue band takes you back to the next tour stop you have not walked. The Journey screen shows your level and a **Start tour** (or **Resume tour**) button.
+Home also shows a spec badge beside each journey (and a **Spec** filter), your understood % in the header, a three-step progress strip on each journey row, and the Continue band takes you back to the next tour stop you have not walked. The Journey screen shows your level and a **Start tour** (or **Resume tour**) button.
 
 ## Tour mode
 
@@ -53,6 +54,34 @@ Viewing all four parts marks the journey **toured**. Markers you may see:
 - **For older journeys:** journeys renamed, merged or split away. Your progress on them is kept; one with a tour links to it in Tour mode.
 - Your progress is kept on this computer only, in `~/.codeloom/progress/` (the page shows the exact file). It is never written into your repos.
 
+## Specs
+
+Each journey has one spec badge: **Spec linked** (Claude linked a doc or ticket), **Spec candidates** (not checked yet; codeloom found docs or tickets that mention it), **No spec** (checked, nothing describes it) or **Spec not checked**.
+
+The **Specs** tab on a journey shows:
+
+- the badge, and a copy button for `/mcp__codeloom__match-specs <journey id>`. Paste it into Claude Code: Claude reads the candidates and the code and saves only the ones that fit, each with a reason.
+- **Linked docs and tickets**, each with Claude's reason. Click a doc to read it beside the list (read only).
+- before a check, the **candidate docs** with the lines that mention the journey (route, page, table, queue or code name), and the **candidate tickets** with the commits that name them. Click a line to open the doc there.
+
+Progress has a **Spec coverage** table (by repo or by area) with the four badges as its columns.
+
+## Views
+
+A view is a page your agent makes for you. In Claude Code, run `/mcp__codeloom__make-view <what you want>`, for example "customer journeys with no spec". Claude builds it from these widgets and gives you its link:
+
+| Widget | Shows |
+|---|---|
+| counts | Totals: files, pages, routes, tables, queues, journeys, understood, with a spec. |
+| journeys | A journey list, filtered by area, repo, spec, level, confidence or complete, and sorted. |
+| map | One repo's map, optionally coloured by layer or with a journey's stops. |
+| progress | Understood, toured and seen by repo or area. |
+| checks | Your recent check results. |
+| specCoverage | The spec coverage table, by repo or area. |
+| note | Text in markdown (headings, lists, bold, code, links; never raw HTML). |
+
+Views are saved in `.codeloom/views/<id>.json` and committed, so your team sees them too. The dashboard never edits them. A view with the id `home` replaces Home; `codeloom views reset home` brings the built-in Home back. `codeloom views list` lists them all.
+
 ## Messages you may see
 
 | Message | What to do |
@@ -65,8 +94,11 @@ Viewing all four parts marks the journey **toured**. Markers you may see:
 | Session expired | Run `codeloom dashboard` again and open the new URL. |
 | Live updates paused | The page lost its connection to `codeloom dashboard` and is reconnecting. |
 | Your progress file can't be read | Run `codeloom doctor`. codeloom does not overwrite a broken progress file. |
+| Your home view can't be read | `.codeloom/views/home.json` is broken, so the built-in Home shows. Run `codeloom doctor`, or ask your agent to save the view again. |
+| This view can't be read | The view file is broken. Run `codeloom doctor`. Other screens keep working. |
+| The spec links file can't be read | `.codeloom/specs.json` is broken. Run `codeloom doctor`. Spec badges are hidden until it is fixed; everything else works. |
 | Your progress file is busy | Another codeloom (your agent or the dashboard) is writing it. Try again; if none is running, delete the `.lock` file the message names. |
 
 ## Not yet
 
-Spec badges, custom views and team-shared progress come later.
+Team-shared progress comes later. Views use only the widgets above: no custom panels or HTML.

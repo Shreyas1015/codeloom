@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+Specs per journey and views Claude can make:
+
+- Spec candidates: `codeloom index` finds, with no AI and no network, the docs that name a journey's routes,
+  pages, tables, queues or code (whole words; `:id`, `{id}` and `[id]` treated alike) and the ticket keys
+  (like `SHOP-12`) in the commits that touched its files. Written to `.codeloom/spec-candidates.json`
+  (committed, deterministic). The workspace file gains optional `specs` settings: extra or ignored doc globs,
+  the ticket pattern and ignored key prefixes.
+- Spec links: Claude confirms which candidates really describe a journey, each with a reason, in
+  `.codeloom/specs.json` (committed, team-shared). Saving none records "checked, no spec".
+- Views: Claude builds dashboard pages from a fixed set of widgets (counts, journeys, map, progress, checks,
+  spec coverage, markdown note) and saves them to `.codeloom/views/<id>.json`. A `home` view replaces Home;
+  a broken one falls back to the built-in Home with a notice, and never breaks the dashboard.
+- MCP: `match_specs`, `save_spec_links`, `list_specs`, `save_view`, `list_views`, `delete_view` tools and
+  `match-specs`, `make-view` prompts.
+- Dashboard: a spec badge per journey (Spec linked, Spec candidates, No spec, Spec not checked) on Home,
+  the Journey nameplate and views; a Spec filter on Home; a Specs tab on the Journey screen (linked docs and
+  tickets with Claude's reason, or the candidates with their evidence, and docs read in place); Spec coverage
+  on Progress; `/views/<id>` and a Views list in the rail. Specs and views update live. The dashboard never
+  writes either; view notes never render raw HTML.
+- CLI: `codeloom views list` and `codeloom views reset <id>` (`reset home` brings back the built-in Home).
+  `codeloom doctor` checks `specs.json` and every view file.
+
 ## 0.2.0 — unreleased
 
 Tours and progress (v0.2b):
