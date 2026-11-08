@@ -60,6 +60,6 @@
   "devDependencies": {
     "@codeloom/core": "workspace:*",
     "@types/node": "^22.0.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.11"
   }
 }
