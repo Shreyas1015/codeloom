@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { type IndexStats, indexRepo } from "../indexer/index-repo.js";
 import { runLinker } from "../linker/run.js";
 import type { LinkerSummary } from "../linker/run.js";
+import { writeSpecCandidates } from "../specs/candidates.js";
 import type { EndpointsFile, RepoRef } from "../store/schemas.js";
 import { loadWorkspace } from "../workspace/repos.js";
 
@@ -22,6 +23,9 @@ export async function runIndex(start: string): Promise<IndexRunResult> {
     indexed.push({ ref: repo, abs, result: res });
   }
   const linker = runLinker(ws, indexed);
+  // v0.3 §1: spec candidates for every journey, from repo docs and git history (after the linker, which
+  // writes the chains and journeys they are built from).
+  writeSpecCandidates(ws.root, indexed.map((x) => ({ id: x.ref.id, abs: x.abs, files: x.result.files })), ws.specs);
   return { root: ws.root, repos, linker };
 }
 

@@ -218,7 +218,7 @@ describe("dashboard JSON API on demo-shop", () => {
   it("/api/graph: the root level of api lists its top folders", async () => {
     const g = await ok("/api/graph?repo=api", GraphLevel);
     expect(g.dir).toBe("");
-    expect(g.folders.map((f) => f.path)).toEqual(["app", "database", "start"]);
+    expect(g.folders.map((f) => f.path)).toEqual(["app", "database", "docs", "start"]);
     expect(g.folders.find((f) => f.path === "app")!.files).toBe(3);
     expect(g.files.map((f) => f.path)).toEqual(["package.json"]);
     expect(g.edges).toEqual([]); // demo-shop's api imports all stay inside app/

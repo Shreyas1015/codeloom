@@ -41,6 +41,28 @@ export function materializeFixture(name: string): string {
   return root;
 }
 
+/** Commit `message` in `repo` after appending `line` to each of `files` (repo-relative). */
+export function commitChange(repo: string, files: string[], message: string, line = "// changed"): void {
+  for (const rel of files) writeFileSync(join(repo, rel), `${readFileSync(join(repo, rel), "utf8")}${line}\n`);
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", message);
+}
+
+/** Give a materialized demo-shop's `api` repo a short history with generic ticket keys (spec §1 tickets):
+ * - `SHOP-12` (subject) and `SHOP-13` (body) on a commit touching CustomerService;
+ * - a commit whose subject only has ignored keys (`UTF-8`, `CVE-2024-1234`);
+ * - branch `feat/SHOP-14-show-customer` (its own commit has no key) merged into main with --no-ff, so
+ *   `SHOP-14` is known only from the merge commit's branch name. */
+export function commitTicketHistory(root: string): void {
+  const api = join(root, "api");
+  commitChange(api, ["app/services/customer_service.ts"], "SHOP-12 validate new customers\n\nAlso covers SHOP-13.");
+  commitChange(api, ["app/services/customer_service.ts"], "Handle UTF-8 names (CVE-2024-1234)");
+  git(api, "checkout", "-q", "-b", "feat/SHOP-14-show-customer");
+  commitChange(api, ["app/controllers/customers_controller.ts"], "tweak the show handler");
+  git(api, "checkout", "-q", "main");
+  git(api, "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/SHOP-14-show-customer'", "feat/SHOP-14-show-customer");
+}
+
 /** Copy fixtures/evals/<app> to a temp folder and git-init every repo its own codeloom.workspace.json lists
  * (unlike materializeFixture, which blindly git-inits every child folder — an eval app's root also holds
  * LICENSE/SOURCE.md/expected-journeys.json/codeloom.workspace.json, which are not repos). */

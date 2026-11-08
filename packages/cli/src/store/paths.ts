@@ -9,4 +9,5 @@ export const FILES = {
   chains: "chains.json",
   journeys: "journeys.json",
   summaries: "summaries.json",
+  specCandidates: "spec-candidates.json",
 } as const;
