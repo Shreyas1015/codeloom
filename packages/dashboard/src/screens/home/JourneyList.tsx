@@ -1,9 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import { Search, TriangleAlert } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { JourneyProgressView, JourneyRow, ProgressResponse } from "@/api/types";
+import type { JourneyProgressView, JourneyRow, JourneySpecRow, ProgressResponse, SpecsResponse } from "@/api/types";
 import { LevelStrip } from "@/components/gallery/ProgressStrip";
+import { SpecBadge } from "@/components/gallery/SpecBadge";
 import { displayLevel } from "@/lib/progress";
+import { SPEC_MARKS, SPEC_SHORT, type SpecMark, specMark } from "@/lib/specs";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { type CompleteFilter, facets, filterJourneys, type JourneyFilter, NO_FILTER, type SortKey, sortJourneys } from "./filter";
@@ -65,7 +67,7 @@ function Select({ id, value, onChange, options }: { id: string; value: string; o
   );
 }
 
-function Row({ r, level }: { r: JourneyRow; level?: JourneyProgressView | null }) {
+function Row({ r, level, spec }: { r: JourneyRow; level?: JourneyProgressView | null; spec?: JourneySpecRow }) {
   const orphaned = r.status === "orphaned";
   return (
     <li>
@@ -88,6 +90,7 @@ function Row({ r, level }: { r: JourneyRow; level?: JourneyProgressView | null }
                 Orphaned
               </span>
             )}
+            {spec && <SpecBadge state={spec.state} checked={spec.checked} title={specTitle(spec)} />}
           </b>
           {r.note && <small className="truncate text-[12.5px] text-muted-foreground">{r.note}</small>}
           {r.external?.length ? (
@@ -111,9 +114,24 @@ function Row({ r, level }: { r: JourneyRow; level?: JourneyProgressView | null }
   );
 }
 
-/** The journey list as wall labels, with search, filters, sort, j/k and "Show more". */
-export function JourneyList({ rows, progress }: { rows: JourneyRow[]; progress?: ProgressResponse }) {
+const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** What a badge's tooltip adds: how many links, or how many candidates wait. */
+function specTitle(s: JourneySpecRow): string | undefined {
+  if (s.state === "linked") return count(s.links.length, "linked spec");
+  if (s.state === "candidates") return `${count(s.candidates.docs, "candidate doc")}, ${count(s.candidates.tickets, "candidate ticket")}`;
+  return undefined;
+}
+
+/** The journey list as wall labels, with search, filters, sort, j/k and "Show more". `specs` (optional, like
+ * progress) adds each journey's spec badge and the Spec filter. */
+export function JourneyList({ rows, progress, specs }: { rows: JourneyRow[]; progress?: ProgressResponse; specs?: SpecsResponse }) {
   const levels = useMemo(() => (progress ? new Map(progress.journeys.map((v) => [v.journeyId, v])) : undefined), [progress]);
+  const specRows = useMemo(() => (specs ? new Map(specs.journeys.map((s) => [s.journeyId, s])) : undefined), [specs]);
+  const marks = useMemo(
+    () => (specRows ? new Map([...specRows].map(([id, s]): [string, SpecMark] => [id, specMark(s)])) : undefined),
+    [specRows],
+  );
   const [f, setF] = useState<JourneyFilter>(NO_FILTER);
   const [sort, setSort] = useState<SortKey>("name");
   const list = useRef<HTMLUListElement>(null);
@@ -125,7 +143,7 @@ export function JourneyList({ rows, progress }: { rows: JourneyRow[]; progress?:
   const stale = (f.area !== "" && !areas.includes(f.area)) || (f.repo !== "" && !repos.includes(f.repo));
   // Setting state during render is React's "adjust state when a prop changes" (derived state) pattern.
   if (stale) setF({ ...f, area: areas.includes(f.area) ? f.area : "", repo: repos.includes(f.repo) ? f.repo : "" });
-  const shown = useMemo(() => sortJourneys(filterJourneys(rows, f), sort), [rows, f, sort]);
+  const shown = useMemo(() => sortJourneys(filterJourneys(rows, f, marks), sort), [rows, f, marks, sort]);
   const [limit, more] = useLimit(JSON.stringify([f, sort]));
   const set = <K extends keyof JourneyFilter>(k: K) => (v: string) => setF((p) => ({ ...p, [k]: v as JourneyFilter[K] }));
 
@@ -185,6 +203,18 @@ export function JourneyList({ rows, progress }: { rows: JourneyRow[]; progress?:
             />
           )}
         </Field>
+        {marks && (
+          <Field label="Spec">
+            {(id) => (
+              <Select
+                id={id}
+                value={f.spec}
+                onChange={set("spec")}
+                options={[["", "Any"], ...SPEC_MARKS.map((m): [string, string] => [m, SPEC_SHORT[m]])]}
+              />
+            )}
+          </Field>
+        )}
         <div className="ml-auto">
           <Field label="Sort">
             {(id) => (
@@ -222,7 +252,7 @@ export function JourneyList({ rows, progress }: { rows: JourneyRow[]; progress?:
         ) : (
           <ul ref={list} aria-label="User journeys" className="divide-y divide-border">
             {shown.slice(0, limit).map((r) => (
-              <Row key={r.id} r={r} level={levels ? (levels.get(r.id) ?? null) : undefined} />
+              <Row key={r.id} r={r} level={levels ? (levels.get(r.id) ?? null) : undefined} spec={specRows?.get(r.id)} />
             ))}
           </ul>
         )}

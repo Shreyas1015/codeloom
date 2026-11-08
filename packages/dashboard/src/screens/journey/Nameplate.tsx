@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { useProgress } from "@/api/queries";
+import { useJourneySpecs, useProgress } from "@/api/queries";
 import type { JourneyResult } from "@/api/types";
 import { LevelBadge } from "@/components/gallery/ProgressStrip";
+import { SpecBadge } from "@/components/gallery/SpecBadge";
 import { displayLevel } from "@/lib/progress";
 import { API_ONLY_TITLE } from "@/lib/completeness";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,8 @@ export function Nameplate({ result, model }: { result: JourneyResult; model: Jou
   // Your level on this journey (chains have none); absent until progress loads, or when it cannot.
   const { data: progress } = useProgress();
   const mine = j ? progress?.journeys.find((v) => v.journeyId === j.id) : undefined;
+  // Its spec state (chains have none); absent until it loads, or when specs.json is broken (the Specs tab says why).
+  const { data: spec } = useJourneySpecs(j?.id);
   const facts = [
     plural(model.stops.length, "stop"),
     plural(model.repos.length, "repo"),
@@ -78,6 +81,18 @@ export function Nameplate({ result, model }: { result: JourneyResult; model: Jou
             {model.complete ? "Complete" : model.apiOnly ? "API → DB" : "Incomplete"}
           </span>
           {mine ? <LevelBadge level={displayLevel(mine)} changed={mine.needsReWalk.length} /> : null}
+          {j && spec ? (
+            <Link
+              to="/journeys/$id"
+              params={{ id: j.id }}
+              search={{ tab: "specs" }}
+              replace
+              title="Open the Specs tab"
+              className="rounded-[4px] outline-offset-2 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+            >
+              <SpecBadge state={spec.state} checked={spec.checked} />
+            </Link>
+          ) : null}
           {j?.status === "orphaned" ? <span className={cn(pill, "bg-destructive-soft text-destructive")}>Orphaned</span> : null}
         </div>
       </div>

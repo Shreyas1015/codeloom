@@ -69,9 +69,13 @@ function Shell() {
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
+export type JourneyTab = "lanes" | "chains" | "specs";
 export interface JourneySearch {
   stop?: number;
+  /** The open tab; none = Lanes. */
+  tab?: JourneyTab;
 }
+const isJourneyTab = (v: unknown): v is JourneyTab => v === "lanes" || v === "chains" || v === "specs";
 export interface TourSearch {
   phase?: TourPhase;
   stop?: number;
@@ -95,7 +99,7 @@ const journeyRoute = createRoute({
   path: "/journeys/$id",
   validateSearch: (s: Record<string, unknown>): JourneySearch => {
     const stop = Number(s.stop);
-    return Number.isInteger(stop) && stop >= 0 ? { stop } : {};
+    return { ...(Number.isInteger(stop) && stop >= 0 ? { stop } : {}), ...(isJourneyTab(s.tab) ? { tab: s.tab } : {}) };
   },
   component: JourneyRoute,
 });

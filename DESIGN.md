@@ -226,7 +226,8 @@ lane hue: Home names the stops, it never claims you walked them. In Tour mode's 
 filled, the one you stand at is haloed, and the rest stay hollow in their lane hue.
 
 **The Oxblood Rule.** Oxblood appears only for errors and broken or unresolved hops, and always with a second
-cue (a dashed edge or the word), never colour alone.
+cue (a dashed edge or the word), never colour alone. Its one other use is the "No spec" badge (a journey Claude
+checked and found no spec for), which carries both cues.
 
 ## Typography
 
@@ -266,9 +267,11 @@ and give the full text as a tooltip.
 - **Home:** nameplate, a six-cell hairline count strip (3 x 2 below 1024px), the Continue band, then the journey
   list as one white panel of rows on a five-column grid (Journey 2.3fr, Area 0.9fr, Stops 2.2fr, Repos 1fr,
   Confidence 0.9fr). Lists render 200 rows, then "Show more".
-- **Journey:** nameplate, Lanes/Chains tabs, then the lanes board beside a 320px sticky stop inspector (from
-  1024px). Lanes share the width equally but never drop below 184px; below that the board scrolls sideways
-  instead of cutting names.
+- **Journey:** nameplate, Lanes/Chains/Specs tabs (the tab lives in the URL, `?tab=`), then the lanes board
+  beside a 320px sticky stop inspector (from 1024px). Lanes share the width equally but never drop below 184px;
+  below that the board scrolls sideways instead of cutting names. The Specs tab drops the inspector: the spec
+  state and the match-specs command, linked docs and tickets with Claude's reason (or, before a check, the
+  candidates with their evidence), and an opened doc read-only in a sticky column beside the list.
 - **Map:** toolbar (repo segmented buttons, Layers, journey overlay, search), then a canvas beside a 330px
   inspector. Each folder level opens at the largest zoom between 0.9x and 1.1x at which every card fits,
   top-aligned and centred; a level that is wider starts top-left at 0.9x and pans. Cards are 232px wide in
@@ -279,8 +282,8 @@ and give the full text as a tooltip.
   (from 1280px), and no side column when the stop has no step. Check yourself: questions on the left, a 470px
   column with Check me in Claude, Last check and History.
 - **Progress:** nameplate ("You understand n of N journeys", a one-line definition, the file path) with the
-  legend; then the repo table, By area and What's left beside a 300 to 380px column (Needs a re-walk, Recent
-  checks, Next suggested, For older journeys).
+  legend; then the repo table, By area, What's left and Spec coverage (a By repo / By area table) beside a 300
+  to 380px column (Needs a re-walk, Recent checks, Next suggested, For older journeys).
 - **Density:** rows 12px vertical padding, panels 14 to 18px inner padding, hairlines between rows rather than
   gaps.
 
@@ -359,6 +362,15 @@ failure (oxblood). No border-left accent stripes.
   API never sends them and the page never shows them.
 - **Check results** read "Passed" or "Not passed" everywhere (Tour's Last check, Progress's Recent checks);
   Not passed is in oxblood on Progress, always with the words.
+
+### Spec Badge
+- A 4px-cornered pill in words, 11.5px semibold, one per journey (Home rows beside the name, the Journey
+  nameplate, view widgets). Linked: viridian ink on the API wash ("Spec linked"). Candidates waiting: ochre ink
+  with a deep-ochre edge on the ochre wash ("Spec candidates"; never ochre fill). No spec: oxblood ink and a
+  dashed oxblood edge on white ("No spec"). Not checked: slate on sage mist ("Spec not checked").
+- Shown only once the state is known: no placeholder while loading, and none when specs.json can't be read
+  (the Specs tab and Progress say why in a dashed oxblood card with `codeloom doctor`).
+- The Spec coverage table uses the four badges as its column headers, so the header is the legend.
 
 ### Confidence Line
 - Exact: 2px solid tan. Param: 1px solid tan. Guess: 1.5px dashed slate with the reason as a tooltip (focusable).
