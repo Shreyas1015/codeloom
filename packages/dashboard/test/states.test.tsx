@@ -180,10 +180,11 @@ describe("full-screen states", () => {
     await act(async () => {
       await qc.invalidateQueries({ queryKey: ["journeys"] });
     });
-    const state = await screen.findByRole("alert", { name: /session expired/i });
-    const h1 = within(state).getByRole("heading", { level: 1, name: /session expired/i });
+    // Home briefly shows its own embedded copy (an h2) before the shell's full-screen state replaces it:
+    // look the shell's h1 up afresh on every try rather than holding on to whichever appeared first.
+    const h1 = await screen.findByRole("heading", { level: 1, name: /session expired/i });
     expect(h1).toHaveAttribute("tabindex", "-1");
-    await waitFor(() => expect(h1).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: /session expired/i })).toHaveFocus());
   });
 
   it("an idle viewer whose session expires sees it: the live stream's error refetches the overview once", async () => {
@@ -223,9 +224,9 @@ describe("full-screen states", () => {
     await act(async () => {
       await qc.invalidateQueries({ queryKey: ["overview"] });
     });
-    // CI runners can be slow to settle the refetch + focus move: give both waits room.
-    const state = await screen.findByRole("region", { name: /isn't mapped yet/ }, { timeout: 5000 });
-    await waitFor(() => expect(within(state).getByRole("heading", { level: 1 })).toHaveFocus(), { timeout: 5000 });
+    // Home briefly shows its own embedded copy (an h2) before the shell's full-screen state replaces it:
+    // look the shell's h1 up afresh on every try rather than holding on to whichever region appeared first.
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: /isn't mapped yet/ })).toHaveFocus(), { timeout: 5000 });
   });
 
   it.each([
