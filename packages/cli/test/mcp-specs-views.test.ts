@@ -1,6 +1,7 @@
 // v0.3 Task 2: the spec-link and view MCP tools (match_specs, save_spec_links, list_specs, save_view,
 // list_views, delete_view) and the match-specs / make-view prompts, on demo-shop (Customer / Invoice).
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -176,6 +177,34 @@ describe("specs", () => {
     await err("save_spec_links", { journey: "j_000000000000", links: [] });
     await err("save_spec_links", { journey: SIGNUP });
     expect(readFileSync(join(demo, ".codeloom", "specs.json"), "utf8")).toBe(before);
+  });
+
+  it("save_spec_links refuses env files, git internals and symlinks out; match_specs never shows their text (final review §1)", async () => {
+    const api = join(demo, "api");
+    writeFileSync(join(api, ".env"), "SECRET=api-env\n");
+    writeFileSync(join(api, ".env.local"), "SECRET=api-env-local\n");
+    mkdirSync(join(api, ".git"), { recursive: true });
+    writeFileSync(join(api, ".git", "config"), "[remote]\nurl = SECRET-git\n");
+    const outside = mkdtempSync(join(tmpdir(), "codeloom-outside-"));
+    writeFileSync(join(outside, "invoices.md"), "SECRET-outside\n");
+    symlinkSync("/etc/hosts", join(api, "docs", "hosts.md"));
+    symlinkSync(outside, join(api, "docs", "billing-docs"));
+    const refs = ["api:.env", "api:.env.local", "api:.git/config", "api:docs/../.git/config", "api:docs/hosts.md", "api:docs/billing-docs/invoices.md"];
+    const before = readFileSync(join(demo, ".codeloom", "specs.json"), "utf8");
+    for (const ref of refs) await err("save_spec_links", { journey: SIGNUP, links: [{ kind: "doc", ref, reason: "x" }] });
+    expect(readFileSync(join(demo, ".codeloom", "specs.json"), "utf8")).toBe(before);
+
+    // a hand-edited candidates file pointing at them: no snippet text ever comes back
+    const ev = (file: string) => ({ kind: "route" as const, term: "x", file, line: 1 });
+    writeFileSync(
+      candidatesPath(),
+      JSON.stringify({ version: 1, journeys: { [SIGNUP]: { docs: refs.map((ref) => ({ ref, score: 1, count: 1, evidence: [ev(ref.slice(4))] })), tickets: [] } } }),
+    );
+    const r = await call("match_specs", { journey: SIGNUP });
+    const text = JSON.stringify(r);
+    expect(text).not.toMatch(/SECRET|localhost/);
+    const docs = (r.structuredContent as { docs: Array<{ evidence: Array<{ snippet: unknown }> }> }).docs;
+    expect(docs.flatMap((d) => d.evidence.map((e) => e.snippet))).toEqual(refs.map(() => null));
   });
 
   it("an entry for a journey that no longer exists is listed under olderJourneys", async () => {

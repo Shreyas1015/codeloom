@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -85,6 +85,24 @@ describe("specs.json store", () => {
       expect(() => saveSpecLinks(w, J1, links as never, { now: NOW }), what).toThrow(CodeloomError);
     }
     expect(() => saveSpecLinks(w, "j_bad", [], { now: NOW })).toThrow(/journey id/);
+    expect(readSpecs(w.root).journeys).toEqual({});
+  });
+
+  it("refuses doc refs to env files, git internals and symlinks that lead out of the repo (final review §1)", () => {
+    const w = ws();
+    const api = w.repos[0]!.abs;
+    writeFileSync(join(api, ".env"), "SECRET=1\n");
+    writeFileSync(join(api, ".env.local"), "SECRET=2\n");
+    mkdirSync(join(api, ".git"), { recursive: true });
+    writeFileSync(join(api, ".git", "config"), "[core]\n");
+    symlinkSync("/etc/hosts", join(api, "docs", "hosts.md"));
+    const billing = mkdtempSync(join(tmpdir(), "codeloom-billing-"));
+    mkdirSync(join(billing, "docs"));
+    writeFileSync(join(billing, "docs", "invoices.md"), "# Invoices\n");
+    symlinkSync(join(billing, "docs"), join(api, "docs", "billing"));
+    for (const ref of ["shop-api:.env", "shop-api:.env.local", "shop-api:.git/config", "shop-api:docs/../.git/config", "shop-api:docs/hosts.md", "shop-api:docs/billing/invoices.md"]) {
+      expect(() => saveSpecLinks(w, J1, [{ kind: "doc", ref, reason: "x" }], { now: NOW }), ref).toThrow(CodeloomError);
+    }
     expect(readSpecs(w.root).journeys).toEqual({});
   });
 

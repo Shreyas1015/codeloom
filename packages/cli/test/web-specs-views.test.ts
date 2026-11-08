@@ -316,6 +316,25 @@ describe("GET /api/docs", () => {
     await fail("/api/docs?repo=api&file=docs", 400);
   });
 
+  it("refuses .env, .git and .codeloom in any letter case on /api/docs and /api/code (final review §2)", async () => {
+    const api = join(demo, "api");
+    writeFileSync(join(api, ".env"), "SECRET=1\n");
+    writeFileSync(join(api, ".env.local"), "SECRET=2\n");
+    mkdirSync(join(api, ".git"), { recursive: true });
+    writeFileSync(join(api, ".git", "config"), "[core]\n");
+    for (const file of [".ENV", ".Env.local", ".GIT/config", ".CODELOOM/graph.json"]) {
+      for (const ep of ["/api/docs", "/api/code"]) await fail(`${ep}?repo=api&file=${encodeURIComponent(file)}`, 400);
+    }
+    // on a case-insensitive file system these names really open the hidden files; the check still refuses
+    let insensitive = false;
+    try {
+      insensitive = readFileSync(join(api, ".ENV"), "utf8") === "SECRET=1\n";
+    } catch {
+      insensitive = false;
+    }
+    if (insensitive) for (const ep of ["/api/docs", "/api/code"]) expect(JSON.stringify((await request(server, `${ep}?repo=api&file=.ENV`)).body)).not.toMatch(/SECRET/);
+  });
+
   it("refuses a doc over 512 KB and a binary file", async () => {
     writeFileSync(join(demo, "api", "docs", "big.md"), "x".repeat(512 * 1024 + 1));
     await fail("/api/docs?repo=api&file=docs/big.md", 400);

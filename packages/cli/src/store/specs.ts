@@ -1,10 +1,10 @@
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute, join, posix, relative, resolve } from "node:path";
+import { join, posix } from "node:path";
 import { z } from "zod";
 import { dataError } from "../errors.js";
 import { compare } from "../util.js";
 import { readJson, writeJsonAtomic } from "./json.js";
 import { CODELOOM_DIR } from "./paths.js";
+import { safeRepoFile } from "./safe-file.js";
 import {
   compileTicketPattern,
   DEFAULT_IGNORE_PREFIXES,
@@ -90,7 +90,7 @@ export function ticketKeyProblem(key: string, rules: Partial<TicketRules>): stri
 }
 
 /** A doc ref `repo:path` → its normalised form, or a problem. The file must exist in that workspace repo,
- * stay inside it, and not be under .codeloom. */
+ * stay inside it after symlinks, and not be git internals, an env file or under .codeloom (safeRepoFile). */
 function checkDocRef(ws: Pick<StoreWorkspace, "repos">, ref: string): { ref: string } | { problem: string } {
   const at = ref.indexOf(":");
   if (at <= 0 || at === ref.length - 1) return { problem: `"${ref}" is not a doc ref: use "<repo>:<path>", e.g. "shop-api:docs/customers.md".` };
@@ -98,11 +98,12 @@ function checkDocRef(ws: Pick<StoreWorkspace, "repos">, ref: string): { ref: str
   const repo = ws.repos.find((r) => r.ref.id === id);
   if (!repo) return { problem: `Unknown repo "${id}" in "${ref}". Repos in this workspace: ${ws.repos.map((r) => r.ref.id).join(", ")}.` };
   const file = posix.normalize(ref.slice(at + 1).split("\\").join("/"));
-  const abs = resolve(repo.abs, file);
-  const rel = relative(repo.abs, abs);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { problem: `"${ref}" is outside repo "${id}".` };
-  if (file.split("/").includes(CODELOOM_DIR)) return { problem: `"${ref}" is codeloom's own data, not a spec.` };
-  if (!existsSync(abs) || !statSync(abs).isFile()) return { problem: `"${ref}" does not exist (no file ${file} in repo "${id}").` };
+  const r = safeRepoFile(repo.abs, ref.slice(at + 1));
+  if (!r.ok) {
+    if (r.reason === "hidden") return { problem: `"${ref}" is git internals, an env file or codeloom's own data, not a spec.` };
+    if (r.reason === "outside") return { problem: `"${ref}" is outside repo "${id}".` };
+    return { problem: `"${ref}" does not exist (no file ${file} in repo "${id}").` };
+  }
   return { ref: `${id}:${file}` };
 }
 

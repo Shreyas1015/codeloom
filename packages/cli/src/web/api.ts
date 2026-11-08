@@ -1,6 +1,6 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
@@ -13,6 +13,7 @@ import { z } from "zod";
 import { journeyPlacedStops, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
 import { CODELOOM_DIR } from "../store/paths.js";
+import { safeRepoFile } from "../store/safe-file.js";
 import { JOURNEY_ID_RE, readTour, tourRemovedStops, tourStaleStops } from "../store/tours.js";
 import { listSpecs } from "../mcp/tools/specs.js";
 import { DOCTOR_HINT } from "../store/json.js";
@@ -387,34 +388,15 @@ function repoFile(start: string, url: URL): { repoId: string; file: string; real
   const ws = loadWorkspace(start);
   const ref = ws.repos.find((r) => r.id === repoId);
   if (!ref) throw new HttpError(404, `Unknown repo "${repoId}". Repos in this workspace: ${ws.repos.map((r) => r.id).join(", ")}.`);
-  const root = resolve(ws.root, ref.path);
-  const outside = new HttpError(400, `Bad file "${file}": it is outside repo "${repoId}".`);
-  const inside = (base: string, p: string) => {
-    const rel = relative(base, p);
-    return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-  };
-  if (isAbsolute(file) || file.includes("\0")) throw outside;
-  const abs = resolve(root, file);
-  if (!inside(root, abs)) throw outside;
-  // Never show git internals, env files or codeloom's own folder (tours hold the check's expected points),
-  // even though they sit inside the repo.
-  const hidden = (base: string, p: string) => {
-    const segments = relative(base, p).split(sep);
-    return segments.includes(".git") || segments.includes(CODELOOM_DIR) || /^\.env(\..*)?$/.test(segments[segments.length - 1]!);
-  };
-  const refused = new HttpError(400, `Bad file "${file}": codeloom does not show git internals, .env files or ${CODELOOM_DIR} files.`);
-  if (hidden(root, abs)) throw refused;
-  let real: string;
-  try {
-    real = realpathSync(abs);
-  } catch {
-    throw new HttpError(404, `${file} does not exist in repo "${repoId}" (the map may be stale; run codeloom index).`);
+  const r = safeRepoFile(resolve(ws.root, ref.path), file);
+  if (!r.ok) {
+    if (r.reason === "missing") throw new HttpError(404, `${file} does not exist in repo "${repoId}" (the map may be stale; run codeloom index).`);
+    if (r.reason === "hidden") throw new HttpError(400, `Bad file "${file}": codeloom does not show git internals, .env files or ${CODELOOM_DIR} files.`);
+    if (r.reason === "not-file") throw new HttpError(400, `Bad file "${file}": not a file.`);
+    throw new HttpError(400, `Bad file "${file}": it is outside repo "${repoId}".`);
   }
-  if (!inside(realpathSync(root), real)) throw outside;
-  if (hidden(realpathSync(root), real)) throw refused;
-  const st = statSync(real);
-  if (!st.isFile()) throw new HttpError(400, `Bad file "${file}": not a file.`);
-  return { repoId, file, real, size: st.size };
+  const { real, size } = r;
+  return { repoId, file, real, size };
 }
 
 /** /api/code: a slice of one file (path safety: repoFile). */

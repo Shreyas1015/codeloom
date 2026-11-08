@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dataError } from "../../errors.js";
-import { CODELOOM_DIR } from "../../store/paths.js";
+import { safeRepoFile } from "../../store/safe-file.js";
 import type { Journey } from "../../store/schemas.js";
 import { type JourneySpecCandidates, readSpecCandidates, readSpecsConfig } from "../../store/spec-candidates.js";
 import { type JourneySpecs, LinksInputSchema, readSpecs, saveSpecLinks, type SpecState, specState, specsPath } from "../../store/specs.js";
@@ -36,16 +36,15 @@ function journeyRepos(state: MapState, j: Journey): string[] {
   return [...repos].sort(compare);
 }
 
-/** A doc's lines, when `repo:path` names a readable file inside a workspace repo (never under .codeloom). */
+/** A doc's lines, when `repo:path` names a readable file inside a workspace repo (path safety:
+ * safeRepoFile, the same as /api/docs; never git internals, env files or .codeloom). */
 function docLines(state: MapState, repoId: string, file: string): string[] | null {
   const repo = state.ws.repos.find((r) => r.ref.id === repoId);
   if (!repo) return null;
-  const abs = resolve(repo.abs, file);
-  const rel = relative(repo.abs, abs);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || rel.split(/[\\/]/).includes(CODELOOM_DIR)) return null;
+  const r = safeRepoFile(repo.abs, file);
+  if (!r.ok || r.size > MAX_DOC_BYTES) return null;
   try {
-    if (!existsSync(abs) || !statSync(abs).isFile() || statSync(abs).size > MAX_DOC_BYTES) return null;
-    const text = readFileSync(abs, "utf8");
+    const text = readFileSync(r.real, "utf8");
     const lines = text.split("\n");
     if (text.endsWith("\n")) lines.pop();
     return lines;
