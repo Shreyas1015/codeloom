@@ -129,7 +129,7 @@ describe("spec-candidates.json and the workspace specs config", () => {
       journeys: {
         [J1]: {
           docs: [{ ref: "shop-api:docs/customers.md", score: 3, count: 1, evidence: [{ kind: "route", term: "POST /api/customers", file: "docs/customers.md", line: 3 }] }],
-          tickets: [{ ref: "SHOP-12", score: 1, count: 1, evidence: [{ commit: "abc1234", file: "app/customers.ts", subject: "SHOP-12 add customers" }] }],
+          tickets: [{ ref: "SHOP-12", score: 1, count: 1, evidence: [{ repo: "api", commit: "abc1234", file: "app/customers.ts", subject: "SHOP-12 add customers" }] }],
         },
       },
     };

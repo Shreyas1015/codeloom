@@ -404,9 +404,11 @@ export const SpecDocEvidenceSchema = z.object({
 });
 export type SpecDocEvidence = z.infer<typeof SpecDocEvidenceSchema>;
 
-/** One commit naming a ticket key. `commit` is the short sha (7 hex), `file` the journey stop file it
- * touched, repo-relative (the first in sort order), `subject` the commit subject cut to 120 chars. */
+/** One commit naming a ticket key. `repo` is the workspace repo the commit is in, `commit` the short sha
+ * (7 hex), `file` the journey stop file it touched, repo-relative (the first in sort order), `subject` the
+ * commit subject cut to 120 chars. */
 export const SpecTicketEvidenceSchema = z.object({
+  repo: z.string(),
   commit: z.string(),
   file: z.string(),
   subject: z.string().max(120),

@@ -714,7 +714,7 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
         journeys: {
           [jid]: {
             docs: [{ ref: "demo-api:docs/customers.md", score: 5, count: 2, evidence: [{ kind: "route", term: "POST /api/customers", file: "docs/customers.md", line: 3 }] }],
-            tickets: [{ ref: "SHOP-12", score: 1, count: 1, evidence: [{ commit: "abc1234", file: "app/controllers/customers_controller.ts", subject: "SHOP-12 add customers" }] }],
+            tickets: [{ ref: "SHOP-12", score: 1, count: 1, evidence: [{ repo: "api", commit: "abc1234", file: "app/controllers/customers_controller.ts", subject: "SHOP-12 add customers" }] }],
           },
         },
       }),

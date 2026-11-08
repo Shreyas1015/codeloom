@@ -49,7 +49,7 @@ const CANDIDATES: SpecCandidatesFile = {
         },
         { ref: "api:docs/gone.md", score: 1, count: 1, evidence: [{ kind: "symbol", term: "CustomersController.store", file: "docs/gone.md", line: 1 }] },
       ],
-      tickets: [{ ref: "SHOP-12", score: 2, count: 2, evidence: [{ commit: "abc1234", file: "app/controllers/customers_controller.ts", subject: "SHOP-12 sign up customers" }] }],
+      tickets: [{ ref: "SHOP-12", score: 2, count: 2, evidence: [{ repo: "api", commit: "abc1234", file: "app/controllers/customers_controller.ts", subject: "SHOP-12 sign up customers" }] }],
     },
     [PAY]: { docs: [], tickets: [] },
   },

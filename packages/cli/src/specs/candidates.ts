@@ -393,7 +393,7 @@ export function buildSpecCandidates(input: {
         const keys = new Set([...matchKeys(`${c.subject}\n${c.body}`), ...(branch ? matchKeys(branch) : [])]);
         const file = touched.get(i)!.sort(compare)[0]!;
         const subject = c.subject.length > MAX_SUBJECT ? `${c.subject.slice(0, MAX_SUBJECT - 1)}…` : c.subject;
-        for (const key of keys) tickets.set(key, [...(tickets.get(key) ?? []), { commit: c.sha.slice(0, 7), file, subject }]);
+        for (const key of keys) tickets.set(key, [...(tickets.get(key) ?? []), { repo: repo.id, commit: c.sha.slice(0, 7), file, subject }]);
       }
     }
     const ticketCandidates: SpecTicketCandidate[] = [...tickets.entries()].map(([ref, ev]) => ({
