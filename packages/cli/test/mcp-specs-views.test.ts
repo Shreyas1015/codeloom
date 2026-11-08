@@ -300,6 +300,9 @@ describe("prompts", () => {
     for (const w of ["counts", "journeys", "map", "progress", "checks", "specCoverage", "note"]) expect(t).toContain(`\`${w}\``);
     expect(t).toMatch(/save_view/);
     expect(t).toContain("/views/<id>");
+    // spec "none" is checked with no spec; "unchecked" is not checked yet (final review §10)
+    expect(t).toContain('"unchecked"');
+    expect(t).toMatch(/"none" was\s+checked and has no spec/);
     await expect(client.getPrompt({ name: "make-view", arguments: {} })).rejects.toThrow();
   });
 });

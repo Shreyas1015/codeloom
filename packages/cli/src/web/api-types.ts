@@ -443,6 +443,9 @@ export interface ProgressWriteResponse {
 /** linked: ≥ 1 saved link. candidates: not checked yet, and codeloom found candidates. none: checked
  * with no links ("no spec"), or not checked and nothing found (`checked` tells them apart). */
 export type SpecState = "linked" | "candidates" | "none";
+/** A journeys widget's spec filter (store/views.ts ViewSpecFilterSchema): `none` = checked with no spec,
+ * `unchecked` = not checked and no candidates (the Home badges). */
+export type ViewSpecFilter = "linked" | "candidates" | "none" | "unchecked";
 
 /** A confirmed link (written by the save_spec_links MCP tool). `ref`: "repo:path" for a doc, the key for a ticket. */
 export interface SpecLink {
@@ -535,7 +538,7 @@ export type Widget =
   | {
       type: "journeys";
       title?: string;
-      filter?: { area?: string; repo?: string; spec?: SpecState; level?: ViewLevel; confidence?: Confidence; complete?: boolean };
+      filter?: { area?: string; repo?: string; spec?: ViewSpecFilter; level?: ViewLevel; confidence?: Confidence; complete?: boolean };
       sort?: "name" | "area" | "stops" | "confidence" | "progress" | "spec";
       limit?: number;
     }

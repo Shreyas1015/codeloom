@@ -27,6 +27,9 @@ const JOURNEY_OVERLAY_RE = /^journey:j_[0-9a-f]{12}$/;
 
 export const CountsKeySchema = z.enum(["files", "pages", "routes", "tables", "queues", "journeys", "understood", "specLinked"]);
 export const SpecStateSchema = z.enum(["linked", "candidates", "none"]);
+/** A journeys widget's spec filter, the same four marks as Home: linked, candidates (not checked, some
+ * found), none (checked, no spec), unchecked (not checked, nothing found). */
+export const ViewSpecFilterSchema = z.enum(["linked", "candidates", "none", "unchecked"]);
 export const ViewLevelSchema = z.enum(["none", "seen", "toured", "understood", "rewalk"]);
 const ByRepoOrArea = z.enum(["repo", "area"]);
 
@@ -34,7 +37,7 @@ export const JourneysFilterSchema = z
   .object({
     area: z.string().min(1).optional(),
     repo: z.string().min(1).optional(),
-    spec: SpecStateSchema.optional(),
+    spec: ViewSpecFilterSchema.optional(),
     level: ViewLevelSchema.optional(),
     confidence: ConfidenceSchema.optional(),
     complete: z.boolean().optional(),

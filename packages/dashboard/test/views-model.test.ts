@@ -38,7 +38,7 @@ const levels = new Map([
   ["j_signup", level("j_signup", { level: "understood", needsReWalk: ["k"] })],
   ["j_void", level("j_void", { level: "toured" })],
 ]);
-const specs = new Map<string, "linked" | "candidates" | "none">([
+const specs = new Map<string, "linked" | "candidates" | "none" | "unchecked">([
   ["j_signup", "none"],
   ["j_void", "linked"],
   ["j_email", "candidates"],
@@ -62,7 +62,21 @@ describe("views model", () => {
     expect(ids({ level: "none" })).toEqual(["j_email"]);
     expect(ids({ spec: "candidates" })).toEqual(["j_email"]);
     expect(ids({ area: "Invoices", spec: "linked" })).toEqual(["j_void"]);
+    expect(ids({ spec: "none" })).toEqual(["j_signup"]);
+    expect(ids({ spec: "unchecked" })).toEqual([]);
     expect(ids(undefined)).toEqual(["j_signup", "j_void", "j_email"]);
+  });
+
+  it("spec none means checked with no spec; unchecked means not checked and nothing found (as on Home; final review §10)", () => {
+    const marks = new Map<string, "linked" | "candidates" | "none" | "unchecked">([
+      ["j_signup", "none"],
+      ["j_void", "unchecked"],
+      ["j_email", "candidates"],
+    ]);
+    const ids = (f: Parameters<typeof filterViewJourneys>[1]) => filterViewJourneys(rows, f, { specs: marks }).map((r) => r.id);
+    expect(ids({ spec: "none" })).toEqual(["j_signup"]);
+    expect(ids({ spec: "unchecked" })).toEqual(["j_void"]);
+    expect(sortViewJourneys(rows, "spec", { specs: marks }).map((r) => r.id)).toEqual(["j_email", "j_signup", "j_void"]);
   });
 
   it("a level or spec filter matches nothing while that data is missing", () => {

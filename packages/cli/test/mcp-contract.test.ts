@@ -331,6 +331,7 @@ const RawSchemas: Record<string, z.ZodObject> = {
           .strict(),
       ),
       linker: z.object({ chains: int, complete: int, orphanedJourneys: int, wrote: z.boolean() }).strict(),
+      specNotes: z.array(z.string()),
     })
     .strict(),
   get_layers: z

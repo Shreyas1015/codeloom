@@ -11,7 +11,7 @@ import { Command } from "@/components/gallery/CopyCommand";
 import { coverageSentence, SpecCoverageTable } from "@/components/gallery/SpecCoverage";
 import { SpecBadge } from "@/components/gallery/SpecBadge";
 import { SpecsError } from "@/components/gallery/SpecsError";
-import { MATCH_SPECS } from "@/lib/specs";
+import { MATCH_SPECS, specMark } from "@/lib/specs";
 import { LevelStrip, ProgressStrip } from "@/components/gallery/ProgressStrip";
 import { displayLevel, stripCounts } from "@/lib/progress";
 import { cn } from "@/lib/utils";
@@ -172,7 +172,7 @@ function JourneysWidgetView({ widget }: { widget: JourneysWidget }) {
   const specs = useSpecs();
   const levels = useMemo(() => (progress.data ? new Map(progress.data.journeys.map((v) => [v.journeyId, v])) : undefined), [progress.data]);
   const specRows = useMemo(() => (specs.data ? new Map(specs.data.journeys.map((r) => [r.journeyId, r])) : undefined), [specs.data]);
-  const specStates = useMemo(() => (specRows ? new Map([...specRows].map(([id, r]) => [id, r.state])) : undefined), [specRows]);
+  const specStates = useMemo(() => (specRows ? new Map([...specRows].map(([id, r]) => [id, specMark(r)])) : undefined), [specRows]);
   const title = widget.title ?? "User journeys";
   const rows = useMemo(() => {
     if (!journeys.data) return [];

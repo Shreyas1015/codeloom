@@ -64,7 +64,7 @@ export function deleteViewTool(start: string, id: string): Record<string, unknow
 const WIDGETS_HELP =
   "Widgets (at most " + VIEW_LIMITS.widgets + "): " +
   "counts {show?: [files|pages|routes|tables|queues|journeys|understood|specLinked]}; " +
-  "journeys {title?, filter?: {area?, repo?, spec?: linked|candidates|none, level?: none|seen|toured|understood|rewalk, confidence?: exact|param|guess, complete?}, sort?: name|area|stops|confidence|progress|spec, limit?: 1-200}; " +
+  "journeys {title?, filter?: {area?, repo?, spec?: linked|candidates|none|unchecked (none = checked, no spec; unchecked = not checked, nothing found), level?: none|seen|toured|understood|rewalk, confidence?: exact|param|guess, complete?}, sort?: name|area|stops|confidence|progress|spec, limit?: 1-200}; " +
   'map {repo, overlay?: "layer" | "journey:<journey id>", dir?}; ' +
   "progress {by?: repo|area}; checks {limit?: 1-50}; specCoverage {by?: repo|area}; " +
   "note {markdown (≤ " + VIEW_LIMITS.markdown + " characters, no raw HTML)}.";

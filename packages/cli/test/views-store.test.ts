@@ -45,6 +45,9 @@ describe("view schema", () => {
       { type: "note", markdown: "hello" },
     ];
     for (const w of widgets) expect(WidgetSchema.safeParse(w).success, JSON.stringify(w)).toBe(true);
+    // the spec filter takes the four Home marks (final review §10); anything else is refused
+    for (const spec of ["linked", "candidates", "none", "unchecked"]) expect(WidgetSchema.safeParse({ type: "journeys", filter: { spec } }).success, spec).toBe(true);
+    expect(WidgetSchema.safeParse({ type: "journeys", filter: { spec: "missing" } }).success).toBe(false);
   });
 
   it("rejects unknown widget types, unknown keys and out-of-range values", () => {

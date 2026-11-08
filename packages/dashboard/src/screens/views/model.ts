@@ -1,6 +1,7 @@
 /** Pure helpers behind the view widgets: journey filters and sorts that also know your progress and spec
  * state, count cells, and spec coverage rows. */
-import type { JourneyProgressView, JourneyRow, Overview, SpecState, ViewCountKey, ViewLevel, Widget } from "@/api/types";
+import type { JourneyProgressView, JourneyRow, Overview, ViewCountKey, ViewLevel, Widget } from "@/api/types";
+import type { SpecMark } from "@/lib/specs";
 import { displayLevel } from "@/lib/progress";
 import { sortJourneys } from "@/screens/home/filter";
 
@@ -11,7 +12,8 @@ export type JourneysSort = NonNullable<JourneysWidget["sort"]>;
 /** What the journey widget knows besides the rows. Missing maps mean that data has not loaded (or failed). */
 export interface JourneyFacts {
   levels?: ReadonlyMap<string, JourneyProgressView>;
-  specs?: ReadonlyMap<string, SpecState>;
+  /** Each journey's spec mark (lib/specs specMark: the API state split by `checked`, as on Home). */
+  specs?: ReadonlyMap<string, SpecMark>;
 }
 
 /** A progress entry as a view filter level: "rewalk" for an understood journey whose code changed since. */
@@ -36,17 +38,18 @@ export function filterViewJourneys(rows: JourneyRow[], f: JourneysFilter | undef
 
 /** Furthest along first; a journey that needs a re-walk sits just under understood. */
 const LEVEL_RANK: Record<ViewLevel, number> = { understood: 4, rewalk: 3, toured: 2, seen: 1, none: 0 };
-const SPEC_RANK: Record<SpecState, number> = { linked: 0, candidates: 1, none: 2 };
+const SPEC_RANK: Record<SpecMark, number> = { linked: 0, candidates: 1, none: 2, unchecked: 3 };
 const byName = (a: JourneyRow, b: JourneyRow) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 
-/** A sorted copy (name by default). Progress: furthest along first. Spec: linked, then candidates, then none. */
+/** A sorted copy (name by default). Progress: furthest along first. Spec: linked, candidates, none (checked),
+ * then not checked. */
 export function sortViewJourneys(rows: JourneyRow[], sort: JourneysSort | undefined, facts: JourneyFacts): JourneyRow[] {
   if (sort === "progress") {
     const rank = (r: JourneyRow) => LEVEL_RANK[viewLevel(facts.levels?.get(r.id))];
     return [...rows].sort((a, b) => rank(b) - rank(a) || byName(a, b));
   }
   if (sort === "spec") {
-    const rank = (r: JourneyRow) => SPEC_RANK[facts.specs?.get(r.id) ?? "none"];
+    const rank = (r: JourneyRow) => SPEC_RANK[facts.specs?.get(r.id) ?? "unchecked"];
     return [...rows].sort((a, b) => rank(a) - rank(b) || byName(a, b));
   }
   return sortJourneys(rows, sort ?? "name");

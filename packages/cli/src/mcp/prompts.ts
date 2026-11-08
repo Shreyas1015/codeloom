@@ -144,9 +144,11 @@ function makeViewText(request: string): string {
    only when the request is to change that view.
 2. Build the view only from these widgets (each is \`{ type, ...fields }\`; a field with ? is optional):
    - \`counts\` \`{ show?: ["files" | "pages" | "routes" | "tables" | "queues" | "journeys" | "understood" | "specLinked"] }\`: number tiles.
-   - \`journeys\` \`{ title?, filter?: { area?, repo?, spec?: "linked" | "candidates" | "none", level?: "none" | "seen" |
+   - \`journeys\` \`{ title?, filter?: { area?, repo?, spec?: "linked" | "candidates" | "none" | "unchecked", level?: "none" | "seen" |
      "toured" | "understood" | "rewalk", confidence?: "exact" | "param" | "guess", complete?: true | false },
      sort?: "name" | "area" | "stops" | "confidence" | "progress" | "spec", limit?: 1-200 }\`: a journey list.
+     \`spec\`: "linked" has a saved spec; "candidates" is not checked yet and has candidates; "none" was
+     checked and has no spec; "unchecked" is not checked yet and codeloom found nothing.
    - \`map\` \`{ repo, overlay?: "layer" | "journey:<journey id>", dir? }\`: one repo's map, optionally with a
      journey's path drawn on it, opened at a folder.
    - \`progress\` \`{ by?: "repo" | "area" }\`: how much is seen, toured and understood.
