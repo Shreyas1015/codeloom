@@ -175,9 +175,12 @@ with no AI and no network:
 
 - **Docs** in each repo (`docs/**`, `README*`, `**/adr/**`, `*.md`, `*.mdx`, `*.txt`, up to 512 KB) that name
   one of the journey's routes (`POST /api/customers`, with `:id`, `{id}` and `[id]` treated alike), pages,
-  tables, queues or code names (`CustomerService.create`), as whole words.
-- **Tickets**: keys like `SHOP-12` in the commits (subject, body, merged branch name) that touched the
-  journey's files, over the last 500 commits per repo.
+  tables, queues or code names (`CustomerService.create`), as whole words. A name many journeys share (a
+  `customers` table) counts for little, and a doc that names only tables or queues comes after any doc that
+  names a route, page or code name of the journey.
+- **Tickets**: keys like `SHOP-12` in the last 500 commits that changed the journey's stop files (subject,
+  body, merged branch name). A commit that touched many journeys' files counts for less, so keys specific
+  to the journey come first.
 
 These candidates go to `.codeloom/spec-candidates.json`. They are only hints. Run
 `/mcp__codeloom__match-specs <journey id>` (or with no id, for every journey not checked yet): Claude reads
@@ -284,8 +287,10 @@ committed.
 
   A manual link is `exact`. `codeloom check` lists links that could not be resolved or match no chain.
 - `specs` (optional): how codeloom looks for spec candidates. `docs`: extra doc globs; `ignoreDocs`: globs
-  to skip; `ticketPattern`: the ticket key regex (default `\b[A-Z][A-Z0-9]+-\d+\b`); `ignorePrefixes`: key
-  prefixes that are not tickets (default `CVE`, `UTF`, `ISO`, `RFC`, `SHA`). For example
+  to skip; `ticketPattern`: the ticket key regex (default: an uppercase key like `SHOP-12` that is not part of a
+  longer token such as `ORD-MH-26-001`; at most 100 characters, with no nested quantifiers like `(a+)+` and
+  no backreferences); `ignorePrefixes`: key prefixes that are not tickets (default `AC`, `ADR`, `CVE`, `ID`,
+  `ISO`, `QA`, `RFC`, `SHA`, `TC`, `UTF`). For example
   `"specs": { "ticketPattern": "\\bSHOP-\\d+\\b", "ignoreDocs": ["docs/archive/**"] }`.
 - `external` (optional): other services the UI calls that are not repos in this workspace. A call whose
   env var or host is in an entry's `apiBase` is a call to that `name`, never matched to a route.
@@ -369,8 +374,6 @@ Known limits:
 - Queues: RabbitMQ (amqplib) only.
 - The dashboard writes only your own progress (seen, toured); journeys, tours, spec links and views come
   from your agent. Team-shared progress comes later.
-- Spec candidates for a journey your agent just named appear after the next `codeloom index` (the
-  post-commit hook runs it).
 - Ticket text is never fetched; views use only the fixed widget set (no custom panels or HTML).
 
 ## Credits

@@ -104,14 +104,24 @@ async function err(name: string, args: Record<string, unknown> = {}): Promise<st
 const candidatesPath = () => join(demo, ".codeloom", "spec-candidates.json");
 
 describe("specs", () => {
-  it("match_specs without a candidates file says to run codeloom index", async () => {
-    rmSync(candidatesPath(), { force: true }); // codeloom index writes it; this case is a workspace without one
-    const r = await ok<{ docs: unknown[]; tickets: unknown[]; notes: string[]; state: string; checked: boolean }>("match_specs", { journey: SIGNUP });
-    expect(r.docs).toEqual([]);
-    expect(r.tickets).toEqual([]);
-    expect(r.state).toBe("none");
+  it("match_specs for a journey saved after the last index computes its candidates now, writing nothing (final review §4)", async () => {
+    // beforeAll indexed, then saved the journeys: spec-candidates.json has no entry for them yet
+    const before = readFileSync(candidatesPath(), "utf8");
+    expect(JSON.parse(before).journeys[SIGNUP]).toBeUndefined();
+    type R = { docs: Array<{ ref: string }>; tickets: unknown[]; notes: string[]; state: string; checked: boolean };
+    const r = await ok<R>("match_specs", { journey: SIGNUP });
+    expect(r.docs.map((d) => d.ref)).toContain("api:docs/customers.md");
+    expect(r.state).toBe("candidates");
     expect(r.checked).toBe(false);
-    expect(r.notes.join(" ")).toMatch(/codeloom index/);
+    expect(r.notes).toContain("computed now; run codeloom index to store");
+    expect(readFileSync(candidatesPath(), "utf8")).toBe(before);
+
+    // no candidates file at all: the same
+    rmSync(candidatesPath(), { force: true });
+    const none = await ok<R>("match_specs", { journey: SIGNUP });
+    expect(none.docs.map((d) => d.ref)).toContain("api:docs/customers.md");
+    expect(none.notes).toContain("computed now; run codeloom index to store");
+    expect(existsSync(candidatesPath())).toBe(false);
   });
 
   it("match_specs returns candidates with evidence and ±3-line snippets", async () => {

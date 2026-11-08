@@ -1,14 +1,20 @@
 import { readFileSync } from "node:fs";
-import { relative } from "node:path";
+import { join, relative } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dataError } from "../../errors.js";
+import { buildSpecCandidates } from "../../specs/candidates.js";
+import { readJson } from "../../store/json.js";
+import { CODELOOM_DIR, FILES } from "../../store/paths.js";
+import { RepoConfigSchema } from "../../store/schemas.js";
 import { safeRepoFile } from "../../store/safe-file.js";
 import type { Journey } from "../../store/schemas.js";
 import { type JourneySpecCandidates, readSpecCandidates, readSpecsConfig } from "../../store/spec-candidates.js";
 import { type JourneySpecs, LinksInputSchema, readSpecs, saveSpecLinks, type SpecState, specState, specsPath } from "../../store/specs.js";
 import { JOURNEY_ID_RE } from "../../store/tours.js";
 import { compare } from "../../util.js";
+import { listFiles } from "../../workspace/files.js";
+import { loadWorkspace } from "../../workspace/repos.js";
 import { withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
 import { chainLookup, loadMapState, type MapState } from "../state.js";
@@ -69,16 +75,34 @@ function splitDocRef(ref: string): { repo: string; file: string } {
 
 // ---- match_specs ----------------------------------------------------------------------------------------
 
+/** One journey's candidates computed now (a journey saved after the last index): the same builder as
+ * `codeloom index`, for this journey only, nothing written. */
+function candidatesNow(state: MapState, journey: Journey, notes: string[]): JourneySpecCandidates {
+  const repos = state.ws.repos.map((r) => {
+    const config = readJson(join(r.abs, CODELOOM_DIR, FILES.config), RepoConfigSchema);
+    return { id: r.ref.id, abs: r.abs, files: listFiles(r.abs, config?.ignore ?? []) };
+  });
+  const specs = loadWorkspace(state.ws.root).specs;
+  const file = buildSpecCandidates({ repos, chains: state.chains, journeys: [journey], ...(specs ? { specs } : {}), notes });
+  return file.journeys[journey.id] ?? { docs: [], tickets: [] };
+}
+
 export function matchSpecs(start: string, journeyId: string): Record<string, unknown> {
   const state = loadMapState(start);
   const journey = findJourney(state, journeyId);
   const notes: string[] = [];
   const file = readSpecCandidates(state.ws.root);
-  if (!file) notes.push(`No spec candidates yet (.codeloom/spec-candidates.json is missing): run "codeloom index" (or the reindex tool) to find them.`);
-  else if (!file.journeys[journeyId]) notes.push("codeloom found no candidate docs or tickets for this journey. If you know of one, you may still save it.");
-  const candidates: JourneySpecCandidates = file?.journeys[journeyId] ?? { docs: [], tickets: [] };
+  let candidates: JourneySpecCandidates | undefined = file?.journeys[journeyId];
+  if (!candidates) {
+    // Not in spec-candidates.json (no index since the journey was saved, or no file yet): compute it now.
+    candidates = candidatesNow(state, journey, notes);
+    notes.push("computed now; run codeloom index to store");
+  }
+  if (candidates.docs.length + candidates.tickets.length === 0) {
+    notes.push("codeloom found no candidate docs or tickets for this journey. If you know of one, you may still save it.");
+  }
   const entry = readSpecs(state.ws.root).journeys[journeyId];
-  const { state: spec, checked } = specState(entry, file?.journeys[journeyId]);
+  const { state: spec, checked } = specState(entry, candidates);
   const lines = new Map<string, string[] | null>();
   const docs = candidates.docs.map((d) => {
     const { repo, file: path } = splitDocRef(d.ref);
