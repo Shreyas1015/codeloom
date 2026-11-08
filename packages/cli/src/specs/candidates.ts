@@ -375,7 +375,7 @@ export function buildSpecCandidates(input: {
       ref,
       score: hits.reduce((n, h) => n + WEIGHT[h.kind], 0),
       count: hits.length,
-      evidence: hits.slice(0, MAX_EVIDENCE).map((h): SpecDocEvidence => ({ kind: h.kind, term: h.term, file: ref, line: h.line })),
+      evidence: hits.slice(0, MAX_EVIDENCE).map((h): SpecDocEvidence => ({ kind: h.kind, term: h.term, file: ref.slice(ref.indexOf(":") + 1), line: h.line })),
     }));
 
     const stopFiles = new Map<string, Set<string>>();
@@ -391,7 +391,7 @@ export function buildSpecCandidates(input: {
         const c = log.commits[i]!;
         const branch = c.merge ? mergeBranch(c.subject) : undefined;
         const keys = new Set([...matchKeys(`${c.subject}\n${c.body}`), ...(branch ? matchKeys(branch) : [])]);
-        const file = `${repo.id}:${touched.get(i)!.sort(compare)[0]!}`;
+        const file = touched.get(i)!.sort(compare)[0]!;
         const subject = c.subject.length > MAX_SUBJECT ? `${c.subject.slice(0, MAX_SUBJECT - 1)}…` : c.subject;
         for (const key of keys) tickets.set(key, [...(tickets.get(key) ?? []), { commit: c.sha.slice(0, 7), file, subject }]);
       }

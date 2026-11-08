@@ -395,7 +395,7 @@ export const SpecDocHitKindSchema = z.enum(["route", "page", "table", "queue", "
 export type SpecDocHitKind = z.infer<typeof SpecDocHitKindSchema>;
 
 /** One mention of a journey term in a doc. `term` is what matched (a route as "METHOD path" when the doc
- * names the method, else its path), `file` the doc as `repo:path`, `line` 1-based. */
+ * names the method, else its path), `file` the doc's repo-relative path (its repo is in the candidate's `ref`), `line` 1-based. */
 export const SpecDocEvidenceSchema = z.object({
   kind: SpecDocHitKindSchema,
   term: z.string(),
@@ -405,7 +405,7 @@ export const SpecDocEvidenceSchema = z.object({
 export type SpecDocEvidence = z.infer<typeof SpecDocEvidenceSchema>;
 
 /** One commit naming a ticket key. `commit` is the short sha (7 hex), `file` the journey stop file it
- * touched as `repo:path` (the first in sort order), `subject` the commit subject cut to 120 chars. */
+ * touched, repo-relative (the first in sort order), `subject` the commit subject cut to 120 chars. */
 export const SpecTicketEvidenceSchema = z.object({
   commit: z.string(),
   file: z.string(),

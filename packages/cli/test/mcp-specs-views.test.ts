@@ -1,6 +1,6 @@
 // v0.3 Task 2: the spec-link and view MCP tools (match_specs, save_spec_links, list_specs, save_view,
 // list_views, delete_view) and the match-specs / make-view prompts, on demo-shop (Customer / Invoice).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -104,6 +104,7 @@ const candidatesPath = () => join(demo, ".codeloom", "spec-candidates.json");
 
 describe("specs", () => {
   it("match_specs without a candidates file says to run codeloom index", async () => {
+    rmSync(candidatesPath(), { force: true }); // codeloom index writes it; this case is a workspace without one
     const r = await ok<{ docs: unknown[]; tickets: unknown[]; notes: string[]; state: string; checked: boolean }>("match_specs", { journey: SIGNUP });
     expect(r.docs).toEqual([]);
     expect(r.tickets).toEqual([]);
