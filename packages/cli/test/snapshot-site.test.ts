@@ -1,0 +1,260 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { runSnapshot, runSnapshotSite } from "../src/commands/snapshot.js";
+import { runIndex } from "../src/commands/index-cmd.js";
+import { buildFailedBlock, buildSnapshotSite } from "../src/snapshot/site.js";
+import { writeSnapshotData } from "../src/snapshot/write.js";
+import { git } from "../src/workspace/git.js";
+import { commitChange, materializeSingleRepo } from "./helpers.js";
+
+async function setUp(): Promise<string> {
+  const root = materializeSingleRepo("demo-shop");
+  writeFileSync(
+    join(root, "codeloom.workspace.json"),
+    JSON.stringify({ version: 1, name: "demo-shop", repos: [{ id: "api", path: "api" }, { id: "web", path: "web" }], links: [] }),
+  );
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", "add workspace"]);
+  await runIndex(root);
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", "index"]);
+  git(root, ["checkout", "-q", "-b", "feature"]);
+  commitChange(
+    root,
+    "api/app/services/customer_service.ts",
+    (text) => text.replace("    const customer = await Customer.create(payload);\n", "    const customer = await Customer.create({ ...payload });\n"),
+    "tweak CustomerService.create",
+  );
+  return root;
+}
+
+function tmpOutDir(): string {
+  return join(mkdtempSync(join(tmpdir(), "codeloom-site-")), "out");
+}
+
+describe("buildSnapshotSite", () => {
+  it("hosts the snapshot: copies data/, copies the dashboard assets, patches pr + repoSlug, renders review.md with the link", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const outDir = tmpOutDir();
+
+    const result = buildSnapshotSite({
+      dataDir: join(dataOut, "data"),
+      outDir,
+      expectedHead: manifest.head,
+      pr: 42,
+      repoSlug: "acme/widgets",
+      link: "https://acme.github.io/widgets/pr-42/",
+    });
+
+    expect(result.hosted).toBe(true);
+    expect(result.reviewMd).toContain("### 🗺 codeloom review map");
+    expect(result.reviewMd).toContain("https://acme.github.io/widgets/pr-42/");
+
+    // Dashboard assets copied next to data/ (this codeloom version's own build, never anything from the
+    // artifact).
+    expect(existsSync(join(outDir, "index.html"))).toBe(true);
+    expect(existsSync(join(outDir, "assets"))).toBe(true);
+
+    // data/ copied, with pr + repoSlug patched into the manifest.
+    expect(existsSync(join(outDir, "data", "review.json"))).toBe(true);
+    const outManifest = JSON.parse(readFileSync(join(outDir, "data", "manifest.json"), "utf8"));
+    expect(outManifest.pr).toBe(42);
+    expect(outManifest.repoSlug).toBe("acme/widgets");
+    expect(outManifest.head).toBe(manifest.head);
+  });
+
+  it("splices the review block into a PR body file when --body is given", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const outDir = tmpOutDir();
+    const bodyFile = join(mkdtempSync(join(tmpdir(), "codeloom-body-")), "body.md");
+    writeFileSync(bodyFile, "## My PR\n\nDescription here.");
+
+    const result = buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head, bodyFile });
+
+    expect(result.body).toBeDefined();
+    expect(result.body).toContain("## My PR");
+    expect(result.body).toContain("Description here.");
+    expect(result.body).toContain("<!-- codeloom:review:start -->");
+    expect(result.comment).toBeUndefined();
+  });
+
+  it("tooLarge manifest: no dashboard assets, hosted false, the block says too large", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut, maxBytes: 1 });
+    expect(manifest.tooLarge).toBeDefined();
+    const outDir = tmpOutDir();
+
+    const result = buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head });
+
+    expect(result.hosted).toBe(false);
+    expect(result.reviewMd).toContain("too large to host");
+    expect(existsSync(join(outDir, "index.html"))).toBe(false);
+    expect(existsSync(join(outDir, "assets"))).toBe(false);
+    expect(existsSync(join(outDir, "data", "manifest.json"))).toBe(true);
+  });
+
+  it("refuses an artifact with a top-level index.html before writing anything to outDir", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    writeFileSync(join(dataOut, "data", "index.html"), "<html>evil</html>");
+    const outDir = tmpOutDir();
+
+    expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  it("refuses an artifact with a nested assets/evil.js before writing anything to outDir", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    mkdirSync(join(dataOut, "data", "assets"));
+    writeFileSync(join(dataOut, "data", "assets", "evil.js"), "alert(1)");
+    const outDir = tmpOutDir();
+
+    expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
+    expect(existsSync(outDir)).toBe(false);
+  });
+});
+
+describe("buildFailedBlock", () => {
+  it("without a previous manifest: just the error line with the run URL", () => {
+    const outDir = tmpOutDir();
+    const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123" });
+    expect(result.reviewMd).toContain("https://github.com/acme/widgets/actions/runs/123");
+    expect(result.reviewMd).not.toContain("Last good map");
+  });
+
+  it("with a previous manifest: the error line plus the last good link", () => {
+    const outDir = tmpOutDir();
+    const prevDir = mkdtempSync(join(tmpdir(), "codeloom-prev-"));
+    const prevManifest = join(prevDir, "manifest.json");
+    writeFileSync(prevManifest, JSON.stringify({ version: 1, head: "deadbeef".padEnd(40, "0") }));
+
+    const result = buildFailedBlock({
+      outDir,
+      runUrl: "https://github.com/acme/widgets/actions/runs/123",
+      previousManifest: prevManifest,
+      link: "https://acme.github.io/widgets/pr-42/",
+    });
+
+    expect(result.reviewMd).toContain("https://github.com/acme/widgets/actions/runs/123");
+    expect(result.reviewMd).toContain("Last good map");
+    expect(result.reviewMd).toContain("https://acme.github.io/widgets/pr-42/");
+  });
+
+  it("splices into a PR body file when --body is given", () => {
+    const outDir = tmpOutDir();
+    const bodyFile = join(mkdtempSync(join(tmpdir(), "codeloom-body-")), "body.md");
+    writeFileSync(bodyFile, "## My PR");
+
+    const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123", bodyFile });
+    expect(result.body).toContain("## My PR");
+    expect(result.body).toContain("<!-- codeloom:review:start -->");
+  });
+});
+
+describe("runSnapshot (the codeloom snapshot command)", () => {
+  it("writes data/*.json, the dashboard assets and review.md, unless --data-only", async () => {
+    const root = await setUp();
+    const out = tmpOutDir();
+    const result = await runSnapshot(root, { base: "main", out });
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(out, "data", "manifest.json"))).toBe(true);
+    expect(existsSync(join(out, "index.html"))).toBe(true);
+    expect(existsSync(join(out, "review.md"))).toBe(true);
+    expect(readFileSync(join(out, "review.md"), "utf8")).toContain("### 🗺 codeloom review map");
+  });
+
+  it("--data-only writes only data/*.json: no dashboard assets, no review.md", async () => {
+    const root = await setUp();
+    const out = tmpOutDir();
+    const result = await runSnapshot(root, { base: "main", out, dataOnly: true });
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(out, "data", "manifest.json"))).toBe(true);
+    expect(existsSync(join(out, "index.html"))).toBe(false);
+    expect(existsSync(join(out, "review.md"))).toBe(false);
+  });
+});
+
+describe("runSnapshotSite (the codeloom snapshot-site command)", () => {
+  it("writes the site, data/, and review.md + body.md to disk", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const out = tmpOutDir();
+    const bodyFile = join(mkdtempSync(join(tmpdir(), "codeloom-body-")), "body.md");
+    writeFileSync(bodyFile, "Existing description.");
+
+    const result = runSnapshotSite({ out, data: join(dataOut, "data"), head: manifest.head, pr: 7, repoSlug: "acme/widgets", link: "https://acme.github.io/widgets/pr-7/", bodyFile });
+
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(out, "index.html"))).toBe(true);
+    expect(existsSync(join(out, "data", "manifest.json"))).toBe(true);
+    expect(readFileSync(join(out, "review.md"), "utf8")).toContain("### 🗺 codeloom review map");
+    const body = readFileSync(join(out, "body.md"), "utf8");
+    expect(body).toContain("Existing description.");
+    expect(body).toContain("<!-- codeloom:review:start -->");
+    expect(existsSync(join(out, "comment.md"))).toBe(false);
+  });
+
+  it("a validation failure writes only review.md (the refusal) and exits 1 — nothing else reaches out/", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const out = tmpOutDir();
+
+    // The wrong expectedHead: validateSnapshotData's own manifest.head check refuses it.
+    const result = runSnapshotSite({ out, data: join(dataOut, "data"), head: "0".repeat(40) });
+
+    expect(result.exitCode).toBe(1);
+    expect(readFileSync(join(out, "review.md"), "utf8")).toContain("codeloom review map refused:");
+    expect(existsSync(join(out, "data"))).toBe(false);
+    expect(existsSync(join(out, "index.html"))).toBe(false);
+  });
+
+  it("requires either --data/--head or --failed", () => {
+    expect(() => runSnapshotSite({ out: tmpOutDir() })).toThrow();
+  });
+
+  it("--failed writes the error block to review.md", () => {
+    const out = tmpOutDir();
+    const result = runSnapshotSite({ out, failed: "https://github.com/acme/widgets/actions/runs/1" });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(out, "review.md"), "utf8")).toContain("https://github.com/acme/widgets/actions/runs/1");
+  });
+});
+
+describe("codeloom snapshot / snapshot-site (cli wiring)", () => {
+  it("registers snapshot's and snapshot-site's flags", async () => {
+    const { buildProgram } = await import("../src/cli.js");
+    const program = buildProgram();
+    const snapshot = program.commands.find((c) => c.name() === "snapshot")!;
+    const snapshotSite = program.commands.find((c) => c.name() === "snapshot-site")!;
+    expect(snapshot).toBeDefined();
+    expect(snapshot.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--base", "--out", "--max-size", "--data-only"]));
+    expect(snapshotSite).toBeDefined();
+    expect(snapshotSite.options.map((o) => o.long)).toEqual(
+      expect.arrayContaining(["--out", "--data", "--head", "--failed", "--previous", "--pr", "--repo", "--link", "--body", "--max-size"]),
+    );
+  });
+
+  it("exits 2 when --base is missing from snapshot", async () => {
+    const { buildProgram, exitCodeFor } = await import("../src/cli.js");
+    const program = buildProgram().configureOutput({ writeOut: () => {}, writeErr: () => {} });
+    let code = 0;
+    try {
+      await program.parseAsync(["node", "codeloom", "snapshot", "--out", "x"]);
+    } catch (err) {
+      code = exitCodeFor(err);
+    }
+    expect(code).toBe(2);
+  });
+});

@@ -3,10 +3,13 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-/** The dashboard builds to static files that `codeloom dashboard` serves from 127.0.0.1.
- * In dev, /api goes to a running `codeloom dashboard` (default port 4747). */
+/** The dashboard builds to static files that `codeloom dashboard` serves from 127.0.0.1, or that a
+ * hosted PR snapshot serves from `https://<owner>.github.io/<repo>/pr-<n>/` (design spec §7: relative
+ * asset links, so the same build works at any path depth — the live server compensates with its own
+ * `<base href="/">`, see web/server.ts). In dev, /api goes to a running `codeloom dashboard` (default
+ * port 4747). */
 export default defineConfig({
-  base: "/",
+  base: "./",
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: {

@@ -393,6 +393,58 @@ describe("static files", () => {
   });
 });
 
+describe("<base href> injection (relative dashboard asset links, design spec §7)", () => {
+  // The built dashboard now uses vite's base: "./" (relative asset links, so the same build also works
+  // hosted at https://<owner>.github.io/<repo>/pr-<n>/). Served live at an arbitrary path depth (e.g.
+  // /journeys/x), relative links would otherwise resolve against the wrong folder; the live server fixes
+  // that itself by injecting <base href="/"> right after <head>, once, on every index.html response.
+  const HEAD_INDEX_HTML =
+    '<!doctype html><html><head><meta charset="UTF-8" /><title>codeloom</title></head><body><div id="root"></div><script type="module" src="./assets/index-AbCd1234.js"></script></body></html>';
+
+  function makeHeadAssetsDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "codeloom-dash-head-"));
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "index.html"), HEAD_INDEX_HTML);
+    writeFileSync(join(dir, "assets", "index-AbCd1234.js"), JS);
+    return dir;
+  }
+
+  it("GET /journeys/x: the HTML has <base href=\"/\"> right after <head>, exactly once", async () => {
+    const headAssets = makeHeadAssetsDir();
+    const s = await startDashboardServer({ start: demo, port: 0, assetsDir: headAssets, token: TOKEN, watch: false });
+    try {
+      const r = await get(s.port, "/journeys/x", cookie(TOKEN, s.port));
+      expect(r.status).toBe(200);
+      expect(r.body).toContain('<head>\n    <base href="/">');
+      expect(r.body.split('<base href="/">').length - 1).toBe(1);
+      // Nothing else about the page changed.
+      expect(r.body).toContain('<script type="module" src="./assets/index-AbCd1234.js"></script>');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("/assets/<file> still serves normally alongside the injected index.html", async () => {
+    const headAssets = makeHeadAssetsDir();
+    const s = await startDashboardServer({ start: demo, port: 0, assetsDir: headAssets, token: TOKEN, watch: false });
+    try {
+      const r = await get(s.port, "/assets/index-AbCd1234.js");
+      expect(r.status).toBe(200);
+      expect(r.body).toBe(JS);
+      expect(r.headers["content-type"]).toBe("text/javascript; charset=utf-8");
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("an index.html with no <head> tag (e.g. the test fixture's own INDEX_HTML) is served byte-identical", async () => {
+    // Guards the existing "/ -> index.html" test above: a fixture with no literal "<head>" must never be
+    // mangled by the injection (there is nothing to insert after).
+    const r = await get(server.port, "/");
+    expect(r.body).toBe(INDEX_HTML);
+  });
+});
+
 describe("security headers on every response", () => {
   it("nosniff and no-referrer on 200/302/401/403/404/405 and API JSON", async () => {
     const p = server.port;
