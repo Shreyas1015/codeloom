@@ -12,6 +12,7 @@ Every command, MCP tool and prompt, and the workspace file. For a first look, st
 | `codeloom check --json` | The same report as JSON. |
 | `codeloom check --fail-under 80` | Exit 1 when less than 80% of the chains that start in the UI are complete. Useful in CI. |
 | `codeloom check --traces` | Also compare the map with real traffic (see [Trace check](#trace-check)). |
+| `codeloom review --base <ref>` | The PR block for a pull request: a summary line, a Mermaid diagram of the affected chains, a journey/spec table and the changed files on no journey — the impact of `merge-base(<ref>, HEAD)..HEAD`. Paste it into a PR description. `--format json` prints the underlying `Review` data instead. `--link <url>` adds an "Open the full review map" line. |
 | `codeloom doctor` | Check the data files, hooks, `.gitignore` line and MCP entry. `--fix` repairs what is safe to repair. `--json` prints JSON. |
 | `codeloom dashboard` | Serve the dashboard on 127.0.0.1 and open it. `--port <port>` picks the port; `--no-open` only prints the URL. |
 | `codeloom serve` | Run the MCP server on stdio. `init` puts this in `.mcp.json` as `npx -y codeloom serve`. |

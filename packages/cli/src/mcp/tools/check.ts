@@ -92,7 +92,7 @@ const overlaps = (a: Range, b: Range): boolean => a[0] <= b[1] && b[0] <= a[1];
 /** Line extents of every function-like node in a JS/TS file as it was at commit `base` (the map's line
  * space), keyed by start line (the widest one starting there). A non-JS file, or one absent at `base`
  * (its change is "all" anyway) → empty map. */
-function functionExtents(repoAbs: string, base: string, file: string): Map<number, number> {
+export function functionExtents(repoAbs: string, base: string, file: string): Map<number, number> {
   const out = new Map<number, number>();
   if (!JS_EXT.test(file) || base === EMPTY_TREE) return out;
   let text: string;

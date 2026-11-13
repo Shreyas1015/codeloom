@@ -5,6 +5,7 @@ import { CodeloomError, dataError } from "./errors.js";
 import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { codeloomBin, formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
+import { parseReviewFormat, runReview } from "./commands/review.js";
 import { runServeCommand } from "./commands/serve.js";
 import { formatViewsList, runViewsReset } from "./commands/views.js";
 import { VERSION } from "./version.js";
@@ -50,6 +51,17 @@ export function buildProgram(): Command {
       const { output, exitCode } = await runCheck(process.cwd(), opts);
       console.log(output);
       process.exitCode = exitCode;
+    });
+
+  program
+    .command("review")
+    .description("The PR block (summary + Mermaid diagram) for merge-base(<ref>, HEAD)..HEAD, ready to paste into a pull request")
+    .requiredOption("--base <ref>", 'the ref to compare against, e.g. "origin/main"')
+    .option("--format <format>", 'markdown (default) or json (the Review model)', "markdown")
+    .option("--link <url>", 'add an "Open the full review map" line to the markdown, pointing at this URL')
+    .action((opts: { base: string; format: string; link?: string }) => {
+      const { output } = runReview(process.cwd(), { base: opts.base, format: parseReviewFormat(opts.format), link: opts.link });
+      console.log(output);
     });
 
   program
