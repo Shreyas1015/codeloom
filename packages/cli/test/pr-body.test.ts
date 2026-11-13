@@ -53,6 +53,37 @@ describe("splicePrBody", () => {
     expect(result).toEqual({ body: `${body}\n\n${START}NEW${END}` });
   });
 
+  it("I3' (re-review): an author-typed mention of the START marker text earlier in the body is never mistaken for the real block's start — the LAST START before the first END wins", () => {
+    // The author's own prose, quoting the marker literally (e.g. explaining how the bot works), sits
+    // well before the real, bot-inserted block. The old "first START, nearest END after it" logic would
+    // span from the author's incidental mention all the way to the real END, deleting everything
+    // between (including the real START and its own content).
+    const before = `Please use \`${START}\` markers to mark the block.\n\n`;
+    const after = "\n\nTrailer.";
+    const body = `${before}${START}REAL OLD BLOCK${END}${after}`;
+    const result = splicePrBody(body, "NEW BLOCK");
+    expect(result).toEqual({ body: `${before}${START}NEW BLOCK${END}${after}` });
+  });
+
+  // --- m5 (security review): a label containing literal marker text must never corrupt a later splice -
+
+  it("m5: a block containing the literal END marker text is neutralized, so a later splice still finds exactly the one real pair", () => {
+    // A file path (attacker-controlled, from the PR branch) that happens to literally contain the END
+    // marker's own text — e.g. a changed-file line the renderer wrote verbatim.
+    const hostileBlock = `- \`api/${END}evil.ts\` (+1/-0)`;
+
+    const first = splicePrBody("Intro text.", hostileBlock);
+    // Only ONE real END should exist in the result: the one `wrap()` itself appends. The embedded one
+    // inside the hostile block must have been neutralized (no longer an exact match for END).
+    expect(first.body.split(END).length - 1).toBe(1);
+    expect(first.body).toContain("evil.ts");
+
+    const second = splicePrBody(first.body, "SECOND BLOCK");
+    // A second splice must still find exactly the same real pair and replace cleanly — nothing was
+    // corrupted by the embedded marker text left over from the first round.
+    expect(second).toEqual({ body: `Intro text.\n\n${START}SECOND BLOCK${END}` });
+  });
+
   // --- m2 (security review): moving to a comment must strip the stale inline block, not leave it -----
 
   it("m2: over the limit, the old inline block is removed from body (not left stale) alongside comment", () => {

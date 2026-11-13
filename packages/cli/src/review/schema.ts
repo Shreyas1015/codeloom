@@ -63,19 +63,51 @@ const journeySchema = z.object({
 /** Matches review/types.ts's `Review` field for field. `z.record` here always takes a key schema (zod
  * v4): chain ids and names are plain strings, not the snapshotKey charset (they never become file
  * names). */
-export const reviewSchema = z.object({
-  version: z.literal(1),
+export const reviewSchema = z
+  .object({
+    version: z.literal(1),
+    base: z.string(),
+    head: z.string(),
+    baseRef: z.string(),
+    files: z.array(fileSchema),
+    nodes: z.array(nodeChangeSchema),
+    journeys: z.array(journeySchema),
+    chains: z.array(z.string()),
+    chainStops: z.record(z.string(), z.array(stopSchema)),
+    chainNames: z.record(z.string(), z.string()),
+    tables: z.array(z.string()),
+    queues: z.array(z.string()),
+    truncated: z.boolean(),
+    notes: z.array(z.string()),
+  })
+  // Security review I1'a: every `chains` id must be a genuine OWN key of chainStops. Without this, a
+  // chain id that collides with an inherited Object.prototype property name (e.g. "constructor",
+  // "toString") would pass z.record's own validation (chainStops simply never mentions it) while still
+  // crashing the renderer, which looks the id up directly — Object.hasOwn is the renderer's OWN defense
+  // (mermaid.ts, markdown.ts), and this refinement is the writer-contract check: every id a Review
+  // claims to have stops for really does have an explicit (even if empty) entry.
+  .superRefine((data, ctx) => {
+    for (const id of data.chains) {
+      if (!Object.hasOwn(data.chainStops, id)) {
+        ctx.addIssue({ code: "custom", message: "a chain id has no matching entry in chainStops" });
+      }
+    }
+  });
+
+// Security review I1'b: snapshot/validate.ts previously trusted manifest.json's OTHER fields (omitted,
+// bytes, tooLarge, codeloom, base, builtAt) with no shape check at all — a `{...manifest}` spread then
+// carried whatever shape they had straight into the published site's manifest.json. A deeply nested
+// `omitted` (or any of its arrays) stack-overflows JSON.stringify; `tooLarge: null` or
+// `tooLarge: {bytes: "<b>"}` passes the old `=== undefined` / truthiness checks while rendering garbage
+// ("NaN MB") or silently mismatching `hosted`. `manifest.files`' own format/uniqueness/on-disk-equality
+// checks stay as validate.ts's separate, filesystem-aware cross-checks (zod alone can't see the disk).
+const nonNegativeFinite = z.number().finite().nonnegative();
+
+export const manifestFieldsSchema = z.object({
+  codeloom: z.string(),
   base: z.string(),
-  head: z.string(),
-  baseRef: z.string(),
-  files: z.array(fileSchema),
-  nodes: z.array(nodeChangeSchema),
-  journeys: z.array(journeySchema),
-  chains: z.array(z.string()),
-  chainStops: z.record(z.string(), z.array(stopSchema)),
-  chainNames: z.record(z.string(), z.string()),
-  tables: z.array(z.string()),
-  queues: z.array(z.string()),
-  truncated: z.boolean(),
-  notes: z.array(z.string()),
+  builtAt: z.string(),
+  omitted: z.object({ mapFolders: z.array(z.string()), codeFiles: z.array(z.string()) }),
+  bytes: nonNegativeFinite,
+  tooLarge: z.object({ bytes: nonNegativeFinite, max: nonNegativeFinite }).optional(),
 });

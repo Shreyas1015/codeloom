@@ -9,7 +9,7 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { CodeloomError } from "../errors.js";
-import { reviewSchema } from "../review/schema.js";
+import { manifestFieldsSchema, reviewSchema } from "../review/schema.js";
 import type { SnapshotManifest } from "./write.js";
 
 /** Per-file cap (design spec §5): "a file over 5 MB" is refused outright, independent of `maxBytes`. */
@@ -121,5 +121,26 @@ export function validateSnapshotData(dataDir: string, opts: ValidateOptions): Sn
   const reviewResult = reviewSchema.safeParse(parsed.get("review.json"));
   if (!reviewResult.success) refuse("review.json does not match the expected shape.");
 
-  return { ...(manifest as SnapshotManifest), files: listedFiles };
+  // I1'b: manifest.json's own other fields (never checked before) — a malformed `omitted` (not an
+  // array of strings; stands in for the unbounded-depth attack that stack-overflowed JSON.stringify
+  // downstream), a non-finite `bytes`, or a malformed `tooLarge` (null, a non-numeric bytes/max, ...)
+  // is refused here, before anything downstream ever trusts that shape.
+  const extra = manifestFieldsSchema.safeParse(manifest);
+  if (!extra.success) refuse("manifest.json does not match the expected shape.");
+
+  // Built field by field from validated pieces only — never a raw spread of the parsed artifact value
+  // (I1'b): an unknown/extra key in the artifact's manifest.json can never survive into the trusted
+  // return value this way, whatever it is.
+  const result: SnapshotManifest = {
+    version: 1,
+    codeloom: extra.data.codeloom,
+    head: manifest.head,
+    base: extra.data.base,
+    builtAt: extra.data.builtAt,
+    files: listedFiles,
+    omitted: extra.data.omitted,
+    bytes: extra.data.bytes,
+    ...(extra.data.tooLarge !== undefined ? { tooLarge: extra.data.tooLarge } : {}),
+  };
+  return result;
 }

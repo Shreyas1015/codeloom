@@ -145,21 +145,42 @@ describe("buildSnapshotSite", () => {
     expect(existsSync(outDir)).toBe(false);
   });
 
-  it("m4: clears a stale file left over from an earlier run in outDir before writing the fresh site", async () => {
+  it('I1\' (re-review): a chain id of "constructor" with no matching chainStops entry refuses cleanly (not a crash) and leaves outDir untouched — render runs before any write', async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+
+    const reviewPath = join(dataOut, "data", "review.json");
+    const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+    review.chains = ["constructor"];
+    review.chainStops = {};
+    review.chainNames = {};
+    writeFileSync(reviewPath, JSON.stringify(review));
+
+    const outDir = tmpOutDir();
+    expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  it('C1\' (Critical, re-review): refuses a non-empty outDir instead of wiping it, and NEVER deletes anything already there', async () => {
     const root = await setUp();
     const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
     const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
     const outDir = tmpOutDir();
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "stale-old-asset.js"), "// leftover from a previous codeloom version");
-    mkdirSync(join(outDir, "data"), { recursive: true });
-    writeFileSync(join(outDir, "data", "journeys~stale.json"), "{}"); // a key a newer snapshot no longer has
+    // Pre-existing, unrelated content (e.g. a checked-out gh-pages pr-<n>/ folder with real files) —
+    // round 1's resetOutDir would have rmSync'd exactly these.
+    writeFileSync(join(outDir, "README.md"), "pre-existing readme");
+    mkdirSync(join(outDir, "keep"));
+    writeFileSync(join(outDir, "keep", "notes.txt"), "do not delete me");
 
-    buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head });
+    expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
 
-    expect(existsSync(join(outDir, "stale-old-asset.js"))).toBe(false);
-    expect(existsSync(join(outDir, "data", "journeys~stale.json"))).toBe(false);
-    expect(existsSync(join(outDir, "data", "review.json"))).toBe(true);
+    expect(readFileSync(join(outDir, "README.md"), "utf8")).toBe("pre-existing readme");
+    expect(readFileSync(join(outDir, "keep", "notes.txt"), "utf8")).toBe("do not delete me");
+    // And nothing new was added either (no data/, no dashboard assets).
+    expect(existsSync(join(outDir, "data"))).toBe(false);
+    expect(existsSync(join(outDir, "index.html"))).toBe(false);
   });
 
   it("--pages-disabled: the Pages note replaces the link, even when link is also given", async () => {
@@ -181,7 +202,7 @@ describe("buildSnapshotSite", () => {
     expect(result.reviewMd).not.toContain("https://acme.github.io/widgets/pr-42/");
   });
 
-  it("m4: the same-dir case (codeloom snapshot: dataDir === outDir/data) never clears the data it is about to read", async () => {
+  it("C1': the same-dir case (codeloom snapshot: dataDir === outDir/data) is the one legitimate exception — outDir already has exactly its own data/ and that alone is not a refusal", async () => {
     const root = await setUp();
     const out = tmpOutDir();
     const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: out });
@@ -191,9 +212,33 @@ describe("buildSnapshotSite", () => {
     expect(result.hosted).toBe(true);
     expect(existsSync(join(out, "data", "review.json"))).toBe(true);
   });
+
+  it("C1': the same-dir exception does not extend to any OTHER pre-existing entry — data/ plus something else still refuses", async () => {
+    const root = await setUp();
+    const out = tmpOutDir();
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: out });
+    writeFileSync(join(out, "unexpected.txt"), "not ours");
+
+    expect(() => buildSnapshotSite({ dataDir: join(out, "data"), outDir: out, expectedHead: manifest.head })).toThrow();
+    expect(readFileSync(join(out, "unexpected.txt"), "utf8")).toBe("not ours");
+  });
 });
 
 describe("buildFailedBlock", () => {
+  it("C1' (Critical, re-review, exact reproduction): --failed with a non-empty --out refuses instead of wiping README.md/keep/notes.txt", () => {
+    const outDir = tmpOutDir();
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "README.md"), "pre-existing readme");
+    mkdirSync(join(outDir, "keep"));
+    writeFileSync(join(outDir, "keep", "notes.txt"), "do not delete me");
+
+    expect(() => buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123" })).toThrow();
+
+    expect(readFileSync(join(outDir, "README.md"), "utf8")).toBe("pre-existing readme");
+    expect(readFileSync(join(outDir, "keep", "notes.txt"), "utf8")).toBe("do not delete me");
+    expect(existsSync(join(outDir, "review.md"))).toBe(false);
+  });
+
   it("without a previous manifest: just the error line with the run URL", () => {
     const outDir = tmpOutDir();
     const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123" });
@@ -284,6 +329,26 @@ describe("runSnapshot (the codeloom snapshot command)", () => {
     expect(existsSync(join(out, "index.html"))).toBe(false);
     expect(existsSync(join(out, "review.md"))).toBe(false);
   });
+
+  it("C1' (Critical, re-review, exact reproduction): a non-empty --out is refused (exit 2) before writeSnapshotData ever runs — nothing added, nothing deleted", async () => {
+    const root = await setUp();
+    // `codeloom snapshot --base main --out .` on an actual working tree: anything already there
+    // (standing in for a repo root's own files, incl. .git) must survive completely untouched.
+    const out = mkdtempSync(join(tmpdir(), "codeloom-site-"));
+    writeFileSync(join(out, "existing-file.txt"), "pretend this is .git or similar");
+
+    let thrown: unknown;
+    try {
+      await runSnapshot(root, { base: "main", out });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as { exitCode?: number }).exitCode).toBe(2);
+
+    expect(readFileSync(join(out, "existing-file.txt"), "utf8")).toBe("pretend this is .git or similar");
+    expect(existsSync(join(out, "data"))).toBe(false);
+  });
 });
 
 describe("runSnapshotSite (the codeloom snapshot-site command)", () => {
@@ -324,6 +389,41 @@ describe("runSnapshotSite (the codeloom snapshot-site command)", () => {
 
   it("requires either --data/--head or --failed", () => {
     expect(() => runSnapshotSite({ out: tmpOutDir() })).toThrow();
+  });
+
+  it("C1' (Critical, re-review): a non-empty --out in data mode is refused (exit 2), contents untouched — not converted into the exit-1 review.md refusal path", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const out = mkdtempSync(join(tmpdir(), "codeloom-site-")); // non-empty: mkdtempSync's own dir has no entries, so plant one
+    writeFileSync(join(out, "README.md"), "pre-existing");
+
+    let thrown: unknown;
+    try {
+      runSnapshotSite({ out, data: join(dataOut, "data"), head: manifest.head });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as { exitCode?: number }).exitCode).toBe(2);
+    expect(readFileSync(join(out, "README.md"), "utf8")).toBe("pre-existing");
+    expect(existsSync(join(out, "review.md"))).toBe(false);
+  });
+
+  it("C1' (Critical, re-review): a non-empty --out in --failed mode is refused (exit 2), contents untouched", () => {
+    const out = mkdtempSync(join(tmpdir(), "codeloom-site-"));
+    writeFileSync(join(out, "README.md"), "pre-existing");
+
+    let thrown: unknown;
+    try {
+      runSnapshotSite({ out, failed: "https://github.com/acme/widgets/actions/runs/1" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as { exitCode?: number }).exitCode).toBe(2);
+    expect(readFileSync(join(out, "README.md"), "utf8")).toBe("pre-existing");
+    expect(existsSync(join(out, "review.md"))).toBe(false);
   });
 
   it("I2: a validation failure with --body still writes body.md (the refusal spliced in), exit 1", async () => {

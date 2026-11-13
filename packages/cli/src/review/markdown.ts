@@ -1,5 +1,6 @@
 import { compare } from "../util.js";
 import { renderMermaid } from "./mermaid.js";
+import { GITHUB_BODY_LIMIT } from "./pr-body.js";
 import type { Review, ReviewFile } from "./types.js";
 
 const HEADING = "### 🗺 codeloom review map";
@@ -91,11 +92,18 @@ function summaryLine(review: Review): string {
 }
 
 /** A short italic line calling out anything approximate or cut, so it's visible next to the diagram
- * rather than only in the underlying JSON. null when there is nothing to say. */
+ * rather than only in the underlying JSON. null when there is nothing to say.
+ * Security review m7: `review.notes` is attacker-controlled data (from the PR's own index/diff run) with
+ * no cap of its own — unbounded like `review.files`, capped the same way (MAX_LISTED) so a huge notes
+ * array can't by itself blow up the rendered block (the `finish()` wrapper below is still the backstop
+ * for a single oversized note, which capping the COUNT alone can't catch). */
 function caveatLine(review: Review): string | null {
   const parts: string[] = [];
   if (review.truncated) parts.push("Some results were truncated.");
-  for (const n of review.notes) parts.push(escapeMarkdownInline(n));
+  const shown = review.notes.slice(0, MAX_LISTED).map(escapeMarkdownInline);
+  parts.push(...shown);
+  const hiddenNotes = review.notes.length - MAX_LISTED;
+  if (hiddenNotes > 0) parts.push(`+${hiddenNotes} more notes.`);
   return parts.length > 0 ? `*${parts.join(" ")}*` : null;
 }
 
@@ -135,15 +143,34 @@ function journeyTable(review: Review): string[] {
 function chainsTable(review: Review): string[] {
   const lines = ["| Chain | Changed stops |", "|---|---|"];
   for (const id of [...review.chains].sort(compare)) {
-    const labels = (review.chainStops[id] ?? [])
+    // Own-key lookups only (security review I1'a): chainStops/chainNames are plain objects, and a
+    // chain id that collides with an inherited Object.prototype property name (e.g. "toString") would
+    // otherwise resolve to that inherited FUNCTION — `?? []`/`?? id` never catch that (a function is
+    // never nullish), and escapeMarkdownCell would then crash calling .replace on a function.
+    const stops = Object.hasOwn(review.chainStops, id) ? review.chainStops[id]! : [];
+    const labels = stops
       .filter((s) => s.changed)
       .map((s) => s.label)
       .sort(compare)
       .map(escapeMarkdownCell)
       .join(", ");
-    lines.push(`| ${escapeMarkdownCell(review.chainNames[id] ?? id)} | ${labels} |`);
+    const name = Object.hasOwn(review.chainNames, id) ? review.chainNames[id] : undefined;
+    lines.push(`| ${escapeMarkdownCell(typeof name === "string" ? name : id)} | ${labels} |`);
   }
   return lines;
+}
+
+/** Security review m7: a backstop below GITHUB_BODY_LIMIT, independent of (and in addition to) any cap
+ * on an individual piece (files, notes, mermaid nodes — the count-based caps above are the normal-case
+ * mitigation; this is the hard floor for whatever still gets through, e.g. a single oversized note).
+ * `out` over the limit is replaced wholesale by a fixed, tiny message — never truncated text, which could
+ * cut a markdown construct (a table row, a fence) in half and corrupt the rest of the PR body/comment. */
+function finish(out: string, opts: ReviewMarkdownOptions): string {
+  if (out.length <= GITHUB_BODY_LIMIT) return out;
+  const lines = [HEADING, "", "codeloom review map too large to show here."];
+  if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
+  else if (opts.link) lines.push("", `→ Open the full review map: ${opts.link}${opts.builtFor ? ` (built for ${opts.builtFor})` : ""}`);
+  return lines.join("\n");
 }
 
 /** The PR description block (spec §4): heading, one-line summary, Mermaid diagram, a journey/spec table (or
@@ -159,7 +186,7 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
     const lines = [HEADING, "", opts.error ?? "codeloom review map refused."];
     if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
     else if (opts.previous) lines.push("", `Last good map (${opts.previous.builtFor}): ${opts.previous.link}`);
-    return lines.join("\n");
+    return finish(lines.join("\n"), opts);
   }
 
   const lines = [HEADING, "", summaryLine(review)];
@@ -169,8 +196,11 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
     lines.push("", "No journeys touched.");
     const changedFiles = listFiles(review.files);
     if (changedFiles.length > 0) lines.push("", ...changedFiles);
+    // m6: the Pages note belongs in every branch that would otherwise end without it, not just the
+    // "normal"/tooLarge ones — "nothing is hosted" is true here too.
+    if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
     if (caveat) lines.push("", caveat);
-    return lines.join("\n");
+    return finish(lines.join("\n"), opts);
   }
 
   lines.push("", renderMermaid(review));
@@ -179,7 +209,7 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
     lines.push("", `Full map too large to host (${mb(opts.tooLarge.bytes)} MB > ${mb(opts.tooLarge.max)} MB).`);
     if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
     if (caveat) lines.push("", caveat);
-    return lines.join("\n");
+    return finish(lines.join("\n"), opts);
   }
 
   lines.push("", ...(review.journeys.length > 0 ? journeyTable(review) : chainsTable(review)));
@@ -195,5 +225,5 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
     lines.push("", `→ Open the full review map: ${opts.link}${opts.builtFor ? ` (built for ${opts.builtFor})` : ""}`);
   }
 
-  return lines.join("\n");
+  return finish(lines.join("\n"), opts);
 }

@@ -35,13 +35,25 @@ function tmpDataDir(): string {
 
 /** A minimal valid data/ folder: manifest.json + review.json, both listed in manifest.files.
  * `files` lets a test append extra (possibly hostile) entries to manifest.files without necessarily
- * writing a matching file on disk — exactly the shape an attacker-controlled artifact can produce. */
-function validDataDir(opts: { head?: string; extraFiles?: Record<string, string>; extraListed?: unknown[]; reviewJson?: unknown } = {}): string {
+ * writing a matching file on disk — exactly the shape an attacker-controlled artifact can produce.
+ * `manifestOverrides` merges onto the otherwise-valid manifest (security review I1'b: omitted/bytes/
+ * tooLarge). */
+function validDataDir(opts: { head?: string; extraFiles?: Record<string, string>; extraListed?: unknown[]; reviewJson?: unknown; manifestOverrides?: Record<string, unknown> } = {}): string {
   const dir = tmpDataDir();
   const files: unknown[] = ["manifest.json", "review.json", ...Object.keys(opts.extraFiles ?? {}), ...(opts.extraListed ?? [])];
   writeFileSync(
     join(dir, "manifest.json"),
-    JSON.stringify({ version: 1, codeloom: "0.0.0", head: opts.head ?? HEAD, base: "b".repeat(40), builtAt: "2026-11-13T00:00:00.000Z", files, omitted: { mapFolders: [], codeFiles: [] }, bytes: 0 }),
+    JSON.stringify({
+      version: 1,
+      codeloom: "0.0.0",
+      head: opts.head ?? HEAD,
+      base: "b".repeat(40),
+      builtAt: "2026-11-13T00:00:00.000Z",
+      files,
+      omitted: { mapFolders: [], codeFiles: [] },
+      bytes: 0,
+      ...opts.manifestOverrides,
+    }),
   );
   writeFileSync(join(dir, "review.json"), JSON.stringify(opts.reviewJson ?? validReview(opts.head ?? HEAD)));
   for (const [name, content] of Object.entries(opts.extraFiles ?? {})) writeFileSync(join(dir, name), content);
@@ -245,5 +257,66 @@ describe("validateSnapshotData", () => {
         // ignore
       }
     }
+  });
+
+  // --- I1'a (re-review): a chain id with no matching chainStops entry (prototype-pollution-prone) -----
+
+  it('I1\'a: refuses a chains id with no matching chainStops entry (e.g. "constructor", which would otherwise resolve to an inherited Object.prototype property, not undefined, in the renderer)', () => {
+    const review = validReview() as Record<string, unknown>;
+    review.chains = ["constructor"];
+    review.chainStops = {}; // no own "constructor" key
+    const dir = validDataDir({ reviewJson: review });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it('I1\'a: refuses a chains id of "toString" with no matching chainNames entry either', () => {
+    const review = validReview() as Record<string, unknown>;
+    review.chains = ["toString"];
+    review.chainStops = {};
+    review.chainNames = {};
+    const dir = validDataDir({ reviewJson: review });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("I1'a: a chains id WITH a matching (even empty) chainStops entry still passes", () => {
+    const review = validReview() as Record<string, unknown>;
+    review.chains = ["ch_1"];
+    review.chainStops = { ch_1: [] };
+    review.chainNames = { ch_1: "x" };
+    const dir = validDataDir({ reviewJson: review });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).not.toThrow();
+  });
+
+  // --- I1'b (re-review): manifest.json's own OTHER fields (omitted, bytes, tooLarge) are now checked --
+
+  it("I1'b: refuses a non-string entry in manifest.omitted.mapFolders (a nested array instead of a string — stands in for the unbounded-depth attack without constructing megabytes of test data)", () => {
+    const dir = validDataDir({ manifestOverrides: { omitted: { mapFolders: [["nested"]], codeFiles: [] } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("I1'b: refuses a non-string entry in manifest.omitted.codeFiles", () => {
+    const dir = validDataDir({ manifestOverrides: { omitted: { mapFolders: [], codeFiles: [123] } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("I1'b: refuses manifest.bytes that is not a finite number", () => {
+    const dir = validDataDir({ manifestOverrides: { bytes: "not a number" } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("I1'b: refuses manifest.tooLarge: null (the old `=== undefined` check let this through as hosted:false while still showing a link)", () => {
+    const dir = validDataDir({ manifestOverrides: { tooLarge: null } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it('I1\'b: refuses manifest.tooLarge: { bytes: "<b>", max: 100 } (the old renderer would have shown "NaN MB")', () => {
+    const dir = validDataDir({ manifestOverrides: { tooLarge: { bytes: "<b>", max: 100 } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("I1'b: a well-formed manifest.tooLarge still passes", () => {
+    const dir = validDataDir({ manifestOverrides: { tooLarge: { bytes: 100, max: 50 } } });
+    const manifest = validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD });
+    expect(manifest.tooLarge).toEqual({ bytes: 100, max: 50 });
   });
 });

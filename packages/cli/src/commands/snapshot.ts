@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodeloomError, dataError } from "../errors.js";
 import { renderReviewMarkdown } from "../review/markdown.js";
-import { buildFailedBlock, buildSnapshotSite, spliceIntoBody, type SiteResult } from "../snapshot/site.js";
+import { assertOutDirUsable, buildFailedBlock, buildSnapshotSite, spliceIntoBody, type SiteResult } from "../snapshot/site.js";
 import { writeSnapshotData } from "../snapshot/write.js";
 
 /** `--max-size`: a bare number of bytes, or a number with a b/kb/mb/gb suffix (case-insensitive), e.g.
@@ -41,8 +41,12 @@ export interface SnapshotOptions {
 /** `codeloom snapshot --base <ref> --out <dir> [--max-size <size>] [--data-only]`: writes
  * `<out>/data/*.json` (writeSnapshotData). Unless `--data-only`, also builds the site next to it
  * (buildSnapshotSite) and writes `<out>/review.md` — a trusted, local call: `expectedHead` is this
- * same run's own manifest.head, not a value read back from anything untrusted. */
+ * same run's own manifest.head, not a value read back from anything untrusted.
+ * Security review C1': `--out` must be empty or not exist, checked BEFORE writeSnapshotData ever runs
+ * — `codeloom snapshot --out .` on an ordinary working tree (or any other non-empty folder) is refused
+ * outright (exit 2) rather than writing a stray data/ folder into it. */
 export async function runSnapshot(start: string, opts: SnapshotOptions): Promise<{ exitCode: number }> {
+  assertOutDirUsable(opts.out);
   const manifest = await writeSnapshotData(start, { baseRef: opts.base, outDir: opts.out, maxBytes: opts.maxBytes });
   if (opts.dataOnly) return { exitCode: 0 };
   const result = buildSnapshotSite({
@@ -87,7 +91,12 @@ function writeSiteOutputs(out: string, result: { reviewMd: string; body?: string
  * [--previous <manifest>]` when the build itself failed. Always writes `out/review.md` and, when a
  * `bodyFile` is given, `out/body.md` or `out/comment.md`. A validation failure in the first mode still
  * writes `out/review.md` (the refusal) and returns exit 1 — nothing else reaches `out` (SiteResult's own
- * caller, buildSnapshotSite, never writes before it has validated). */
+ * caller, buildSnapshotSite, never writes before it has validated).
+ * Security review C1': a non-empty `--out` is a DIFFERENT kind of problem (exit 2, "refuse, don't
+ * touch anything") from an artifact refusal (exit 1, "write review.md saying so") — buildSnapshotSite's
+ * own outDir-safety check throws a dataError (exitCode 2), which the catch below deliberately does NOT
+ * intercept (only an artifact-refusal CodeloomError, exitCode 1, becomes the exit-1 review.md path); it
+ * propagates uncaught, past this function, with its exit code intact. */
 export function runSnapshotSite(opts: SnapshotSiteOptions): { exitCode: number } {
   if (opts.failed !== undefined) {
     const result = buildFailedBlock({
@@ -120,7 +129,7 @@ export function runSnapshotSite(opts: SnapshotSiteOptions): { exitCode: number }
       pagesDisabled: opts.pagesDisabled,
     });
   } catch (err) {
-    if (!(err instanceof CodeloomError)) throw err;
+    if (!(err instanceof CodeloomError) || err.exitCode !== 1) throw err;
     // The refusal itself has no trusted site to publish — but it must still reach the PR the same way a
     // successful run would (security review I2): body.md/comment.md when --body was given, not just
     // review.md, which a workflow that only looks at body.md/comment.md would otherwise silently drop.

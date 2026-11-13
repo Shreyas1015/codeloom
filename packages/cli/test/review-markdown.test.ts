@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { escapeMarkdownCell, escapeMarkdownInline, renderReviewMarkdown } from "../src/review/markdown.js";
 import { escapeMermaidLabel, renderMermaid } from "../src/review/mermaid.js";
+import { GITHUB_BODY_LIMIT } from "../src/review/pr-body.js";
 import type { Review, ReviewNodeChange, ReviewStop } from "../src/review/types.js";
 
 const GOLDEN_DIR = join(import.meta.dirname, "golden");
@@ -117,6 +118,15 @@ describe("escapeMarkdownInline / escapeMarkdownCell", () => {
 });
 
 describe("renderMermaid", () => {
+  it("I1': a chain id that collides with an inherited Object.prototype property name (\"constructor\") never crashes, even with no own chainStops entry for it", () => {
+    // review.chainStops is a plain object; without an own-key-safe lookup, review.chainStops["constructor"]
+    // resolves to Object.prototype.constructor (a function), and stops.forEach throws TypeError.
+    const review = baseReview({ chains: ["constructor"], chainStops: {}, chainNames: {} });
+    expect(() => renderMermaid(review)).not.toThrow();
+    const out = renderMermaid(review);
+    expect(out.startsWith("```mermaid\nflowchart LR\n")).toBe(true);
+  });
+
   it("draws the chain's stops in order, marking the changed one", () => {
     const out = renderMermaid(baseReview());
     expect(out.startsWith("```mermaid\nflowchart LR\n")).toBe(true);
@@ -186,6 +196,24 @@ describe("renderReviewMarkdown", () => {
     expect(out).not.toContain("```mermaid");
   });
 
+  it("m6: --pages-disabled's note is also shown in the \"no journeys touched\" branch", () => {
+    const out = renderReviewMarkdown(baseReview({ journeys: [], chains: [], chainStops: {}, tables: [], nodes: [] }), { pagesDisabled: true });
+    expect(out).toContain("No journeys touched.");
+    expect(out).toContain("GitHub Pages is not enabled for this repo");
+  });
+
+  it('I1\': a chain id that collides with an inherited Object.prototype property name ("toString") in the bare chains table never crashes, and falls back to the id itself (not Object.prototype.toString)', () => {
+    // chainNames has no own "toString" key: without an own-key-safe lookup, chainNames["toString"]
+    // resolves to Object.prototype.toString (a function) — truthy, so `?? id` never kicks in, and
+    // escapeMarkdownCell(aFunction) crashes calling .replace on it.
+    const review = baseReview({ journeys: [], chains: ["toString"], chainStops: {}, chainNames: {} });
+    expect(() => renderReviewMarkdown(review, {})).not.toThrow();
+    const out = renderReviewMarkdown(review, {});
+    expect(out).toContain("| toString |");
+    expect(out).not.toContain("function toString");
+    expect(out).not.toContain("[native code]");
+  });
+
   it("[FIX ROUND 2 RED PROBE] a backtick in a file path cannot close its own code span early", () => {
     const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil`.ts` injected", added: 1, removed: 0, onJourney: false }] }), {});
     // A single-backtick-fenced span ("`evil`") would close right after "evil", leaving ".ts` injected`"
@@ -251,6 +279,34 @@ describe("renderReviewMarkdown", () => {
   it("m3: --max-size's own default (25 * 1024 * 1024 bytes) reads back as exactly 25 MB", () => {
     const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 26 * 1024 * 1024, max: 25 * 1024 * 1024 } });
     expect(out).toContain("26 MB > 25 MB");
+  });
+
+  // --- m7 (security review): the comment fallback has no size cap on its own ---------------------------
+
+  it("m7: far more than MAX_LISTED notes are capped with a '+N more' indicator, instead of all being joined into one huge caveat line", () => {
+    const manyNotes = Array.from({ length: 10_000 }, (_, i) => `note-${i}`);
+    const out = renderReviewMarkdown(baseReview({ notes: manyNotes }), {});
+    expect(out.length).toBeLessThan(GITHUB_BODY_LIMIT);
+    expect(out).toContain("note-0");
+    expect(out).not.toContain("note-9999");
+    expect(out).toMatch(/\+\d+ more notes?\./);
+  });
+
+  it("m7: even after the notes cap, a block that is still too large (e.g. one huge note) falls back to a fixed too-large message, keeping the link", () => {
+    const out = renderReviewMarkdown(baseReview({ notes: ["x".repeat(GITHUB_BODY_LIMIT)] }), {
+      link: "https://x.github.io/demo/pr-1/",
+      builtFor: "a41c9e2",
+    });
+    expect(out.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(out).toContain("too large to show here");
+    expect(out).toContain("https://x.github.io/demo/pr-1/");
+    expect(out).not.toContain("x".repeat(1000)); // the huge note's own content must not appear at all
+  });
+
+  it("m7: the too-large fallback never exceeds the limit itself even when the error/body path would also be huge", () => {
+    const out = renderReviewMarkdown(baseReview({ journeys: [], chains: [], chainStops: {}, tables: [], nodes: [], notes: ["x".repeat(GITHUB_BODY_LIMIT)] }), {});
+    expect(out.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(out).toContain("too large to show here");
   });
 
   // --- I1b defense in depth: the renderer itself never trusts a field's type, even post-schema -------

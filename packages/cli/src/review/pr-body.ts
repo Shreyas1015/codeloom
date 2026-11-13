@@ -8,20 +8,36 @@ export const END = "<!-- codeloom:review:end -->";
 /** GitHub's pull request body limit, in characters. */
 export const GITHUB_BODY_LIMIT = 65_536;
 
-function wrap(block: string): string {
-  return `${START}${block}${END}`;
+/** The text START and END share (security review m5): any rendered label (a file path, journey name,
+ * chain name, ... — all attacker-controlled, from the PR branch) that happens to literally contain this
+ * exact text would otherwise look like a real marker to a LATER splice. */
+const MARKER_PREFIX = "<!-- codeloom:review:";
+const ZWSP = "​";
+
+/** Defuses every occurrence of MARKER_PREFIX inside `block` by inserting a zero-width space right after
+ * "<!--" (invisible once rendered as markdown, but no longer an exact substring match for START or
+ * END). Applied once, here, to the whole block before it is ever wrapped — the single choke point every
+ * splice goes through, regardless of which renderer produced the text (security review m5). */
+function neutralizeMarkers(block: string): string {
+  return block.split(MARKER_PREFIX).join(`<!--${ZWSP} codeloom:review:`);
 }
 
-/** The first valid START..END pair in `body` (the first START, and the nearest END strictly after it) —
- * or null when there isn't one. Security review I3: a lone START with no END anywhere after it, or an
- * END with no START before it, is NOT a pair — guessing that "everything after an unclosed START is
- * ours" would delete real author text that just happens to follow a stray marker. Only a matched,
- * ordered START..END span is ever treated as "our" block. */
+function wrap(block: string): string {
+  return `${START}${neutralizeMarkers(block)}${END}`;
+}
+
+/** The real START..END pair in `body`: the first END, and the LAST START at or before it — or null when
+ * there isn't one. Security review I3: a lone START with no END anywhere after it, or an END with no
+ * START before it, is NOT a pair — guessing that "everything after an unclosed START is ours" would
+ * delete real author text that just happens to follow a stray marker. Security review I3': the LAST
+ * START before the END (not the FIRST START in the whole body) — an author's own prose that happens to
+ * quote the marker text earlier in the body (e.g. explaining how the bot works) must never be mistaken
+ * for the real block's start; only the START closest to (and before) the real END is the real one. */
 function findBlock(body: string): { startAt: number; endAt: number } | null {
-  const startAt = body.indexOf(START);
-  if (startAt < 0) return null;
-  const endAt = body.indexOf(END, startAt + START.length);
+  const endAt = body.indexOf(END);
   if (endAt < 0) return null;
+  const startAt = body.lastIndexOf(START, endAt);
+  if (startAt < 0 || startAt + START.length > endAt) return null;
   return { startAt, endAt };
 }
 

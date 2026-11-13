@@ -3,11 +3,16 @@
 // from the artifact), fills in `pr`/`repoSlug`, and renders the PR block from the now-trusted
 // data/review.json with the same renderer `codeloom review` uses locally.
 //
-// Nothing is written to `outDir` until validation has passed — a refused artifact never leaves a
-// partial site (validateSnapshotData throws before any fs write below runs).
+// Nothing is EVER deleted here (security review C1': a non-empty `outDir` is refused outright, not
+// cleared — round 1's resetOutDir/resetOutDirFully were an rmSync of the caller's own `--out`, which for
+// `codeloom snapshot --out .` would delete the working tree, `.git` included). Nothing is written to
+// `outDir` until outDir's own safety check AND validation have both passed, and (security review I1')
+// not until the PR block has actually rendered successfully either — a refused/failed render never
+// leaves a partial site.
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { CodeloomError, dataError } from "../errors.js";
 import { renderReviewMarkdown } from "../review/markdown.js";
 import { splicePrBody } from "../review/pr-body.js";
 import type { Review } from "../review/types.js";
@@ -19,7 +24,8 @@ export interface SiteOptions {
   /** The validated artifact's data/ folder (untrusted until validateSnapshotData passes it). */
   dataDir: string;
   /** The site's root: data/, the dashboard's own assets (unless tooLarge) and review.md's caller write
-   * their outputs here. Never touched before validation passes. */
+   * their outputs here. Must be empty or not exist (security review C1') — never touched before outDir's
+   * own safety check, validation, AND rendering have all passed. */
   outDir: string;
   /** The event's own head SHA; must equal data/manifest.json's `head` (never the artifact's own say-so). */
   expectedHead: string;
@@ -83,40 +89,68 @@ function copyAssetEntry(from: string, to: string): void {
   cpSync(from, to, { recursive: true });
 }
 
-/** `outDir` is entirely codeloom's own output — nothing the caller should have hand-placed there.
- * Before writing, any leftover content from an earlier run (a stale dashboard asset from an older
- * codeloom version, a data key a newer snapshot no longer has, ...) is cleared first, so the published
- * site never mixes old and new content (security review m4). The one exception: when `dataDir` IS
- * `outDir/data` (`codeloom snapshot`'s own local run, no --data-only), that folder is the very data
- * this call is about to read from and patch in place — left alone. */
-function resetOutDir(outDir: string, dataDir: string): void {
+/** Security review C1' (Critical): `outDir` must be empty or not exist — refused otherwise, nothing
+ * deleted, nothing added. Round 1's fix (resetOutDir/resetOutDirFully) rmSync'd whatever was already
+ * there, which for a non-empty `--out` (a checked-out gh-pages folder with real files, or `--out .` on
+ * an ordinary working tree) deleted README.md/keep/notes.txt/even `.git` — exactly what this replaces.
+ * `ownDataDir`, when given, is the ONE legitimate exception: `codeloom snapshot` (no --data-only)
+ * writes data/*.json straight into `<out>/data` and then calls buildSnapshotSite with that SAME `<out>`
+ * as both `dataDir`'s parent and `outDir` — so `outDir` already, legitimately, contains exactly its own
+ * `data/` folder by the time this runs. Any OTHER entry (or a `data/` that isn't `ownDataDir`) is still
+ * refused. */
+export function assertOutDirUsable(outDir: string, ownDataDir?: string): void {
   if (!existsSync(outDir)) return;
-  const dataIsOwnData = sameResolved(join(outDir, "data"), dataDir);
-  for (const entry of readdirSync(outDir)) {
-    if (dataIsOwnData && entry === "data") continue;
-    rmSync(join(outDir, entry), { recursive: true, force: true });
+  if (!statSync(outDir).isDirectory()) throw dataError("--out exists and is not a folder.");
+  const allowed = ownDataDir !== undefined && sameResolved(join(outDir, "data"), ownDataDir) ? new Set(["data"]) : new Set<string>();
+  const entries = readdirSync(outDir);
+  if (entries.some((e) => !allowed.has(e))) {
+    throw dataError("--out must be empty or not exist — refusing to touch a non-empty folder.");
   }
-}
-
-/** Same idea as resetOutDir, for buildFailedBlock: nothing there is protected (there is no data/ to
- * read from in this mode), so a stale outDir is simply cleared in full before review.md is written. */
-function resetOutDirFully(outDir: string): void {
-  if (!existsSync(outDir)) return;
-  for (const entry of readdirSync(outDir)) rmSync(join(outDir, entry), { recursive: true, force: true });
 }
 
 export function buildSnapshotSite(opts: SiteOptions): SiteResult {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-  // Validate first: throws (writing nothing) before any of the writes below ever run.
+  // C1': outDir's own safety first — before even looking at the artifact. Throws (a dataError, exit 2)
+  // and touches nothing.
+  assertOutDirUsable(opts.outDir, opts.dataDir);
+  // Validate the artifact: throws (writing nothing) before any of the writes below ever run.
   const manifest = validateSnapshotData(opts.dataDir, { maxBytes, expectedHead: opts.expectedHead });
 
-  // Only now, after validation has fully passed, is anything about `outDir` touched.
-  resetOutDir(opts.outDir, opts.dataDir);
+  // I1': render BEFORE touching outDir at all, and treat any failure here as a plain refusal (never an
+  // uncaught crash after some files have already been copied) — defense in depth underneath validate.ts
+  // and review/schema.ts's own checks, for whatever those don't anticipate.
+  let review: Review;
+  let hosted: boolean;
+  let reviewMd: string;
+  try {
+    review = JSON.parse(readFileSync(join(opts.dataDir, "review.json"), "utf8")) as Review;
+    hosted = manifest.tooLarge === undefined;
+    reviewMd = renderReviewMarkdown(review, {
+      link: opts.link,
+      builtFor: manifest.head.slice(0, 7),
+      tooLarge: manifest.tooLarge,
+      pagesDisabled: opts.pagesDisabled,
+    });
+  } catch (err) {
+    if (err instanceof CodeloomError) throw err;
+    throw new CodeloomError("codeloom could not render the review map for this snapshot.");
+  }
 
-  const review = JSON.parse(readFileSync(join(opts.dataDir, "review.json"), "utf8")) as Review;
-
+  // Only now, after outDir's safety, the artifact's validation, AND a successful render, is outDir
+  // touched at all.
+  // Built field by field from the already-validated manifest only — never a raw spread (I1'b): an
+  // unknown/extra key on `manifest` (there shouldn't be one, since validateSnapshotData already builds
+  // it this same way, but this is the last line of defense right before it's written back out).
   const patchedManifest: SnapshotManifest = {
-    ...manifest,
+    version: manifest.version,
+    codeloom: manifest.codeloom,
+    head: manifest.head,
+    base: manifest.base,
+    builtAt: manifest.builtAt,
+    files: manifest.files,
+    omitted: manifest.omitted,
+    bytes: manifest.bytes,
+    ...(manifest.tooLarge !== undefined ? { tooLarge: manifest.tooLarge } : {}),
     ...(opts.pr !== undefined ? { pr: opts.pr } : {}),
     ...(opts.repoSlug !== undefined ? { repoSlug: opts.repoSlug } : {}),
   };
@@ -131,7 +165,6 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
   }
   writeFileSync(join(outData, "manifest.json"), JSON.stringify(patchedManifest));
 
-  const hosted = manifest.tooLarge === undefined;
   if (hosted) {
     // This codeloom version's own build — never anything from the artifact (design spec §5: "no HTML or
     // script from the PR reaches <owner>.github.io").
@@ -141,19 +174,12 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
     }
   }
 
-  const reviewMd = renderReviewMarkdown(review, {
-    link: opts.link,
-    builtFor: manifest.head.slice(0, 7),
-    tooLarge: manifest.tooLarge,
-    pagesDisabled: opts.pagesDisabled,
-  });
-
   return { reviewMd, hosted, ...spliceIntoBody(opts.bodyFile, reviewMd) };
 }
 
 export interface FailedSiteOptions {
   /** Created (even though nothing else may be written there): the CLI always has an out/ to write
-   * review.md (and body.md/comment.md) into, failed build or not. */
+   * review.md (and body.md/comment.md) into, failed build or not. Must be empty or not exist (C1'). */
   outDir: string;
   /** The failed build/publish run's own URL, shown instead of trusting its error text (design spec §6). */
   runUrl: string;
@@ -185,8 +211,8 @@ function previousHead(path: string): string | null {
  * all (design spec §6): just the error line pointing at the failed run, plus the last good snapshot's
  * link when one is known. */
 export function buildFailedBlock(opts: FailedSiteOptions): { reviewMd: string; body?: string; comment?: string } {
-  resetOutDirFully(opts.outDir);
-  mkdirSync(opts.outDir, { recursive: true });
+  // C1': no data/ concept in this mode at all, so no exception — outDir must be empty or not exist.
+  assertOutDirUsable(opts.outDir);
 
   let previous: { link: string; builtFor: string } | undefined;
   if (opts.previousManifest && opts.link) {
@@ -194,11 +220,14 @@ export function buildFailedBlock(opts: FailedSiteOptions): { reviewMd: string; b
     if (head) previous = { link: opts.link, builtFor: head.slice(0, 7) };
   }
 
+  // I1': render before touching outDir (here, just mkdirSync — there's no data/assets to copy in this
+  // mode, but the same "never leave a partial write behind a crash" principle applies).
   const reviewMd = renderReviewMarkdown(null, {
     error: `codeloom review map: the build failed — see the run: ${opts.runUrl}`,
     previous,
     pagesDisabled: opts.pagesDisabled,
   });
 
+  mkdirSync(opts.outDir, { recursive: true });
   return { reviewMd, ...spliceIntoBody(opts.bodyFile, reviewMd) };
 }
