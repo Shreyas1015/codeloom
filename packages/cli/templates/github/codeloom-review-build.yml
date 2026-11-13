@@ -1,0 +1,56 @@
+# codeloom PR review map — build step (untrusted: runs the PR's own code and workflow file).
+# Installed by "codeloom init --github"; see docs/pr-review-maps.md. Do not give this workflow write
+# access to the repo — the publish half (codeloom-review-publish.yml) is what writes anything.
+name: codeloom review build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeloom-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Look for a codeloom workspace
+        id: workspace
+        run: |
+          if [ -f codeloom.workspace.json ]; then
+            echo "found=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "no codeloom.workspace.json at the repo root; nothing to snapshot"
+          fi
+
+      - name: codeloom index
+        if: steps.workspace.outputs.found == '1'
+        run: npx -y codeloom@{{version}} index
+
+      - name: codeloom snapshot
+        if: steps.workspace.outputs.found == '1'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p snapshot
+          npx -y codeloom@{{version}} snapshot --base "origin/$BASE_REF" --out snapshot --data-only || touch snapshot/failed
+
+      - uses: actions/upload-artifact@v4
+        if: steps.workspace.outputs.found == '1'
+        with:
+          name: codeloom-snapshot
+          path: snapshot/
+          retention-days: 3

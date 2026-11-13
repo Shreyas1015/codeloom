@@ -1,9 +1,12 @@
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CodeloomError } from "../errors.js";
 import { writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, MCP_FILE, WORKSPACE_FILE } from "../store/paths.js";
 import { defaultRepoConfig, type RepoRef, type WorkspaceFile } from "../store/schemas.js";
+import { VERSION } from "../version.js";
+import { cliRootFrom } from "../web/assets.js";
 import { git } from "../workspace/git.js";
 import { discoverRepos, findWorkspaceRoot } from "../workspace/repos.js";
 
@@ -116,6 +119,46 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/** The two GitHub workflow templates `codeloom init --github` installs (design spec §1, §5, §6). */
+const GITHUB_WORKFLOW_FILES = ["codeloom-review-build.yml", "codeloom-review-publish.yml"] as const;
+
+/** packages/cli/templates/github, resolved the same way from src/ (tests), dist/ (tsc output) or the
+ * bundled dist/bin.js (the published package) as locateDashboardAssets resolves dist/dashboard. */
+function githubTemplatesDir(): string {
+  return join(cliRootFrom(dirname(fileURLToPath(import.meta.url))), "templates", "github");
+}
+
+/** The template's own content with `{{version}}` replaced by the running codeloom version, so the
+ * installed workflow always runs this codeloom (`npx codeloom@<version>`), never whatever "latest"
+ * happens to resolve to later. */
+function renderGithubTemplate(name: string): string {
+  const raw = readFileSync(join(githubTemplatesDir(), name), "utf8");
+  return raw.split("{{version}}").join(VERSION);
+}
+
+export type GithubWorkflowStatus = "created" | "present" | "kept-custom";
+export interface GithubWorkflowResult {
+  /** Repo-relative, forward-slashed, e.g. ".github/workflows/codeloom-review-build.yml". */
+  path: string;
+  status: GithubWorkflowStatus;
+}
+
+/** Writes one workflow template into `<root>/.github/workflows/<name>`, unless a file is already there:
+ * identical to what codeloom would write now ("present", left alone — no point rewriting the same
+ * bytes), or different ("kept-custom" — the user's own edits are never overwritten; rerun with the
+ * file removed to pick up a newer template). */
+function writeGithubWorkflow(root: string, name: string): GithubWorkflowResult {
+  const rel = posix.join(".github", "workflows", name);
+  const path = join(root, ".github", "workflows", name);
+  const rendered = renderGithubTemplate(name);
+  if (!existsSync(path)) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, rendered);
+    return { path: rel, status: "created" };
+  }
+  return { path: rel, status: readFileSync(path, "utf8") === rendered ? "present" : "kept-custom" };
+}
+
 export interface InitResult {
   root: string;
   repos: RepoRef[];
@@ -131,6 +174,8 @@ export interface InitResult {
   mcpInvalid?: McpInvalidReason;
   /** The codeloom bin the hook runs, when init was given one. */
   bin?: string;
+  /** The two GitHub workflow templates (design spec §1, §5, §6), only when `--github` was given. */
+  github?: GithubWorkflowResult[];
 }
 
 export type HookResult =
@@ -313,8 +358,9 @@ export function ensureGitignore(repoAbs: string): boolean {
 }
 
 /** `bin`: the codeloom bin the hook should run (the CLI passes codeloomBin()); without it the hook
- * runs `codeloom` from PATH. */
-export function runInit(dir: string, opts: { bin?: string } = {}): InitResult {
+ * runs `codeloom` from PATH. `github`: also install the two PR review map workflow templates (design
+ * spec §1, §5, §6) into `<dir>/.github/workflows/`, pinned to this running codeloom version. */
+export function runInit(dir: string, opts: { bin?: string; github?: boolean } = {}): InitResult {
   const root = resolve(dir);
   if (!existsSync(root) || !statSync(root).isDirectory()) throw new CodeloomError(`Folder not found: ${root}`);
   const repos = discoverRepos(root);
@@ -357,8 +403,16 @@ export function runInit(dir: string, opts: { bin?: string } = {}): InitResult {
   const mcpRoot = insideWorkspace ? enclosingWorkspaceRoot! : root;
   const mcp = ensureMcpEntry(mcpRoot);
   const mcpInvalid = mcp === "invalid" ? mcpInvalidReason(mcpRoot) : undefined;
+  let github: GithubWorkflowResult[] | undefined;
+  if (opts.github) {
+    github = GITHUB_WORKFLOW_FILES.map((name) => writeGithubWorkflow(root, name));
+    for (const g of github) if (g.status === "created") created.push(g.path);
+  }
   return {
-    root, repos, created, present, skipped, mcp, ...(mcpInvalid ? { mcpInvalid } : {}), ...(opts.bin ? { bin: opts.bin } : {}),
+    root, repos, created, present, skipped, mcp,
+    ...(mcpInvalid ? { mcpInvalid } : {}),
+    ...(opts.bin ? { bin: opts.bin } : {}),
+    ...(github ? { github } : {}),
   };
 }
 
@@ -388,6 +442,14 @@ export function formatInit(r: InitResult): string {
           ...r.skipped.map((s) => `  ${s.repo}: ${s.reason}`),
           "  To auto-update, add this line to that repo's post-commit hook (a shell script):",
           `    ${hookLine(r.root, r.bin)}`,
+        ]
+      : []),
+    ...(r.github?.some((g) => g.status === "kept-custom")
+      ? [
+          "",
+          ...r.github
+            .filter((g) => g.status === "kept-custom")
+            .map((g) => `kept your own ${g.path} (customised; not overwritten)`),
         ]
       : []),
     "",

@@ -26,8 +26,9 @@ export function buildProgram(): Command {
     .command("init")
     .description("Set up codeloom in a repo, or in a folder of repos (a workspace)")
     .argument("[dir]", "folder to set up", ".")
-    .action((dir: string) => {
-      console.log(formatInit(runInit(dir, { bin: codeloomBin() })));
+    .option("--github", "also write .github/workflows/codeloom-review-build.yml and codeloom-review-publish.yml, pinned to this codeloom version")
+    .action((dir: string, opts: { github?: boolean }) => {
+      console.log(formatInit(runInit(dir, { bin: codeloomBin(), github: opts.github })));
     });
 
   program

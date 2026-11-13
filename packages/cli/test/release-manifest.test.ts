@@ -69,6 +69,7 @@ describe("publish manifest", () => {
       "dist/bin.js.map",
       "dist/grammars",
       "dist/dashboard",
+      "templates",
       "README.md",
       "LICENSE",
       "NOTICE",

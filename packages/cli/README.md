@@ -57,6 +57,9 @@ chains into named journeys, and the dashboard updates by itself.
 - **Views on request.** Ask Claude for a page ("customer journeys with no spec") and it builds one from
   codeloom's widgets.
 - **A CI check.** `codeloom check --fail-under 80` fails the build when too few UI journeys reach the database.
+- **PR review maps.** `codeloom init --github` adds two workflows that post a summary and a Mermaid diagram of
+  what each pull request touches, with a link to a hosted, read-only dashboard snapshot on GitHub Pages. See
+  [docs/pr-review-maps.md](https://github.com/Shreyas1015/codeloom/blob/main/docs/pr-review-maps.md).
 
 ## Supported
 
