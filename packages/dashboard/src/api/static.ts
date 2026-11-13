@@ -4,6 +4,7 @@
  * once `isSnapshot()` is true. `apiPost`, live events (`events.ts`) and search are off in this mode (the
  * snapshot never contains progress, events or search — review-maps-constraints.md). */
 
+import { ApiError } from "./client";
 import type { CodeResponse } from "./types";
 import type { QueryParams } from "./client";
 
@@ -216,8 +217,8 @@ export const CODE_MAX_CHARS = 60_000;
 export function sliceCode(file: string, source: string, start: number, end: number | undefined): CodeResponse {
   const lines = source.split("\n");
   if (source.endsWith("\n")) lines.pop();
-  if (start > lines.length) throw new Error(`Bad range: ${file} has ${lines.length} lines; start ${start} is past the end.`);
-  if (end !== undefined && end < start) throw new Error(`Bad range: end ${end} is before start ${start}.`);
+  if (start > lines.length) throw new ApiError(`Bad range: ${file} has ${lines.length} lines; start ${start} is past the end.`, 400);
+  if (end !== undefined && end < start) throw new ApiError(`Bad range: end ${end} is before start ${start}.`, 400);
   const wantEnd = Math.min(end ?? lines.length, lines.length);
   const capEnd = Math.min(wantEnd, start + CODE_MAX_LINES - 1);
   let text = lines[start - 1]!;

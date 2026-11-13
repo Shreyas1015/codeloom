@@ -4,7 +4,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { render, renderHook, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
-import { apiGet, apiPost } from "@/api/client";
+import { apiGet, ApiError, apiPost } from "@/api/client";
 import { useMapEvents } from "@/api/events";
 import { detectSnapshot, getSnapshot, isSnapshot, NotInSnapshotError, snapshotKey } from "@/api/static";
 import type { CodeResponse, Overview } from "@/api/types";
@@ -179,6 +179,18 @@ describe("in static mode", () => {
       );
       await expect(apiGet<CodeResponse>("/api/code", { repo: "api", file: "gone.ts", start: 1 })).rejects.toBeInstanceOf(NotInSnapshotError);
     });
+
+    it("a start past the end of the file → the same 400 ApiError the live server's sliceCode throws", async () => {
+      const text = "a\nb\nc";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => (url === "./data/files~api~x.ts.json" ? json({ file: "x.ts", text }) : json({}, 404))),
+      );
+      const err = await apiGet<CodeResponse>("/api/code", { repo: "api", file: "x.ts", start: 9 }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(400);
+      expect((err as ApiError).message).toBe("Bad range: x.ts has 3 lines; start 9 is past the end.");
+    });
   });
 
   it("apiPost throws without making a network call", async () => {
@@ -257,6 +269,22 @@ describe("in static mode", () => {
     const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
     render(<App router={router} queryClient={queryClient} />);
     expect(await screen.findByTestId("screen-review")).toBeInTheDocument();
+  });
+
+  it("/progress also redirects to /review (a snapshot never has progress, so the screen would load forever)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(url, "http://127.0.0.1");
+        if (u.pathname === "/api/overview") return json(EMPTY_OVERVIEW);
+        return json({ error: "not found" }, 404);
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/progress"] }) });
+    render(<App router={router} queryClient={queryClient} />);
+    expect(await screen.findByTestId("screen-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("screen-progress")).not.toBeInTheDocument();
   });
 });
 

@@ -148,7 +148,16 @@ const mapRoute = createRoute({
   component: MapRoute,
 });
 
-const progressRoute = createRoute({ getParentRoute: () => rootRoute, path: "/progress", component: ProgressRoute });
+const progressRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/progress",
+  // A snapshot never has progress (review-maps-constraints.md) and useProgress() is disabled there, so
+  // this screen would otherwise load forever: redirect to Review, same as "/" (spec §7).
+  beforeLoad: () => {
+    if (isSnapshot()) throw redirect({ to: "/review" });
+  },
+  component: ProgressRoute,
+});
 
 const viewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/views/$id", component: ViewRoute });
 
