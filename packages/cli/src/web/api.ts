@@ -349,7 +349,9 @@ export function graphLevel(
 
 export const CODE_MAX_LINES = 400;
 export const CODE_MAX_CHARS = 60_000;
-const CODE_MAX_BYTES = 10 * 1024 * 1024;
+/** Exported for the snapshot writer (snapshot/write.ts), which applies the same cap to a file's whole
+ * text, outside any HTTP request. */
+export const CODE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Lines start..end (1-based, inclusive; no end = to the end of the file) of `source`, capped at 400
  * lines and 60 000 chars (cut on a line boundary; a single longer line is cut mid-line). `truncated`

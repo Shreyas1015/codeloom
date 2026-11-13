@@ -9,7 +9,7 @@ import { parseNodeRef } from "../mcp/state.js";
 import { buildReview } from "../review/build.js";
 import { readSpecs } from "../store/specs.js";
 import { compare } from "../util.js";
-import { API_ROUTES, HttpError, matchRoute, repoFile } from "../web/api.js";
+import { API_ROUTES, CODE_MAX_BYTES, HttpError, matchRoute, repoFile } from "../web/api.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import { VERSION } from "../version.js";
 import { snapshotKey } from "./key.js";
@@ -99,19 +99,24 @@ async function docEntry(start: string, repoId: string, file: string): Promise<En
  * live /api/code: design spec §3 "the dashboard loads the whole-file JSON and slices itself"). Keyed by a
  * dedicated path ("/api/files/<repo>/<file>", not a real route) so it never collides with /api/code's own
  * key. Path safety: `repoFile` (api.ts), the same check /api/code and /api/docs make — never git
- * internals, .env files, codeloom's own folder, or a symlink leading outside the repo. null on any of
- * that, or on a read error (e.g. the file vanished between indexing and snapshotting). */
+ * internals, .env files, codeloom's own folder, or a symlink leading outside the repo; null on any of
+ * that (HttpError). Also null over `CODE_MAX_BYTES` — "≤ the dashboard's code size cap" (design spec §3) —
+ * the same cap /api/code itself enforces. Neither case counts against the `--max-size` budget
+ * (`manifest.omitted`): this file is simply never a candidate for it. Any other error (e.g. the file
+ * vanished between indexing and snapshotting) is not swallowed here. */
 function fileEntry(start: string, repoId: string, file: string): Entry | null {
   try {
     const url = new URL(`http://snapshot/api/code?repo=${encodeURIComponent(repoId)}&file=${encodeURIComponent(file)}`);
-    const { real } = repoFile(start, url);
+    const { real, size } = repoFile(start, url);
+    if (size > CODE_MAX_BYTES) return null;
     const text = readFileSync(real, "utf8");
     const key = snapshotKey(`/api/files/${repoId}/${file}`);
     const body = { file, text };
     const json = JSON.stringify(body);
     return { key, body, json, bytes: Buffer.byteLength(json, "utf8") };
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof HttpError) return null;
+    throw err;
   }
 }
 
@@ -269,7 +274,7 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   const fileEntries: Entry[] = [];
   for (const { repo, file } of fileCandidates) {
     const e = fileEntry(start, repo, file);
-    if (e) fileEntries.push(e); // unsafe path or unreadable: never written, never counted as "cut for size"
+    if (e) fileEntries.push(e); // unsafe path or over CODE_MAX_BYTES: never written, never counted as "cut for size"
   }
 
   // Cut order (constraints: "Map folders, then code files"): code files are protected first — they are

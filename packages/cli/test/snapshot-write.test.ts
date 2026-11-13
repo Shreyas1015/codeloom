@@ -6,7 +6,8 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { chainId } from "../src/linker/chains.js";
 import { saveJourneysTool } from "../src/mcp/tools/journeys.js";
 import { snapshotKey } from "../src/snapshot/key.js";
-import { DEFAULT_MAX_BYTES, writeSnapshotData, type SnapshotManifest } from "../src/snapshot/write.js";
+import { DEFAULT_MAX_BYTES, writeSnapshotData } from "../src/snapshot/write.js";
+import { CODE_MAX_BYTES } from "../src/web/api.js";
 import { git } from "../src/workspace/git.js";
 import { commitChange, materializeSingleRepo } from "./helpers.js";
 
@@ -139,6 +140,30 @@ describe("writeSnapshotData", () => {
     expect(manifest.omitted).toEqual({ mapFolders: [], codeFiles: [] });
     expect(manifest.files).toEqual([...manifest.files].sort());
     expect(new Set(manifest.files)).toEqual(new Set([...present]));
+  });
+
+  it("skips a code file over the dashboard's own code size cap (CODE_MAX_BYTES), but keeps the rest", async () => {
+    const { root } = await setUpWithChange();
+    // The UI page stop of the create-customer journey, grown past CODE_MAX_BYTES. Left uncommitted on
+    // purpose: writeSnapshotData reads a stop's whole file straight off the working tree (the same path
+    // /api/code and /api/docs use), not from a git blob, so this alone is enough to trigger the cap.
+    const pageFile = join(root, "web/app/customers/new/page.tsx");
+    writeFileSync(pageFile, `${readFileSync(pageFile, "utf8")}\n// ${"x".repeat(CODE_MAX_BYTES)}\n`);
+
+    const outDir = tmpOutDir();
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir, now: FIXED_NOW });
+    const dataDir = join(outDir, "data");
+
+    const oversizedKey = snapshotKey("/api/files/web/app/customers/new/page.tsx");
+    expect(existsSync(join(dataDir, `${oversizedKey}.json`))).toBe(false);
+    // Skipped for being over the per-file cap, not "cut for the --max-size budget" (manifest.omitted is
+    // for that; this file never reached the budget decision at all).
+    expect(manifest.omitted.codeFiles).not.toContain(oversizedKey);
+    expect(manifest.files).not.toContain(`${oversizedKey}.json`);
+
+    // A different stop of the same journey is still written in full.
+    const keptKey = snapshotKey("/api/files/api/app/services/customer_service.ts");
+    expect(existsSync(join(dataDir, `${keptKey}.json`))).toBe(true);
   });
 
   it("is deterministic: two runs with the same `now` produce byte-identical data files", async () => {
