@@ -37,6 +37,20 @@ export interface ReviewFile {
   onJourney: boolean;
 }
 
+/** One stop of an affected chain, as the renderers need it — Review is self-contained (the publish step,
+ * Task 3, renders the PR block from data/review.json alone, with no live workspace to read a chain's full
+ * stop list from). `ref` is "<repo>::<nodeId>" (mcp/state.ts formatNodeRef) for a stop on a graph node, or
+ * "<repo>::<lane>:<label>" for one that isn't (a db/queue stop); either way, stable and shared by every
+ * chain that reaches the same stop. */
+export interface ReviewStop {
+  ref: string;
+  repo: string;
+  lane: string;
+  label: string;
+  file?: string;
+  changed: boolean;
+}
+
 /** One journey touched by the diff: which of its stops changed, and its spec state. "unchecked" is "none"
  * (store/specs.ts SpecState) with `checked: false` — not yet reviewed, as opposed to a confirmed "none". */
 export interface ReviewJourney {
@@ -63,6 +77,9 @@ export interface Review {
   journeys: ReviewJourney[];
   /** Every chain id touched by the diff (sorted), named or not. */
   chains: string[];
+  /** Every stop (in the chain's own order) of every chain in `chains` — the full chain layout, not just
+   * the changed stops, so the renderers (mermaid.ts, markdown.ts) need nothing beyond this Review. */
+  chainStops: Record<string, ReviewStop[]>;
   tables: string[];
   queues: string[];
   truncated: boolean;

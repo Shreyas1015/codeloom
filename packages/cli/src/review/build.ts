@@ -1,36 +1,17 @@
 import type { GraphNode } from "@codeloom/core";
 import { dataError } from "../errors.js";
-import { functionExtents, impactOfDiff } from "../mcp/tools/check.js";
+import { functionExtents, impactOfDiff, indexedCommit, type Range, overlaps } from "../mcp/tools/check.js";
 import { listSpecs } from "../mcp/tools/specs.js";
 import { chainLookup, formatNodeRef, journeysForChains, loadMapState, parseNodeRef } from "../mcp/state.js";
 import type { RepoData } from "../store/read.js";
-import type { Chain } from "../store/schemas.js";
+import type { Chain, ChainStop } from "../store/schemas.js";
 import { compare } from "../util.js";
-import { isGitRepo, resolveCommit } from "../workspace/diff.js";
+import { type DiffHunk, diffHunks, isGitRepo, resolveCommit } from "../workspace/diff.js";
 import { git } from "../workspace/git.js";
-import type { Review, ReviewFile, ReviewHunk, ReviewJourney, ReviewNodeChange } from "./types.js";
+import type { Review, ReviewFile, ReviewHunk, ReviewJourney, ReviewNodeChange, ReviewStop } from "./types.js";
 
 /** Lines of context to add around a raw (-U0) hunk, read straight from the before/after text. */
 const CONTEXT = 3;
-
-type Range = [number, number];
-const overlaps = (a: Range, b: Range): boolean => a[0] <= b[1] && b[0] <= a[1];
-
-/** The shape of `impact_of_diff`'s result this module reads (mcp/tools/check.ts impactOfDiff). */
-interface ImpactRepo {
-  id: string;
-  changedFiles: string[];
-  changedNodes: string[];
-}
-interface ImpactResult {
-  repos: ImpactRepo[];
-  chains: string[];
-  journeys: Array<{ id: string; name: string }>;
-  tables: string[];
-  queues: string[];
-  notes: string[];
-  truncated: boolean;
-}
 
 function splitLines(text: string): string[] {
   const lines = text.split("\n");
@@ -42,66 +23,60 @@ function sliceLines(lines: string[], start: number, end: number): string {
   return lines.slice(start - 1, end).join("\n");
 }
 
-interface RawHunk {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  removed: string[];
-  added: string[];
+const oldEnd = (h: DiffHunk): number => (h.oldLines > 0 ? h.oldStart + h.oldLines - 1 : h.oldStart);
+const newEndOf = (h: DiffHunk): number => (h.newLines > 0 ? h.newStart + h.newLines - 1 : h.newStart);
+
+interface Shift {
+  value: number;
+  /** `line` itself falls inside some hunk's own changed span on the `from` side — using it as an
+   * "unchanged anchor" would be meaningless (there is no 1:1 counterpart on the other side). */
+  inside: boolean;
 }
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-
-/** `git diff -U0 base head -- file`, parsed into hunks with their actual removed/added content (no
- * context lines: -U0 asks git for none, so every "-"/"+" line is a real change). */
-function parseRawHunks(diffOutput: string): RawHunk[] {
-  const hunks: RawHunk[] = [];
-  let current: RawHunk | undefined;
-  for (const line of diffOutput.split("\n")) {
-    const h = HUNK_HEADER.exec(line);
-    if (h) {
-      current = {
-        oldStart: Number(h[1]),
-        oldLines: h[2] === undefined ? 1 : Number(h[2]),
-        newStart: Number(h[3]),
-        newLines: h[4] === undefined ? 1 : Number(h[4]),
-        removed: [],
-        added: [],
-      };
-      hunks.push(current);
-      continue;
-    }
-    if (!current || line.startsWith("---") || line.startsWith("+++")) continue;
-    if (line.startsWith("-")) current.removed.push(line.slice(1));
-    else if (line.startsWith("+")) current.added.push(line.slice(1));
-  }
-  return hunks;
-}
-
-const oldEnd = (h: RawHunk): number => (h.oldLines > 0 ? h.oldStart + h.oldLines - 1 : h.oldStart);
-const newEndOf = (h: RawHunk): number => (h.newLines > 0 ? h.newStart + h.newLines - 1 : h.newStart);
-
-/** The new-side line matching `oldLine`, assuming `oldLine` itself is unchanged (sums the size delta of
- * every hunk that is entirely before it on the old side). */
-function toNewLine(hunks: RawHunk[], oldLine: number): number {
+/** Maps `line` from the old side to the new side (`from: "old"`) or back (`from: "new"`), summing the size
+ * delta of every hunk entirely before it on that side. `inside` tells the caller whether `line` was itself
+ * part of a hunk's own change, where the mapping is not a real "this line, unchanged, moved here". */
+function shiftAcross(hunks: DiffHunk[], line: number, from: "old" | "new"): Shift {
   let delta = 0;
+  let inside = false;
   for (const h of hunks) {
-    const before = h.oldLines > 0 ? oldEnd(h) < oldLine : h.oldStart < oldLine;
-    if (before) delta += h.newLines - h.oldLines;
+    const lines = from === "old" ? h.oldLines : h.newLines;
+    const start = from === "old" ? h.oldStart : h.newStart;
+    if (lines > 0) {
+      const end = start + lines - 1;
+      if (line >= start && line <= end) inside = true;
+      else if (end < line) delta += h.newLines - h.oldLines;
+    } else if (start < line) {
+      delta += h.newLines - h.oldLines;
+    }
   }
-  return oldLine + delta;
+  return { value: from === "old" ? line + delta : line - delta, inside };
 }
 
-function hunkOverlaps(h: RawHunk, base: Range | undefined, head: Range | undefined): boolean {
+/** The new-side (head) line matching `oldLine` — used to place a ReviewHunk's own boundaries (toReviewHunk
+ * below), which are always a real position (a hunk's own start/end, even with zero spare context) whether
+ * or not `oldLine` is itself inside that very hunk; unlike anchorAcross, never returns undefined. */
+function toNewLine(hunks: DiffHunk[], oldLine: number): number {
+  return shiftAcross(hunks, oldLine, "old").value;
+}
+
+/** The line across the diff matching `line`, or undefined when `line` itself is part of a hunk's own
+ * change (review/build.ts's node line-space translation: a node whose recorded line sits inside an
+ * insertion/deletion has no counterpart on the other side at all — a brand-new or deleted function). */
+function anchorAcross(hunks: DiffHunk[], line: number, from: "old" | "new"): number | undefined {
+  const r = shiftAcross(hunks, line, from);
+  return r.inside ? undefined : r.value;
+}
+
+function hunkOverlaps(h: DiffHunk, base: Range | undefined, head: Range | undefined): boolean {
   if (base !== undefined && overlaps([h.oldStart, oldEnd(h)], base)) return true;
   return head !== undefined && overlaps([h.newStart, newEndOf(h)], head);
 }
 
 /** Groups hunks whose ±CONTEXT windows would touch into one cluster: each cluster becomes one ReviewHunk. */
-function clusterHunks(hunks: RawHunk[]): RawHunk[][] {
+function clusterHunks(hunks: DiffHunk[]): DiffHunk[][] {
   const sorted = [...hunks].sort((a, b) => a.oldStart - b.oldStart);
-  const clusters: RawHunk[][] = [];
+  const clusters: DiffHunk[][] = [];
   for (const h of sorted) {
     const last = clusters.at(-1);
     const prev = last?.at(-1);
@@ -113,15 +88,17 @@ function clusterHunks(hunks: RawHunk[]): RawHunk[][] {
 }
 
 /** One cluster of raw (-U0) hunks → a ReviewHunk, with up to CONTEXT lines of context (read from
- * `baseLines`) before, between and after them, clamped to `base` (the node's own extent at the base
- * commit). `allHunks` is the file's full, unfiltered hunk list, so line numbers stay correct even when an
- * earlier unrelated hunk shifted the file. */
-function toReviewHunk(cluster: RawHunk[], base: Range, baseLines: string[], allHunks: RawHunk[]): ReviewHunk {
+ * `baseLines`) before, between and after them. `base` (the node's own extent at the base commit) only
+ * trims the discretionary extra context: oldFrom/oldTo never cut into the cluster's own change, so
+ * oldLines/newLines always match what `lines` actually emits. `allHunks` is the file's full, unfiltered
+ * hunk list, so line numbers stay correct even when an earlier unrelated hunk shifted the file. */
+function toReviewHunk(cluster: DiffHunk[], base: Range, baseLines: string[], allHunks: DiffHunk[]): ReviewHunk {
   const first = cluster[0]!;
   const last = cluster.at(-1)!;
   const firstChangeStart = first.oldLines > 0 ? first.oldStart : first.oldStart + 1;
-  const oldFrom = Math.max(base[0], firstChangeStart - CONTEXT);
-  const oldTo = Math.min(base[1], oldEnd(last) + CONTEXT);
+  const lastChangeEnd = oldEnd(last);
+  const oldFrom = Math.min(firstChangeStart, Math.max(base[0], firstChangeStart - CONTEXT));
+  const oldTo = Math.max(lastChangeEnd, Math.min(base[1], lastChangeEnd + CONTEXT));
 
   const lines: string[] = [];
   let p = oldFrom;
@@ -142,7 +119,7 @@ function toReviewHunk(cluster: RawHunk[], base: Range, baseLines: string[], allH
 /** Per-repo caches, so a file touched by several changed nodes is only read/diffed/parsed once. */
 interface RepoCache {
   text: Map<string, string | undefined>;
-  hunks: Map<string, RawHunk[]>;
+  hunks: Map<string, DiffHunk[]>;
   extents: Map<string, Map<number, number>>;
 }
 
@@ -162,17 +139,9 @@ function readAt(cache: RepoCache, repoAbs: string, commit: string, file: string)
   return cache.text.get(key);
 }
 
-function hunksFor(cache: RepoCache, repoAbs: string, base: string, head: string, file: string): RawHunk[] {
-  const key = file;
-  if (!cache.hunks.has(key)) {
-    const out = git(
-      repoAbs,
-      ["-c", "core.quotePath=false", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--end-of-options", base, head, "--", file],
-      { maxBuffer: 64 * 1024 * 1024 },
-    );
-    cache.hunks.set(key, parseRawHunks(out));
-  }
-  return cache.hunks.get(key)!;
+function hunksFor(cache: RepoCache, repoAbs: string, base: string, head: string, file: string): DiffHunk[] {
+  if (!cache.hunks.has(file)) cache.hunks.set(file, diffHunks(repoAbs, [base, head], file));
+  return cache.hunks.get(file)!;
 }
 
 function extentsAt(cache: RepoCache, repoAbs: string, commit: string, file: string): Map<number, number> {
@@ -183,8 +152,15 @@ function extentsAt(cache: RepoCache, repoAbs: string, commit: string, file: stri
 
 /** One changed function-like node's before/after code and diff hunks. `journeys` is filled by the caller
  * once every node's ref is known. null for a graph node that is not a function (a class/file wrapper that
- * merely contains a changed function; impact_of_diff reports both, review only cares about the function). */
-function buildNode(cache: RepoCache, repo: RepoData, node: GraphNode, base: string, head: string): ReviewNodeChange | null {
+ * merely contains a changed function; impact_of_diff reports both, review only cares about the function).
+ *
+ * `indexedAtHead`: when the repo was reindexed at the PR's head (the real CI flow — checkout PR head,
+ * `codeloom index`, then review against a merge-base), the graph's own `node.lineRange` is already a HEAD
+ * line, so `after` is anchored there directly and `before` is found by mapping that line BACK to the base
+ * commit (toOldLine) — a function the mapped-back line finds nothing at base simply didn't exist yet
+ * (`before: null`, a brand-new function). Otherwise (today's default), `node.lineRange` is treated as a
+ * BASE line as before, and `after` is found by mapping forward (toNewLine). */
+function buildNode(cache: RepoCache, repo: RepoData, node: GraphNode, base: string, head: string, indexedAtHead: boolean): ReviewNodeChange | null {
   if (node.type !== "function" || node.filePath === undefined || !node.lineRange) return null;
   const file = node.filePath;
 
@@ -194,15 +170,17 @@ function buildNode(cache: RepoCache, repo: RepoData, node: GraphNode, base: stri
   const headLines = headText !== undefined ? splitLines(headText) : undefined;
   const allHunks = hunksFor(cache, repo.abs, base, head, file);
 
-  // The graph's lineRange is from whenever the repo was last indexed; approximately the base commit when
-  // the map was indexed before `base` (impact_of_diff's own notes flag it otherwise).
-  const baseStart = node.lineRange[0];
-  const baseEndFound = baseLines !== undefined ? extentsAt(cache, repo.abs, base, file).get(baseStart) : undefined;
-  const baseSpan: Range | undefined = baseLines !== undefined && baseEndFound !== undefined ? [baseStart, baseEndFound] : undefined;
+  // The graph's own lineRange is a head line when the repo was reindexed there (indexedAtHead), else a
+  // base line as before; either way, the OTHER side is found by mapping across the diff — undefined when
+  // that line sits inside a hunk's own change (no 1:1 counterpart: a brand-new or deleted function).
+  const baseStart = indexedAtHead ? anchorAcross(allHunks, node.lineRange[0], "new") : node.lineRange[0];
+  const headStart = indexedAtHead ? node.lineRange[0] : anchorAcross(allHunks, node.lineRange[0], "old");
 
-  const headStart = baseSpan !== undefined ? toNewLine(allHunks, baseSpan[0]) : undefined;
+  const baseEndFound = baseLines !== undefined && baseStart !== undefined ? extentsAt(cache, repo.abs, base, file).get(baseStart) : undefined;
+  const baseSpan: Range | undefined = baseStart !== undefined && baseEndFound !== undefined ? [baseStart, baseEndFound] : undefined;
+
   const headEndFound = headLines !== undefined && headStart !== undefined ? extentsAt(cache, repo.abs, head, file).get(headStart) : undefined;
-  const headSpan: Range | undefined = headLines !== undefined && headStart !== undefined && headEndFound !== undefined ? [headStart, headEndFound] : undefined;
+  const headSpan: Range | undefined = headStart !== undefined && headEndFound !== undefined ? [headStart, headEndFound] : undefined;
 
   const before = baseSpan !== undefined ? { start: baseSpan[0], end: baseSpan[1], text: sliceLines(baseLines!, baseSpan[0], baseSpan[1]) } : null;
   const after = headSpan !== undefined ? { start: headSpan[0], end: headSpan[1], text: sliceLines(headLines!, headSpan[0], headSpan[1]) } : null;
@@ -212,9 +190,7 @@ function buildNode(cache: RepoCache, repo: RepoData, node: GraphNode, base: stri
   let added = 0;
   let removed = 0;
   if (baseSpan !== undefined && baseLines !== undefined) {
-    for (const cluster of clusterHunks(touching)) {
-      hunks.push(toReviewHunk(cluster, baseSpan, baseLines, allHunks));
-    }
+    for (const cluster of clusterHunks(touching)) hunks.push(toReviewHunk(cluster, baseSpan, baseLines, allHunks));
   }
   for (const h of touching) {
     added += h.added.length;
@@ -235,9 +211,22 @@ function buildNode(cache: RepoCache, repo: RepoData, node: GraphNode, base: stri
   };
 }
 
+/** A stable identity for a chain stop (ReviewStop.ref): a graph node's own ref, or (db/queue, no nodeId)
+ * repo + lane + label — shared by every chain that reaches the same stop. */
+function stopRef(s: ChainStop): string {
+  return s.nodeId !== undefined ? formatNodeRef({ repo: s.repo, nodeId: s.nodeId }) : `${s.repo}::${s.lane}:${s.label ?? s.symbol}`;
+}
+
+function stopLabel(s: ChainStop): string {
+  const base = s.label ?? s.symbol;
+  return s.op !== undefined && (s.lane === "db" || s.lane === "queue") ? `${base} (${s.op})` : base;
+}
+
 /** The Review model for `baseRef..HEAD` (PR review maps design §2, §4): built on the existing
  * `impact_of_diff`, re-reading each changed function's code at base and head for its before/after text and
- * diff hunks, and the journeys/spec state of whatever it touches.
+ * diff hunks, and the journeys/spec state of whatever it touches. Self-contained (§5): `chainStops` carries
+ * every affected chain's full stop layout, so the renderers (mermaid.ts, markdown.ts) need nothing beyond
+ * this Review — no live MapState, as the publish step (Task 3) only ever has data/review.json.
  * Throws a CodeloomError (exit 2, via dataError) when the workspace root is not a git repository or
  * `baseRef`/HEAD cannot be resolved there. */
 export function buildReview(start: string, baseRef: string): Review {
@@ -250,7 +239,7 @@ export function buildReview(start: string, baseRef: string): Review {
   if (head === undefined) throw dataError(`The repo at ${root} has no HEAD commit.`);
   const base = git(root, ["merge-base", "--end-of-options", baseCommit, head]).trim();
 
-  const impact = impactOfDiff(start, `${base}..${head}`) as unknown as ImpactResult;
+  const impact = impactOfDiff(start, `${base}..${head}`, { lineSpaceAware: true, state });
   const touchedChainIds = new Set(impact.chains);
   const chainsById = new Map(state.chains.map((c) => [c.id, c]));
   const touchedChains = impact.chains.map((id) => chainsById.get(id)).filter((c): c is Chain => c !== undefined);
@@ -275,6 +264,7 @@ export function buildReview(start: string, baseRef: string): Review {
     const repo = state.ws.repos.find((r) => r.ref.id === repoImpact.id);
     if (!repo) continue;
     const cache = cacheFor(repo.ref.id);
+    const indexedAtHead = indexedCommit(repo.abs) === head;
 
     for (const file of repoImpact.changedFiles) {
       const h = hunksFor(cache, repo.abs, base, head, file);
@@ -287,31 +277,30 @@ export function buildReview(start: string, baseRef: string): Review {
       const { nodeId } = parseNodeRef(ref);
       const node = repo.graph.nodes.find((n) => n.id === nodeId);
       if (!node) continue;
-      const built = buildNode(cache, repo, node, base, head);
+      const built = buildNode(cache, repo, node, base, head, indexedAtHead);
       if (built) nodes.push(built);
     }
   }
   nodes.sort((a, b) => compare(a.ref, b.ref));
   const nodeRefSet = new Set(nodes.map((n) => n.ref));
 
+  // Every stop of every touched chain (not just the changed ones): Review needs to be self-contained.
+  const chainStops: Record<string, ReviewStop[]> = {};
+  for (const chain of touchedChains) {
+    chainStops[chain.id] = chain.stops.map((s) => {
+      const ref = stopRef(s);
+      return { ref, repo: s.repo, lane: s.lane, label: stopLabel(s), file: s.file, changed: nodeRefSet.has(ref) };
+    });
+  }
+
   // Journeys: for each one touched, which of its stops are among the changed nodes, and its spec state.
-  const specEntries = new Map(
-    (listSpecs(start, {}).journeys as Array<{ journeyId: string; state: "linked" | "candidates" | "none"; checked: boolean }>).map((j) => [
-      j.journeyId,
-      j,
-    ]),
-  );
+  const specEntries = new Map(listSpecs(start, {}, state).journeys.map((j) => [j.journeyId, j]));
+  const chains = chainLookup(state.chains);
   const nodeJourneys = new Map<string, Set<string>>();
   const journeys: ReviewJourney[] = journeysForChains(state, touchedChainIds).map((j) => {
-    const resolved = chainLookup(state.chains).resolve(j.chainIds).chains.filter((c) => touchedChainIds.has(c.id));
+    const resolved = chains.resolve(j.chainIds).chains.filter((c) => touchedChainIds.has(c.id));
     const changedStops = new Set<string>();
-    for (const c of resolved) {
-      for (const s of c.stops) {
-        if (s.nodeId === undefined) continue;
-        const ref = formatNodeRef({ repo: s.repo, nodeId: s.nodeId });
-        if (nodeRefSet.has(ref)) changedStops.add(ref);
-      }
-    }
+    for (const c of resolved) for (const stop of chainStops[c.id] ?? []) if (stop.changed) changedStops.add(stop.ref);
     for (const ref of changedStops) {
       const set = nodeJourneys.get(ref) ?? new Set<string>();
       set.add(j.id);
@@ -332,6 +321,7 @@ export function buildReview(start: string, baseRef: string): Review {
     nodes,
     journeys,
     chains: impact.chains,
+    chainStops,
     tables: impact.tables,
     queues: impact.queues,
     truncated: impact.truncated,

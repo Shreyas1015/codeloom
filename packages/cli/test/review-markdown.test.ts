@@ -1,11 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { MapState } from "../src/mcp/state.js";
+import { escapeMarkdownCell, escapeMarkdownInline, renderReviewMarkdown } from "../src/review/markdown.js";
 import { escapeMermaidLabel, renderMermaid } from "../src/review/mermaid.js";
-import { renderReviewMarkdown } from "../src/review/markdown.js";
-import type { Review, ReviewNodeChange } from "../src/review/types.js";
-import type { Chain, ChainStop } from "../src/store/schemas.js";
+import type { Review, ReviewNodeChange, ReviewStop } from "../src/review/types.js";
 
 const GOLDEN_DIR = join(import.meta.dirname, "golden");
 
@@ -21,57 +19,19 @@ function expectGolden(name: string, actual: string): void {
   expect(actual).toBe(readGolden(name));
 }
 
-function emptyState(chains: Chain[]): MapState {
-  return {
-    ws: { root: "/repo", name: "demo", repos: [], links: [] },
-    chains,
-    uiReach: [],
-    manualLinks: [],
-    external: [],
-    journeys: [],
-    chainsPath: "/repo/.codeloom/chains.json",
-    journeysPath: "/repo/.codeloom/journeys.json",
-  };
-}
-
-const hop = { confidence: "exact" as const };
-
-function stop(partial: Partial<ChainStop> & Pick<ChainStop, "lane" | "kind" | "repo" | "file" | "line" | "symbol">): ChainStop {
-  return { hop, ...partial };
-}
-
-/** page -> call -> route -> handler -> function (CustomerService.create) -> db(customers). */
-function createCustomerChain(id = "ch_1"): Chain {
-  return {
-    id,
-    entry: "page:web:/customers/new",
-    routeKey: "api:POST /api/customers",
-    name: "POST /api/customers · NewCustomerPage",
-    confidence: "exact",
-    complete: true,
-    unresolved: [],
-    stops: [
-      stop({ lane: "ui", kind: "page", repo: "web", file: "app/customers/new/page.tsx", line: 1, symbol: "NewCustomerPage" }),
-      stop({ lane: "ui", kind: "call", repo: "web", file: "lib/use-create-customer.ts", line: 5, symbol: "useCreateCustomer", from: 0 }),
-      stop({
-        lane: "api", kind: "route", repo: "api", file: "start/routes.ts", line: 7, symbol: "CustomersController.store",
-        op: "POST", label: "POST /api/customers", from: 1,
-      }),
-      stop({
-        lane: "code", kind: "handler", repo: "api", file: "app/controllers/customers_controller.ts", line: 9,
-        symbol: "CustomersController.store",
-        nodeId: "function:app/controllers/customers_controller.ts:CustomersController.store", from: 2,
-      }),
-      stop({
-        lane: "code", kind: "function", repo: "api", file: "app/services/customer_service.ts", line: 5,
-        symbol: "CustomerService.create", nodeId: "function:app/services/customer_service.ts:CustomerService.create", from: 3,
-      }),
-      stop({ lane: "db", kind: "db", repo: "api", file: "app/services/customer_service.ts", line: 6, symbol: "CustomerService.create", op: "insert", label: "customers", from: 4 }),
-    ],
-  };
-}
-
 const CHANGED_REF = "api::function:app/services/customer_service.ts:CustomerService.create";
+
+/** page -> call -> route -> handler -> function (CustomerService.create, changed) -> db(customers). */
+function createCustomerStops(): ReviewStop[] {
+  return [
+    { ref: "web::function:app/customers/new/page.tsx:NewCustomerPage", repo: "web", lane: "ui", label: "NewCustomerPage", file: "app/customers/new/page.tsx", changed: false },
+    { ref: "web::function:lib/use-create-customer.ts:useCreateCustomer", repo: "web", lane: "ui", label: "useCreateCustomer", file: "lib/use-create-customer.ts", changed: false },
+    { ref: "api::route:POST /api/customers", repo: "api", lane: "api", label: "POST /api/customers", file: "start/routes.ts", changed: false },
+    { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.store", repo: "api", lane: "code", label: "CustomersController.store", file: "app/controllers/customers_controller.ts", changed: false },
+    { ref: CHANGED_REF, repo: "api", lane: "code", label: "CustomerService.create", file: "app/services/customer_service.ts", changed: true },
+    { ref: "api::db:customers", repo: "api", lane: "db", label: "customers (insert)", file: "app/services/customer_service.ts", changed: false },
+  ];
+}
 
 function changedNode(partial: Partial<ReviewNodeChange> = {}): ReviewNodeChange {
   return {
@@ -102,6 +62,7 @@ function baseReview(partial: Partial<Review> = {}): Review {
     nodes: [changedNode()],
     journeys: [{ id: "j_1", name: "Create a customer", changedStops: [CHANGED_REF], spec: "unchecked", chains: ["ch_1"] }],
     chains: ["ch_1"],
+    chainStops: { ch_1: createCustomerStops() },
     tables: ["customers"],
     queues: [],
     truncated: false,
@@ -112,20 +73,45 @@ function baseReview(partial: Partial<Review> = {}): Review {
 
 describe("escapeMermaidLabel", () => {
   it.each([
-    ['say "hi"', "say &quot;hi&quot;"],
+    ['say "hi"', "say #quot;hi#quot;"],
     ["a[b]", "a#91;b#93;"],
     ["a|b", "a#124;b"],
-    ["back`tick", "back&#96;tick"],
-    ["<script>alert(1)</script>", "&lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["back`tick", "back#96;tick"],
+    ["<script>alert(1)</script>", "#lt;script#gt;alert(1)#lt;/script#gt;"],
   ])("escapes %s", (input, expected) => {
     expect(escapeMermaidLabel(input)).toBe(expected);
+  });
+
+  it("escapes a literal # first, so pre-existing text can't be decoded as an entity Mermaid understands", () => {
+    // If a literal "#91;" survived unescaped, Mermaid's own decoder would turn it into "[".
+    expect(escapeMermaidLabel("already #91; looks like a bracket")).toBe("already #35;91; looks like a bracket");
+    expect(escapeMermaidLabel("already #35;")).toBe("already #35;35;");
+  });
+});
+
+describe("escapeMarkdownInline / escapeMarkdownCell", () => {
+  it.each([
+    ["a|b", "a\\|b"],
+    ["[link](url)", "\\[link\\]\\(url\\)"],
+    ["back`tick", "back\\`tick"],
+    ["under_score", "under\\_score"],
+    ["star*risk", "star\\*risk"],
+    ["<b>html</b>", "\\<b\\>html\\<\\/b\\>".replace("\\/", "/")], // "/" itself is not escaped
+    ["@mention #123 !image", "\\@mention \\#123 \\!image"],
+    ["line1\nline2", "line1 line2"],
+    ["back\\slash", "back\\\\slash"],
+  ])("escapes %s", (input, expected) => {
+    expect(escapeMarkdownInline(input)).toBe(expected);
+  });
+
+  it("escapeMarkdownCell replaces an empty result with a literal underscore, so the cell is never blank", () => {
+    expect(escapeMarkdownCell("")).toBe("\\_");
   });
 });
 
 describe("renderMermaid", () => {
   it("draws the chain's stops in order, marking the changed one", () => {
-    const state = emptyState([createCustomerChain()]);
-    const out = renderMermaid(baseReview(), state);
+    const out = renderMermaid(baseReview());
     expect(out.startsWith("```mermaid\nflowchart LR\n")).toBe(true);
     expect(out.endsWith("```")).toBe(true);
     expect(out).toContain('["✏️ CustomerService.create"]:::changed');
@@ -135,29 +121,32 @@ describe("renderMermaid", () => {
   });
 
   it("caps at maxNodes and notes how many more there are", () => {
-    const stops: ChainStop[] = [];
-    for (let i = 0; i < 45; i++) {
-      stops.push(stop({ lane: "code", kind: "function", repo: "api", file: `f${i}.ts`, line: 1, symbol: `fn${i}`, from: i > 0 ? i - 1 : undefined }));
-    }
-    const chain: Chain = { ...createCustomerChain(), stops };
-    const out = renderMermaid(baseReview({ chains: [chain.id] }), emptyState([chain]), 30);
+    const stops: ReviewStop[] = Array.from({ length: 45 }, (_, i) => ({
+      ref: `api::function:f${i}.ts:fn${i}`, repo: "api", lane: "code", label: `fn${i}`, file: `f${i}.ts`, changed: false,
+    }));
+    const out = renderMermaid(baseReview({ chains: ["ch_1"], chainStops: { ch_1: stops } }), 30);
     expect(out).toContain("+15 more — see the full map");
     expect(out.match(/\bn\d+\[/g)?.length).toBe(31); // 30 real stops + the "+N more" node
   });
 
+  it("escapes a stop label that could break the diagram or inject a script tag", () => {
+    const evil: ReviewStop = { ref: "api::evil", repo: "api", lane: "code", label: '<script>"a|b[c]`d</script>', changed: false };
+    const out = renderMermaid(baseReview({ chains: ["ch_1"], chainStops: { ch_1: [evil] } }));
+    expect(out).not.toContain("<script>");
+    expect(out).not.toContain('"a|b[c]');
+  });
+
   it("is deterministic", () => {
-    const state = emptyState([createCustomerChain()]);
     const review = baseReview();
-    expect(renderMermaid(review, state)).toBe(renderMermaid(review, state));
+    expect(renderMermaid(review)).toBe(renderMermaid(review));
   });
 });
 
 describe("renderReviewMarkdown", () => {
   it("golden: the normal PR block", () => {
-    const state = emptyState([createCustomerChain()]);
-    const out = renderReviewMarkdown(baseReview(), state, { link: "https://x.github.io/demo/pr-1/", builtFor: "a41c9e2" });
+    const out = renderReviewMarkdown(baseReview(), { link: "https://x.github.io/demo/pr-1/", builtFor: "a41c9e2" });
     expect(out).toContain("### 🗺 codeloom review map");
-    expect(out).toContain("This PR touches 1 journeys, 1 chains, 1 tables, 0 queues.");
+    expect(out).toContain("This PR touches 1 journey, 1 chain, 1 table, 0 queues.");
     expect(out).toContain("```mermaid");
     expect(out).toContain("Not on any journey:");
     expect(out).toContain("lib/gst.ts");
@@ -166,38 +155,33 @@ describe("renderReviewMarkdown", () => {
   });
 
   it("is deterministic", () => {
-    const state = emptyState([createCustomerChain()]);
     const review = baseReview();
-    expect(renderReviewMarkdown(review, state, { link: "https://x" })).toBe(renderReviewMarkdown(review, state, { link: "https://x" }));
+    expect(renderReviewMarkdown(review, { link: "https://x" })).toBe(renderReviewMarkdown(review, { link: "https://x" }));
   });
 
-  it("falls back to a chains table when no journeys are named yet", () => {
-    const state = emptyState([createCustomerChain()]);
-    const out = renderReviewMarkdown(baseReview({ journeys: [] }), state, {});
+  it("falls back to a chains table (by chain id) when no journeys are named yet", () => {
+    const out = renderReviewMarkdown(baseReview({ journeys: [] }), {});
     expect(out).toContain("| Chain | Changed stops |");
-    expect(out).toContain("POST /api/customers · NewCustomerPage");
+    expect(out).toContain("ch\\_1"); // the chain id's own "_" is escaped like any other label (harmless, consistent)
+    expect(out).toContain("CustomerService.create");
     expect(out).not.toContain("| Journey | Changed stops | Spec |");
   });
 
   it("says no journeys were touched and lists the changed files when no chain is touched", () => {
-    const out = renderReviewMarkdown(
-      baseReview({ journeys: [], chains: [], tables: [], nodes: [] }),
-      emptyState([]),
-      {},
-    );
+    const out = renderReviewMarkdown(baseReview({ journeys: [], chains: [], chainStops: {}, tables: [], nodes: [] }), {});
     expect(out).toContain("No journeys touched.");
-    expect(out).toContain("app/services/customer_service.ts");
+    expect(out).toContain("customer\\_service.ts"); // file paths are escaped too (their "_" included)
     expect(out).toContain("lib/gst.ts");
     expect(out).not.toContain("```mermaid");
   });
 
   it("shows only the heading and the error line when the build failed (review is null)", () => {
-    const out = renderReviewMarkdown(null, null, { error: "codeloom index failed: see the run log." });
+    const out = renderReviewMarkdown(null, { error: "codeloom index failed: see the run log." });
     expect(out).toBe("### 🗺 codeloom review map\n\ncodeloom index failed: see the run log.");
   });
 
   it("links the last good map next to the error", () => {
-    const out = renderReviewMarkdown(null, null, {
+    const out = renderReviewMarkdown(null, {
       error: "codeloom index failed: see the run log.",
       previous: { link: "https://x.github.io/demo/pr-1/", builtFor: "a41c9e2" },
     });
@@ -206,11 +190,50 @@ describe("renderReviewMarkdown", () => {
   });
 
   it("reports a too-large snapshot after the summary and diagram, with no link", () => {
-    const state = emptyState([createCustomerChain()]);
-    const out = renderReviewMarkdown(baseReview(), state, { tooLarge: { bytes: 38_000_000, max: 25_000_000 }, link: "https://should-not-appear" });
+    const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 38_000_000, max: 25_000_000 }, link: "https://should-not-appear" });
     expect(out).toContain("```mermaid");
     expect(out).toContain("Full map too large to host (38 MB > 25 MB).");
     expect(out).not.toContain("should-not-appear");
     expect(out).not.toContain("Open the full review map");
+  });
+
+  it("renders a caveat line for notes and a truncated result, so an approximate/cut map is visible", () => {
+    const out = renderReviewMarkdown(baseReview({ truncated: true, notes: ["api: map indexed at abc1234, not at def5678; line matches are approximate"] }), {});
+    expect(out).toContain("Some results were truncated.");
+    expect(out).toContain("map indexed at abc1234");
+  });
+
+  it("pluralizes correctly at 0 and 1", () => {
+    const out = renderReviewMarkdown(baseReview({ journeys: [{ id: "j_1", name: "Create a customer", changedStops: [CHANGED_REF], spec: "unchecked", chains: ["ch_1"] }], queues: [] }), {});
+    expect(out).toContain("This PR touches 1 journey, 1 chain, 1 table, 0 queues.");
+  });
+
+  /** A table cell's own escaped "\|" is still textually two characters (backslash, pipe); a real GFM
+   * renderer reads the backslash and does not treat it as a new column, but a naive `.split("|")` would —
+   * so count only pipes NOT preceded by a backslash, the actual column separators. */
+  const realPipes = (line: string): number => (line.match(/(?<!\\)\|/g) ?? []).length;
+
+  it("escapes an attacker-controlled journey name so it can't break the table or inject a link", () => {
+    const evil = "Evil](https://evil.example) | injected [cell";
+    const out = renderReviewMarkdown(baseReview({ journeys: [{ id: "j_1", name: evil, changedStops: [CHANGED_REF], spec: "unchecked", chains: ["ch_1"] }] }), {});
+    const tableLine = out.split("\n").find((l) => l.includes("Evil"))!;
+    expect(tableLine).toContain("\\|"); // the name's own "|" survives, but escaped
+    // 3 columns (name, stops, spec) = 4 real (unescaped) pipes: leading + 2 separators + trailing.
+    expect(realPipes(tableLine)).toBe(4);
+    expect(out).not.toContain("](https://evil.example)");
+  });
+
+  it("escapes an attacker-controlled file path in the changed-files list", () => {
+    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil](https://evil.example)|x.ts", added: 1, removed: 0, onJourney: false }] }), {});
+    expect(out).not.toContain("](https://evil.example)");
+  });
+
+  it("escapes an attacker-controlled chain name/stop label in the bare chains table", () => {
+    const evilStop: ReviewStop = { ref: "api::evil", repo: "api", lane: "code", label: "injected | cell [link](https://evil.example)", changed: true };
+    const out = renderReviewMarkdown(baseReview({ journeys: [], chains: ["ch_evil"], chainStops: { ch_evil: [evilStop] } }), {});
+    const tableLine = out.split("\n").find((l) => l.startsWith("|") && l.includes("injected"))!;
+    // 2 columns (chain, stops) = 3 real (unescaped) pipes: leading + 1 separator + trailing.
+    expect(realPipes(tableLine)).toBe(3);
+    expect(out).not.toContain("](https://evil.example)");
   });
 });

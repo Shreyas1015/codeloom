@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodeloomError } from "../src/errors.js";
-import { changedLines, changedLinesAtBase, isGitRepo, resolveRange } from "../src/workspace/diff.js";
+import { changedLines, changedLinesAtBase, changedLinesAtHead, diffHunks, isGitRepo, resolveRange } from "../src/workspace/diff.js";
 import { commitAll, makeRepo } from "./helpers.js";
 
 const lines = (n: number, tag = "line") => Array.from({ length: n }, (_, i) => `${tag} ${i + 1}`).join("\n") + "\n";
@@ -177,6 +177,43 @@ describe("changedLinesAtBase", () => {
     const base = sha(dir);
     writeFileSync(join(dir, "a.ts"), "top\n" + lines(3));
     expect(changedLinesAtBase(dir, base)).toEqual([{ file: "a.ts", lines: [[1, 1]] }]);
+  });
+});
+
+describe("diffHunks", () => {
+  it("keeps a removed line starting with -- and an added line starting with ++ (not a ---/+++ header)", () => {
+    const dir = makeRepo({ "a.ts": "--count;\n" });
+    const base = sha(dir);
+    writeFileSync(join(dir, "a.ts"), "++i;\n");
+    commitAll(dir);
+    const head = sha(dir);
+    expect(diffHunks(dir, [base, head], "a.ts")).toEqual([
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, removed: ["--count;"], added: ["++i;"] },
+    ]);
+  });
+
+  it("reports more than one hunk, each with its own content", () => {
+    const dir = makeRepo({ "a.ts": lines(10) });
+    const base = sha(dir);
+    writeFileSync(join(dir, "a.ts"), [...lines(10).trimEnd().split("\n").map((x, i) => (i === 1 ? "two changed" : x)), "line 11"].join("\n") + "\n");
+    commitAll(dir);
+    const head = sha(dir);
+    expect(diffHunks(dir, [base, head], "a.ts")).toEqual([
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, removed: ["line 2"], added: ["two changed"] },
+      { oldStart: 10, oldLines: 0, newStart: 11, newLines: 1, removed: [], added: ["line 11"] },
+    ]);
+  });
+});
+
+describe("changedLinesAtHead", () => {
+  it("reports NEW-side (head) line ranges, unlike changedLinesAtBase", () => {
+    const dir = makeRepo({ "a.ts": lines(10) });
+    const base = sha(dir);
+    writeFileSync(join(dir, "a.ts"), [...lines(10).trimEnd().split("\n").slice(0, 3), "new", ...lines(10).trimEnd().split("\n").slice(3)].join("\n") + "\n");
+    commitAll(dir);
+    const head = sha(dir);
+    expect(changedLinesAtHead(dir, base, head)).toEqual([{ file: "a.ts", lines: [[4, 4]] }]);
+    expect(changedLinesAtBase(dir, base, head)).toEqual([{ file: "a.ts", lines: [[3, 3]] }]);
   });
 });
 

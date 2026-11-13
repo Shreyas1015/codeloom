@@ -1,6 +1,6 @@
 ### 🗺 codeloom review map
 
-This PR touches 1 journeys, 1 chains, 1 tables, 0 queues.
+This PR touches 1 journey, 1 chain, 1 table, 0 queues.
 
 ```mermaid
 flowchart LR

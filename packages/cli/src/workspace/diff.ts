@@ -153,6 +153,61 @@ function diffFiles(repoAbs: string, revs: string[], side: DiffSide): ChangedFile
   return [...files.values()];
 }
 
+/** One `-U0` hunk with its real removed/added lines (unlike parseHunks, which only keeps ranges). */
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  removed: string[];
+  added: string[];
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+/** Parse `git diff -U0`'s hunks for exactly one file, content included. Shares parseHunks' `inHunks` guard:
+ * once the first "@@" of the file is seen, every line is content, never re-read as the "--- a/x" / "+++
+ * b/x" header that only appears before it — so a real removed/added line whose own text starts with "--"
+ * or "++" (e.g. `--count;`, `++i;`) is kept, not mistaken for a header and dropped. */
+function parseDiffHunks(out: string): DiffHunk[] {
+  const hunks: DiffHunk[] = [];
+  let current: DiffHunk | undefined;
+  let inHunks = false;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      current = undefined;
+      inHunks = false;
+      continue;
+    }
+    const h = HUNK_HEADER.exec(line);
+    if (h) {
+      inHunks = true;
+      current = {
+        oldStart: Number(h[1]),
+        oldLines: h[2] === undefined ? 1 : Number(h[2]),
+        newStart: Number(h[3]),
+        newLines: h[4] === undefined ? 1 : Number(h[4]),
+        removed: [],
+        added: [],
+      };
+      hunks.push(current);
+      continue;
+    }
+    if (!inHunks || !current) continue; // before the file's first "@@": "--- a/x" / "+++ b/x", never content
+    if (line.startsWith("-")) current.removed.push(line.slice(1));
+    else if (line.startsWith("+")) current.added.push(line.slice(1));
+  }
+  return hunks;
+}
+
+/** `git diff -U0 revs -- file`'s hunks for exactly one file, with their real content (review/build.ts's
+ * diff hunks, PR review maps design §4). `revs` is one rev (vs the working tree) or two (commit vs
+ * commit), same as diffFiles. */
+export function diffHunks(repoAbs: string, revs: string[], file: string): DiffHunk[] {
+  const out = git(repoAbs, [...DIFF_OPTS, "--end-of-options", ...revs, "--", file], BIG);
+  return parseDiffHunks(out);
+}
+
 /** Add untracked files (not git-ignored) as "all", skipping any path already listed. */
 function addUntracked(repoAbs: string, files: ChangedFile[]): void {
   const untracked = git(repoAbs, ["ls-files", "--others", "--exclude-standard", "-z"], { maxBuffer: 64 * 1024 * 1024 })
@@ -222,6 +277,13 @@ export function changedLinesAtBase(repoAbs: string, base: string, head?: string)
   const files = diffFiles(repoAbs, head === undefined ? [base] : [base, head], "old");
   if (head === undefined) addUntracked(repoAbs, files);
   return sortFiles(files);
+}
+
+/** Changed files with line ranges in the HEAD version (the new side of each hunk): the line space of a map
+ * indexed at `head` (review/build.ts, when a repo was reindexed at the PR's head, PR review maps design
+ * §1's real CI flow). `base` and `head` must both be commit ids (or the empty tree). Sorted by file. */
+export function changedLinesAtHead(repoAbs: string, base: string, head: string): ChangedFile[] {
+  return sortFiles(diffFiles(repoAbs, [base, head], "new"));
 }
 
 /** git's empty tree id, the base to use for a repo with no commits. */

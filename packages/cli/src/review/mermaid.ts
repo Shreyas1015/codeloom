@@ -1,101 +1,85 @@
-import { formatNodeRef, type MapState } from "../mcp/state.js";
-import type { ChainStop } from "../store/schemas.js";
-import type { Review } from "./types.js";
+import type { Review, ReviewStop } from "./types.js";
 
 /** Nodes shown before "+N more — see the full map" (PR review maps design §4). */
 const DEFAULT_MAX_NODES = 30;
 
 const CHANGED_CLASS_DEF = "classDef changed fill:#FBF0D6,stroke:#E3A72F,stroke-width:2px";
 
-/** Mermaid node labels are plain text between quotes: escape the characters that would otherwise end the
- * quoted string, read as a shape (`[`, `]`, `|`) or carry HTML/script through to the rendered page. */
+/** Mermaid decodes `#name;`/`#NNN;` sequences itself (the same codes as HTML entities, minus the leading
+ * `&`); using that form (not `&quot;`/`&#96;`) consistently is what actually survives Mermaid's own
+ * parser. A literal `#` is escaped first, so a label that already contains text like "#91;" isn't
+ * decoded into "[" by Mermaid — only entities THIS function produced are real. */
 export function escapeMermaidLabel(s: string): string {
   return s
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/`/g, "&#96;")
+    .replace(/#/g, "#35;")
+    .replace(/&/g, "#amp;")
+    .replace(/"/g, "#quot;")
+    .replace(/</g, "#lt;")
+    .replace(/>/g, "#gt;")
+    .replace(/`/g, "#96;")
     .replace(/\[/g, "#91;")
     .replace(/\]/g, "#93;")
     .replace(/\|/g, "#124;");
 }
 
-/** A stable identity for a chain stop, so the same function, table or queue reached by more than one chain
- * collapses into one diagram node. Stops on a graph node share its ref; others (db/queue) share repo + lane
- * + label. */
-function stopKey(s: ChainStop): string {
-  return s.nodeId !== undefined ? formatNodeRef({ repo: s.repo, nodeId: s.nodeId }) : `${s.repo}::${s.lane}:${s.label ?? s.symbol}`;
-}
-
-function stopLabel(s: ChainStop): string {
-  const base = s.label ?? s.symbol;
-  return s.op !== undefined && (s.lane === "db" || s.lane === "queue") ? `${base} (${s.op})` : base;
-}
-
 /** A Mermaid `flowchart LR` of every chain in `review.chains`, laid out in each chain's own stop order
- * (page → call → route → handler → … → table/queue, mcp/state.ts / the linker already orders them this
- * way), stops shared by more than one chain drawn once. A node whose ref is a changed node
- * (review.nodes) gets a ✏️ prefix and the `changed` style. At most `maxNodes` nodes; the rest collapse into
- * one "+N more" node. Returns a fenced ```mermaid block, ready to paste into a PR description. */
-export function renderMermaid(review: Review, state: MapState, maxNodes = DEFAULT_MAX_NODES): string {
-  const changedRefs = new Set(review.nodes.map((n) => n.ref));
-  const chainsById = new Map(state.chains.map((c) => [c.id, c]));
-
+ * (review.chainStops; page → call → route → handler → … → table/queue, the linker's own order), stops
+ * shared by more than one chain (same ReviewStop.ref) drawn once, edges between a chain's consecutive
+ * stops. A stop with `changed: true` gets a ✏️ prefix and the `changed` style. At most `maxNodes` nodes;
+ * the rest collapse into one "+N more" node. Returns a fenced ```mermaid block, ready to paste into a PR
+ * description. Review is self-contained: no MapState needed (PR review maps design §5 — the publish step
+ * renders this from data/review.json alone). */
+export function renderMermaid(review: Review, maxNodes = DEFAULT_MAX_NODES): string {
   const ids = new Map<string, string>();
-  const labels = new Map<string, string>();
+  const stopsByRef = new Map<string, ReviewStop>();
   const changed = new Set<string>();
   const edges: string[] = [];
   const seenEdges = new Set<string>();
 
-  const idFor = (key: string): string => {
-    let id = ids.get(key);
+  const idFor = (ref: string): string => {
+    let id = ids.get(ref);
     if (id === undefined) {
       id = `n${ids.size + 1}`;
-      ids.set(key, id);
+      ids.set(ref, id);
     }
     return id;
   };
 
   for (const chainId of review.chains) {
-    const chain = chainsById.get(chainId);
-    if (!chain) continue;
-    const keyOf: string[] = [];
-    chain.stops.forEach((s, i) => {
-      const key = stopKey(s);
-      keyOf[i] = key;
-      const id = idFor(key);
-      if (!labels.has(key)) labels.set(key, stopLabel(s));
-      const ref = s.nodeId !== undefined ? formatNodeRef({ repo: s.repo, nodeId: s.nodeId }) : undefined;
-      if (ref !== undefined && changedRefs.has(ref)) changed.add(key);
-      if (i > 0 && s.from !== undefined) {
-        const fromId = idFor(keyOf[s.from]!);
-        const edge = `${fromId} --> ${id}`;
+    const stops = review.chainStops[chainId] ?? [];
+    let prevId: string | undefined;
+    for (const s of stops) {
+      const id = idFor(s.ref);
+      if (!stopsByRef.has(s.ref)) stopsByRef.set(s.ref, s);
+      if (s.changed) changed.add(s.ref);
+      if (prevId !== undefined) {
+        const edge = `${prevId} --> ${id}`;
         if (!seenEdges.has(edge)) {
           seenEdges.add(edge);
           edges.push(edge);
         }
       }
-    });
+      prevId = id;
+    }
   }
 
-  const allKeys = [...ids.keys()];
-  const shown = allKeys.slice(0, maxNodes);
-  const shownIds = new Set(shown.map((k) => ids.get(k)!));
+  const allRefs = [...ids.keys()];
+  const shown = allRefs.slice(0, maxNodes);
+  const shownIds = new Set(shown.map((ref) => ids.get(ref)!));
   const lines: string[] = ["```mermaid", "flowchart LR"];
-  for (const key of shown) {
-    const id = ids.get(key)!;
-    const label = escapeMermaidLabel(labels.get(key)!);
-    const text = changed.has(key) ? `✏️ ${label}` : label;
-    lines.push(changed.has(key) ? `${id}["${text}"]:::changed` : `${id}["${text}"]`);
+  for (const ref of shown) {
+    const id = ids.get(ref)!;
+    const label = escapeMermaidLabel(stopsByRef.get(ref)!.label);
+    const text = changed.has(ref) ? `✏️ ${label}` : label;
+    lines.push(changed.has(ref) ? `${id}["${text}"]:::changed` : `${id}["${text}"]`);
   }
-  const hidden = allKeys.length - shown.length;
+  const hidden = allRefs.length - shown.length;
   if (hidden > 0) lines.push(`n${shown.length + 1}["+${hidden} more — see the full map"]`);
   for (const edge of edges) {
     const [from, to] = edge.split(" --> ");
     if (shownIds.has(from!) && shownIds.has(to!)) lines.push(edge);
   }
-  if ([...changed].some((k) => shownIds.has(ids.get(k)!))) lines.push(CHANGED_CLASS_DEF);
+  if ([...changed].some((ref) => shownIds.has(ids.get(ref)!))) lines.push(CHANGED_CLASS_DEF);
   lines.push("```");
   return lines.join("\n");
 }

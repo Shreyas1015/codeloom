@@ -1,5 +1,4 @@
 import { dataError } from "../errors.js";
-import { loadMapState } from "../mcp/state.js";
 import { buildReview } from "../review/build.js";
 import { renderReviewMarkdown } from "../review/markdown.js";
 import type { Review } from "../review/types.js";
@@ -26,7 +25,6 @@ export function parseReviewFormat(raw: string | undefined): ReviewFormat {
 export function runReview(start: string, opts: ReviewOptions): { review: Review; output: string } {
   const review = buildReview(start, opts.base);
   if (opts.format === "json") return { review, output: JSON.stringify(review, null, 2) };
-  const state = loadMapState(start);
-  const output = renderReviewMarkdown(review, state, { link: opts.link, builtFor: review.head.slice(0, 7) });
+  const output = renderReviewMarkdown(review, { link: opts.link, builtFor: review.head.slice(0, 7) });
   return { review, output };
 }
