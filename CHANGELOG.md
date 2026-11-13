@@ -17,7 +17,7 @@ PR review maps, for public GitHub repos:
   banner marks every screen read-only. Static snapshot mode detects itself from `data/manifest.json`, reads
   `data/<key>.json` beside `index.html` instead of calling a server, and switches to hash routing so a
   reload or a direct link works with no server-side routing at all.
-- Security: the publish workflow only ever trusts `data/*.json` and `review.md` from a PR's own (untrusted)
+- Security: the publish workflow only ever trusts `data/*.json` from a PR's own (untrusted)
   build — it builds the hosted site and the PR block itself, from codeloom's own install, so no code or
   markup from the PR ever reaches the published page.
 - Scope: a workspace that is the repo itself (`codeloom.workspace.json` at the git root, repos as

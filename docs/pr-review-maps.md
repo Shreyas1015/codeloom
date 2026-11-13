@@ -27,7 +27,10 @@ safe — codeloom then adds its block below instead.
 ## Setup
 
 1. `npx codeloom init --github` — writes `.github/workflows/codeloom-review-build.yml` and
-   `codeloom-review-publish.yml`, pinned to the codeloom version you ran. Commit and push them.
+   `codeloom-review-publish.yml`, pinned to the codeloom version you ran. Commit them and **merge them to
+   the default branch first**: the publish workflow runs on `workflow_run`, which GitHub only fires for a
+   workflow file that is already on the default branch — so the pull request that adds them gets no block
+   itself; the next one does.
 2. Enable GitHub Pages for the repo: **Settings → Pages → Build and deployment → Deploy from a branch →
    `gh-pages`**. (The first PR this runs on creates the `gh-pages` branch for you; you can enable Pages
    either before or after that.)
