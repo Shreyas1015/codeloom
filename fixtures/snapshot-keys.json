@@ -1,0 +1,18 @@
+[
+  { "path": "/api/overview", "key": "overview" },
+  { "path": "/api/journeys", "key": "journeys" },
+  { "path": "/api/journeys/j_1a2b3c4d5e6f", "key": "journeys~j_1a2b3c4d5e6f" },
+  { "path": "/api/tours/j_1a2b3c4d5e6f", "key": "tours~j_1a2b3c4d5e6f" },
+  { "path": "/api/graph", "params": { "repo": "api" }, "key": "graph@repo=api" },
+  { "path": "/api/graph", "params": { "repo": "api", "dir": "app/services" }, "key": "graph@dir=app%2Fservices&repo=api" },
+  { "path": "/api/graph", "params": { "repo": "api", "dir": null }, "key": "graph@repo=api" },
+  { "path": "/api/docs", "params": { "repo": "api", "file": "docs/café-guide.md" }, "key": "docs@file=docs%2Fcaf%C3%A9-guide.md&repo=api" },
+  { "path": "/api/chains", "params": { "limit": 25, "offset": 0 }, "key": "chains@limit=25&offset=0" },
+  { "path": "/api/docs", "params": { "repo": "api", "file": "a=b&c?d" }, "key": "docs@file=a%3Db%26c%3Fd&repo=api" },
+  { "path": "/api/node/api::function:app/services/customer_service.ts:CustomerService.create", "key": "node~api::function:app~services~customer_service.ts:CustomerService.create" },
+  {
+    "path": "/api/graph",
+    "params": { "repo": "api", "dir": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+    "key": "graph@dir=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-01b03eb1c13308b9"
+  }
+]
