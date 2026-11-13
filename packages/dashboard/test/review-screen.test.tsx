@@ -132,7 +132,7 @@ const WHOLE_FILE_TEXT = Array.from({ length: 60 }, (_, i) => `// controller line
 /** Stubs `fetch` for every `./data/*.json` request the Review screen and its panel make, detects the
  * snapshot from the same stub (so `isSnapshot()` is true by the time `createAppRouter` runs), and returns
  * the mock for assertions on what was requested. */
-async function enterSnapshot(opts: { pr?: number | undefined; repoSlug?: string | undefined } = {}): Promise<ReturnType<typeof vi.fn>> {
+async function enterSnapshot(opts: { pr?: number | undefined; repoSlug?: string | undefined; review?: Review } = {}): Promise<ReturnType<typeof vi.fn>> {
   const manifest = {
     version: 1,
     codeloom: "0.4.0",
@@ -149,7 +149,7 @@ async function enterSnapshot(opts: { pr?: number | undefined; repoSlug?: string 
     const url = String(input);
     if (url === "./data/manifest.json") return json(manifest);
     if (url === "./data/overview.json") return json(OVERVIEW);
-    if (url === "./data/review.json") return json(REVIEW);
+    if (url === "./data/review.json") return json(opts.review ?? REVIEW);
     if (url === "./data/files~api~app~controllers~customers_controller.ts.json") {
       return json({ file: "app/controllers/customers_controller.ts", text: WHOLE_FILE_TEXT });
     }
@@ -304,6 +304,53 @@ describe("Review screen", () => {
     expect(items[1]).toHaveTextContent("not on any mapped chain");
     expect(items[2]).toHaveTextContent("components/CustomerForm.tsx +6 −1");
     expect(items[2]).not.toHaveTextContent("not on any mapped chain");
+  });
+
+  it("final review I5: each journey row links to its Journey screen", async () => {
+    await enterSnapshot();
+    renderAt("/review");
+    await opened();
+    const list = screen.getByRole("list", { name: "Journeys affected" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(within(rows[0]!).getByRole("link", { name: "Open journey Create customer" })).toHaveAttribute("href", "/journeys/j_create");
+    expect(within(rows[1]!).getByRole("link", { name: "Open journey Bulk import customers" })).toHaveAttribute("href", "/journeys/j_bulk");
+  });
+
+  describe("final review I4: no journeys named — affected chains stand in for them", () => {
+    const CHAINS_ONLY: Review = { ...REVIEW, journeys: [], nodes: [{ ...CREATE_NODE, journeys: [] }] };
+
+    it("lists each affected chain by name with its changed-stop count, selected by default with its lanes", async () => {
+      await enterSnapshot({ review: CHAINS_ONLY });
+      renderAt("/review");
+      const list = await screen.findByRole("list", { name: "Chains affected" });
+      expect(screen.queryByRole("list", { name: "Journeys affected" })).toBeNull();
+      const rows = within(list).getAllByRole("listitem");
+      expect(rows).toHaveLength(1);
+      expect(within(rows[0]!).getByText("POST /api/customers")).toBeInTheDocument();
+      expect(within(rows[0]!).getByText("1 stop changed")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^POST \/api\/customers/ })).toHaveAttribute("aria-pressed", "true");
+      const code = screen.getByRole("region", { name: "Code" });
+      expect(within(code).getByRole("button", { name: "Stop 5: CustomerService.create" })).toHaveAttribute("data-changed", "true");
+      expect(within(rows[0]!).getByRole("link", { name: "Open chain POST /api/customers" })).toHaveAttribute("href", "/journeys/ch_create");
+    });
+
+    it("clicking a changed stop shows its diff in the same code panel", async () => {
+      await enterSnapshot({ review: CHAINS_ONLY });
+      renderAt("/review");
+      await screen.findByRole("list", { name: "Chains affected" });
+      await userEvent.click(screen.getByRole("button", { name: "Stop 5: CustomerService.create" }));
+      const panel = await screen.findByRole("complementary", { name: "Code panel" });
+      expect(within(panel).getByRole("tab", { name: "Change", selected: true })).toBeInTheDocument();
+      expect(within(panel).getAllByRole("insertion")).toHaveLength(4);
+      expect(panel.textContent).toContain("+4 −1 lines inside this function.");
+      expect(panel.textContent).not.toContain("Also on journey");
+    });
+
+    it("with no chains either, says nothing on a chain was touched", async () => {
+      await enterSnapshot({ review: { ...CHAINS_ONLY, chains: [], chainStops: {}, chainNames: {} } });
+      renderAt("/review");
+      expect(await screen.findByText("No journeys or chains touched by this PR.")).toBeInTheDocument();
+    });
   });
 
   it("outside a snapshot, visiting /review redirects to Home", async () => {

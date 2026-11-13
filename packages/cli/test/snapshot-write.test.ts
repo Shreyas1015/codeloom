@@ -138,6 +138,8 @@ describe("writeSnapshotData", () => {
     expect(manifest.version).toBe(1);
     expect(manifest.head).toMatch(/^[0-9a-f]{40}$/);
     expect(manifest.base).toMatch(/^[0-9a-f]{40}$/);
+    // Final review m1: the --base the user passed, for the banner's "vs main".
+    expect(manifest.baseRef).toBe("main");
     expect(manifest.builtAt).toBe(FIXED_NOW().toISOString());
     expect(manifest.tooLarge).toBeUndefined();
     expect(manifest.omitted).toEqual({ mapFolders: [], codeFiles: [] });
@@ -181,6 +183,39 @@ describe("writeSnapshotData", () => {
     for (const file of manifest.files) expect(file, file).toMatch(/^[A-Za-z0-9._~@=&-]+\.json$/);
     // The [id] folder's own Map level is there, under the same key the dashboard asks for.
     expect(manifest.files).toContain(`${snapshotKey("/api/graph", { repo: "web", dir: "app/customers/[id]" })}.json`);
+  });
+
+  it("final review I4: with no journeys named, every affected chain is treated like a journey — its journeys~<chainId>, stop nodes and stop files are written", async () => {
+    const root = materializeSingleRepo("demo-shop");
+    writeFileSync(
+      join(root, "codeloom.workspace.json"),
+      JSON.stringify({ version: 1, name: "demo-shop", repos: [{ id: "api", path: "api" }, { id: "web", path: "web" }], links: [] }),
+    );
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "add workspace"]);
+    await runIndex(root);
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "index"]);
+    git(root, ["checkout", "-q", "-b", "feature"]);
+    commitChange(root, "api/app/services/customer_service.ts", (text) => text.replace(AUDIT_LOG_LINE, VALIDATE_LINES), "edit CustomerService.create");
+
+    const outDir = tmpOutDir();
+    await writeSnapshotData(root, { baseRef: "main", outDir, now: FIXED_NOW });
+    const dataDir = join(outDir, "data");
+    const review = readJson(dataDir, "review") as { journeys: unknown[]; chains: string[] };
+    expect(review.journeys).toEqual([]);
+    expect(review.chains.length).toBeGreaterThan(0);
+    for (const chainId of review.chains) {
+      const key = snapshotKey(`/api/journeys/${chainId}`);
+      expect(existsSync(join(dataDir, `${key}.json`)), key).toBe(true);
+      const body = readJson(dataDir, key) as { lanes: Record<string, Array<{ repo: string; file: string; ref?: string }>> };
+      for (const s of Object.values(body.lanes).flat()) {
+        expect(existsSync(join(dataDir, `${snapshotKey(`/api/files/${s.repo}/${s.file}`)}.json`)), `${s.repo}:${s.file}`).toBe(true);
+        if (s.ref) expect(existsSync(join(dataDir, `${snapshotKey(`/api/node/${encodeURIComponent(s.ref)}`)}.json`)), s.ref).toBe(true);
+      }
+    }
+    // The create-customer UI page (a stop of the chain, not a changed file) is there for the code panel.
+    expect(existsSync(join(dataDir, `${snapshotKey("/api/files/web/app/customers/new/page.tsx")}.json`))).toBe(true);
   });
 
   it("is deterministic: two runs with the same `now` produce byte-identical data files", async () => {

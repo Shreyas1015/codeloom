@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useOverview, useReview } from "@/api/queries";
 import { getSnapshot } from "@/api/static";
@@ -14,18 +15,45 @@ const LANE_NAME: Record<string, string> = { ui: "UI", api: "API", code: "Code", 
 const fmt = new Intl.NumberFormat("en-US");
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** This journey's stops, across every chain it touches, deduped by ref and numbered 1..N in lane order
- * (UI, API, Code, DB, Queue) — the same board shape the approved mockup draws, just assembled from
- * `Review.chainStops` instead of a live journey's own stop list. */
-function journeyStops(review: Review, journey: ReviewJourney): ReviewLaneStop[] {
+/** Own-key lookup only: chain ids come from review.json (a PR's own data), and one named like an
+ * inherited Object.prototype property ("toString") must never resolve to that inherited function. */
+const own = <T,>(record: Record<string, T>, key: string): T | undefined => (Object.hasOwn(record, key) ? record[key] : undefined);
+
+/** The stops of `chains` (a journey's touched chains, or one chain), deduped by ref and numbered 1..N in
+ * lane order (UI, API, Code, DB, Queue) — the same board shape the approved mockup draws, just assembled
+ * from `Review.chainStops` instead of a live journey's own stop list. */
+function rowStops(review: Review, chains: readonly string[]): ReviewLaneStop[] {
   const byRef = new Map<string, ReviewStop>();
-  for (const chainId of journey.chains) {
-    for (const s of review.chainStops[chainId] ?? []) {
+  for (const chainId of chains) {
+    for (const s of own(review.chainStops, chainId) ?? []) {
       if (!byRef.has(s.ref)) byRef.set(s.ref, s);
     }
   }
   const ordered = LANE_ORDER.flatMap((lane) => [...byRef.values()].filter((s) => s.lane === lane));
   return ordered.map((s, i) => ({ ...s, n: i + 1 }));
+}
+
+/** One selectable row on Review: an affected journey, or — when no journey is named for any of them
+ * (final review I4) — an affected chain standing in for one. Either way it opens on `/journeys/$id`
+ * (the Journey screen takes a chain id too) and lays out the same lanes and code panel. */
+interface ReviewRow {
+  kind: "journey" | "chain";
+  id: string;
+  name: string;
+  chains: string[];
+  changed: number;
+  spec?: ReviewJourney["spec"];
+}
+
+function reviewRows(review: Review): ReviewRow[] {
+  if (review.journeys.length > 0) {
+    return review.journeys.map((j) => ({ kind: "journey", id: j.id, name: j.name, chains: j.chains, changed: j.changedStops.length, spec: j.spec }));
+  }
+  return review.chains.map((id) => {
+    const name = own(review.chainNames, id);
+    const changed = new Set((own(review.chainStops, id) ?? []).filter((s) => s.changed).map((s) => s.ref)).size;
+    return { kind: "chain", id, name: typeof name === "string" && name !== "" ? name : id, chains: [id], changed };
+  });
 }
 
 function specBadgeProps(mark: ReviewJourney["spec"]): { state: SpecState; checked: boolean } {
@@ -35,27 +63,28 @@ function specBadgeProps(mark: ReviewJourney["spec"]): { state: SpecState; checke
 }
 
 /** Review ("This PR", `/review`): the start page of a hosted snapshot — every changed file and function,
- * the journeys and chains they touch, and (once a journey and a stop are picked) that stop's code. */
+ * the journeys they touch (or, with none named, the chains), and (once a row and a stop are picked) that
+ * stop's code. */
 export function ReviewScreen() {
   const { data, error } = useReview();
   const overview = useOverview();
-  const [journeyId, setJourneyId] = useState<string | undefined>(undefined);
+  const [rowId, setRowId] = useState<string | undefined>(undefined);
   const [stopRef, setStopRef] = useState<string | undefined>(undefined);
 
-  const journeys = data?.journeys ?? [];
+  const rows = useMemo(() => (data ? reviewRows(data) : []), [data]);
   useEffect(() => {
-    if (journeyId === undefined && journeys.length > 0) setJourneyId(journeys[0]!.id);
-  }, [journeys, journeyId]);
+    if (rowId === undefined && rows.length > 0) setRowId(rows[0]!.id);
+  }, [rows, rowId]);
 
-  const journey = journeys.find((j) => j.id === journeyId);
-  const stops = useMemo(() => (data && journey ? journeyStops(data, journey) : []), [data, journey]);
+  const row = rows.find((r) => r.id === rowId);
+  const stops = useMemo(() => (data && row ? rowStops(data, row.chains) : []), [data, row]);
   const nodeByRef = useMemo(() => new Map((data?.nodes ?? []).map((n): [string, ReviewNodeChange] => [n.ref, n])), [data]);
-  const journeyNameById = useMemo(() => new Map(journeys.map((j) => [j.id, j.name])), [journeys]);
+  const journeyNameById = useMemo(() => new Map((data?.journeys ?? []).map((j) => [j.id, j.name])), [data]);
   const selectedStop = stops.find((s) => s.ref === stopRef);
   const repoPath = (repo: string) => overview.data?.repos.find((r) => r.id === repo)?.path;
 
-  const selectJourney = (id: string) => {
-    setJourneyId(id);
+  const selectRow = (id: string) => {
+    setRowId(id);
     setStopRef(undefined);
   };
 
@@ -75,9 +104,9 @@ export function ReviewScreen() {
         <>
           <CountsRow review={data} />
 
-          <JourneysSection journeys={journeys} selectedId={journey?.id} onSelect={selectJourney} />
+          <RowsSection rows={rows} selectedId={row?.id} onSelect={selectRow} />
 
-          {journey && (
+          {row && (
             <div className="grid min-h-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
               <ReviewLanes stops={stops} selectedRef={selectedStop?.ref} onSelect={setStopRef} />
               {selectedStop ? (
@@ -85,7 +114,7 @@ export function ReviewScreen() {
                   key={selectedStop.ref}
                   stop={selectedStop}
                   node={nodeByRef.get(selectedStop.ref)}
-                  journeyId={journey.id}
+                  journeyId={row.id}
                   journeyNameById={journeyNameById}
                   repoPath={repoPath(selectedStop.repo)}
                   snapshot={getSnapshot()}
@@ -138,47 +167,51 @@ function CountsRow({ review }: { review: Review }) {
   );
 }
 
-function JourneysSection({
-  journeys,
-  selectedId,
-  onSelect,
-}: {
-  journeys: ReviewJourney[];
-  selectedId: string | undefined;
-  onSelect: (id: string) => void;
-}) {
+function RowsSection({ rows, selectedId, onSelect }: { rows: ReviewRow[]; selectedId: string | undefined; onSelect: (id: string) => void }) {
+  const chains = rows.length > 0 && rows[0]!.kind === "chain";
+  const title = chains ? "Chains affected" : "Journeys affected";
   return (
     <section aria-labelledby="review-journeys-title" className="flex flex-col gap-2">
       <h2 id="review-journeys-title" className="text-xl font-bold tracking-[-0.02em]">
-        Journeys affected
+        {title}
       </h2>
-      {journeys.length === 0 ? (
-        <p className="text-[13.5px] text-muted-foreground">No journeys touched by this PR.</p>
+      {chains && <p className="text-[13.5px] text-muted-foreground">No journeys are named for these yet, so each chain is shown on its own.</p>}
+      {rows.length === 0 ? (
+        <p className="text-[13.5px] text-muted-foreground">No journeys or chains touched by this PR.</p>
       ) : (
-        <ul aria-label="Journeys affected" className="flex flex-col gap-1.5">
-          {journeys.map((j) => {
-            const selected = j.id === selectedId;
-            const badge = specBadgeProps(j.spec);
+        <ul aria-label={title} className="flex flex-col gap-1.5">
+          {rows.map((r) => {
+            const selected = r.id === selectedId;
+            const badge = r.spec !== undefined ? specBadgeProps(r.spec) : undefined;
+            const what = r.kind === "chain" ? "chain" : "journey";
             return (
-              <li key={j.id}>
+              <li key={r.id} className="flex items-stretch gap-2">
                 <button
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => onSelect(j.id)}
+                  onClick={() => onSelect(r.id)}
                   className={cn(
-                    "flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[10px] border bg-card px-3.5 py-2.5 text-left text-[13.5px] transition-colors outline-offset-2 hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring",
+                    "flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[10px] border bg-card px-3.5 py-2.5 text-left text-[13.5px] transition-colors outline-offset-2 hover:border-muted-foreground focus-visible:outline-2 focus-visible:outline-ring",
                     // the same selection halo as LaneColumn's selected stop card (Elevation's Selection halo)
                     selected ? "border-accent-foreground shadow-[0_0_0_3px_rgb(227_167_47_/_0.4)]" : "border-border",
                   )}
                 >
-                  <b className="font-bold">{j.name}</b>
+                  <b className="font-bold break-words">{r.name}</b>
                   <span className="flex items-center gap-2">
                     <span className="inline-flex w-fit items-center rounded-[4px] bg-accent-soft px-1.75 py-px text-[11.5px] font-semibold whitespace-nowrap text-accent-foreground">
-                      {plural(j.changedStops.length, "stop")} changed
+                      {plural(r.changed, "stop")} changed
                     </span>
-                    <SpecBadge state={badge.state} checked={badge.checked} />
+                    {badge && <SpecBadge state={badge.state} checked={badge.checked} />}
                   </span>
                 </button>
+                <Link
+                  to="/journeys/$id"
+                  params={{ id: r.id }}
+                  aria-label={`Open ${what} ${r.name}`}
+                  className="flex shrink-0 items-center rounded-[10px] px-2 text-[12.5px] font-semibold whitespace-nowrap text-primary underline-offset-3 outline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  Open {what} →
+                </Link>
               </li>
             );
           })}

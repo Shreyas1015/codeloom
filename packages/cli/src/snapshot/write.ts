@@ -5,6 +5,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CodeloomError } from "../errors.js";
 import { parseNodeRef } from "../mcp/state.js";
 import { buildReview } from "../review/build.js";
 import { readSpecs } from "../store/specs.js";
@@ -33,7 +34,10 @@ export interface SnapshotManifest {
   version: 1;
   codeloom: string;
   head: string;
+  /** The merge-base SHA the diff was taken against. */
   base: string;
+  /** The `--base` the user passed (e.g. "main"), for the dashboard banner's "vs main" (final review m1). */
+  baseRef?: string;
   builtAt: string;
   pr?: number;
   repoSlug?: string;
@@ -182,8 +186,24 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   for (const repoId of repoIds) add(await get(start, "/api/graph", { repo: repoId }));
 
   // Node refs + the files holding a stop: the changed nodes themselves, and every ref'd stop of the
-  // journeys the diff touches (review.journeys[].id — the only Review field used beyond nodes/files).
+  // journeys the diff touches (review.journeys[].id). With no journey named for any of them (final review
+  // I4), each affected chain (review.chains) stands in for a journey: /api/journeys/<chainId> answers for
+  // a chain id too, so its own journeys~<chainId> is written (the Review screen links to it) and its
+  // stops' nodes and files are written exactly as a journey's would be.
   const affectedJourneyIds = new Set(review.journeys.map((j) => j.id));
+  if (review.journeys.length === 0) {
+    for (const chainId of [...review.chains].sort(compare)) {
+      try {
+        const e = await get(start, `/api/journeys/${encodeURIComponent(chainId)}`);
+        add(e);
+        journeyBodies.set(chainId, e.body);
+        affectedJourneyIds.add(chainId);
+      } catch (err) {
+        // A chain id that no longer resolves (getJourney's own dataError, or an HttpError): skipped, never fatal.
+        if (!(err instanceof HttpError) && !(err instanceof CodeloomError)) throw err;
+      }
+    }
+  }
   const nodeRefs = new Set<string>(review.nodes.map((n) => n.ref));
   const fileKeys = new Set<string>(); // "<repo>\0<file>"
   for (const id of affectedJourneyIds) {
@@ -233,6 +253,7 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
       codeloom: VERSION,
       head: review.head,
       base: review.base,
+      baseRef: opts.baseRef,
       builtAt,
       tooLarge: { bytes: alwaysBytes, max: maxBytes },
       files: ["manifest.json", "review.json"],
@@ -335,6 +356,7 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
     codeloom: VERSION,
     head: review.head,
     base: review.base,
+    baseRef: opts.baseRef,
     builtAt,
     files,
     omitted: { mapFolders: omittedMapFolders, codeFiles: omittedCodeFiles },
