@@ -32,7 +32,8 @@ URL: `https://<owner>.github.io/<repo>/pr-<n>/`. Each push replaces that folder.
   a PR description. `--link` adds the "Open the full review map" line.
 - `codeloom snapshot --base <ref> --out <dir> [--max-size 25MB] [--data-only]`: writes `<dir>/data/*.json` and,
   unless `--data-only`, the dashboard assets (`index.html`, `assets/…`) set to static mode and `review.md`.
-- `codeloom snapshot-site --data <dir> --out <dir> [--pr <n>] [--link <url>]`: the publish workflow's trusted half
+- `codeloom snapshot-site --data <dir> --out <dir> --head <sha> [--pr <n>] [--repo <owner/name>] [--link <url>]
+  [--body <file>]` (or `--failed <run-url> [--previous <manifest>]` when the build failed): the publish workflow's trusted half
   (§5): validates `data/`, copies this codeloom version's dashboard assets next to it, fills `pr` into the manifest,
   and writes `review.md` from `data/review.json` with the same renderer as `codeloom review`.
 - `codeloom init --github`: also writes `.github/workflows/codeloom-review-build.yml` and
@@ -66,7 +67,8 @@ whole-file JSON and slices the requested lines itself.
 
 Size: the writer stops adding Map folders and code files (in that order) once `--max-size` (default 25 MB) would be
 passed, and records what it left out in `manifest.json` (`omitted`). If the always-included part alone is over the
-limit, `snapshot` exits 2 with the size; the PR block then says the map was too large to host (§6).
+limit, it writes only `manifest.json` (with `tooLarge`) and `review.json`; the PR block then has the summary and
+diagram and says the map was too large to host (§6).
 
 ## 4. The PR description block
 
@@ -104,7 +106,7 @@ Contents (as in the approved mockup):
 | Case | What the PR shows |
 |---|---|
 | No `codeloom.workspace.json` | Nothing; the build logs "no workspace" and exits 0. |
-| `index` or `snapshot` fails | The block with the first error line, and the last good snapshot's link labelled with its commit. |
+| `index` or `snapshot` fails | The block with a link to the failed build run (its log has the error), and the last good snapshot's link labelled with its commit. The build's own error text is not trusted, so it is not copied into the PR. |
 | Snapshot over the size limit | Summary + diagram + "too large to host (38 MB > 25 MB)". |
 | GitHub Pages not enabled | Summary + diagram + one line on enabling Pages (Settings → Pages → branch `gh-pages`). |
 | Artifact fails validation | Only "codeloom review map refused: <reason>" (the publish step has no trusted data to summarise). |
