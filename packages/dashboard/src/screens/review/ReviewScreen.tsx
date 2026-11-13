@@ -261,7 +261,7 @@ function FilesSection({ files }: { files: Review["files"] }) {
               {f.file}
               {f.added > 0 && <span className="text-success"> +{f.added}</span>}
               {f.removed > 0 && <span className="text-destructive"> −{f.removed}</span>}
-              {!f.onJourney && <span className="text-muted-foreground"> · not on a journey</span>}
+              {!f.onChain && <span className="text-muted-foreground"> · not on any mapped chain</span>}
             </li>
           ))}
         </ul>

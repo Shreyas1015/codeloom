@@ -34,7 +34,8 @@ export interface ReviewFile {
   file: string;
   added: number;
   removed: number;
-  onJourney: boolean;
+  /** True when the file holds a stop of any chain the diff touches (named as a journey or not). */
+  onChain: boolean;
 }
 
 /** One stop of an affected chain, as the renderers need it — Review is self-contained (the publish step,

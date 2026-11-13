@@ -223,7 +223,7 @@ describe("validateSnapshotData", () => {
 
   it("I1b: refuses a review.json with a non-numeric added/removed count", () => {
     const review = validReview() as Record<string, unknown>;
-    review.files = [{ repo: "api", file: "a.ts", added: "not a number", removed: 0, onJourney: true }];
+    review.files = [{ repo: "api", file: "a.ts", added: "not a number", removed: 0, onChain: true }];
     const dir = validDataDir({ reviewJson: review });
     expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
   });
@@ -237,7 +237,7 @@ describe("validateSnapshotData", () => {
 
   it("I1b: a schema-valid review.json with journeys and files still passes", () => {
     const review = validReview() as Record<string, unknown>;
-    review.files = [{ repo: "api", file: "a.ts", added: 3, removed: 1, onJourney: true }];
+    review.files = [{ repo: "api", file: "a.ts", added: 3, removed: 1, onChain: true }];
     review.journeys = [{ id: "j_1", name: "x", changedStops: [], spec: "unchecked", chains: [] }];
     review.chains = ["ch_1"];
     review.chainStops = { ch_1: [{ ref: "r", repo: "api", lane: "code", label: "x", changed: true }] };

@@ -174,7 +174,7 @@ function finish(out: string, opts: ReviewMarkdownOptions): string {
 }
 
 /** The PR description block (spec §4): heading, one-line summary, Mermaid diagram, a journey/spec table (or
- * a bare chains table when none are named yet), the changed files on no journey, a caveat line when
+ * a bare chains table when none are named yet), the changed files on no mapped chain, a caveat line when
  * anything was approximate or cut, and a link to the hosted snapshot.
  * `review: null` is a failed build (`opts.error`, with `opts.previous` the last good link) — the only case
  * rendered without a summary or diagram, since the build's own data cannot be trusted either.
@@ -214,8 +214,8 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
 
   lines.push("", ...(review.journeys.length > 0 ? journeyTable(review) : chainsTable(review)));
 
-  const notOnJourney = review.files.filter((f) => !f.onJourney);
-  if (notOnJourney.length > 0) lines.push("", "Not on any journey:", ...listFiles(notOnJourney));
+  const notOnChain = review.files.filter((f) => !f.onChain);
+  if (notOnChain.length > 0) lines.push("", "Not on any mapped chain:", ...listFiles(notOnChain));
 
   if (caveat) lines.push("", caveat);
 

@@ -91,9 +91,9 @@ const REVIEW: Review = {
   head: "a41c9e2abcdef0123456789abcdef0123456789",
   baseRef: "main",
   files: [
-    { repo: "api", file: "app/services/customer_service.ts", added: 18, removed: 3, onJourney: true },
-    { repo: "api", file: "lib/gst.ts", added: 41, removed: 0, onJourney: false },
-    { repo: "web", file: "components/CustomerForm.tsx", added: 6, removed: 1, onJourney: true },
+    { repo: "api", file: "app/services/customer_service.ts", added: 18, removed: 3, onChain: true },
+    { repo: "api", file: "lib/gst.ts", added: 41, removed: 0, onChain: false },
+    { repo: "web", file: "components/CustomerForm.tsx", added: 6, removed: 1, onChain: true },
   ],
   nodes: [CREATE_NODE],
   journeys: [
@@ -293,7 +293,7 @@ describe("Review screen", () => {
     expect(within(panel).queryByRole("link", { name: /Comment on GitHub/ })).toBeNull();
   });
 
-  it("lists changed files with +/- counts and marks the one not on any journey", async () => {
+  it("lists changed files with +/- counts and marks the one not on any mapped chain", async () => {
     await enterSnapshot();
     renderAt("/review");
     await opened();
@@ -301,9 +301,9 @@ describe("Review screen", () => {
     const items = within(files).getAllByRole("listitem");
     expect(items[0]).toHaveTextContent("app/services/customer_service.ts +18 −3");
     expect(items[1]).toHaveTextContent("lib/gst.ts +41");
-    expect(items[1]).toHaveTextContent("not on a journey");
+    expect(items[1]).toHaveTextContent("not on any mapped chain");
     expect(items[2]).toHaveTextContent("components/CustomerForm.tsx +6 −1");
-    expect(items[2]).not.toHaveTextContent("not on a journey");
+    expect(items[2]).not.toHaveTextContent("not on any mapped chain");
   });
 
   it("outside a snapshot, visiting /review redirects to Home", async () => {

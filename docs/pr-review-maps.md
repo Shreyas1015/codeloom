@@ -14,7 +14,7 @@ single codeloom comment instead):
 - A Mermaid diagram of the affected chains (page → call → route → handler → … → table / queue), changed
   nodes marked ✏️. Up to 30 nodes, then "+N more — see the full map".
 - A table of the affected journeys, their changed stops and spec state.
-- The changed files that reach no journey.
+- The changed files on no mapped chain.
 - "→ Open the full review map", linking to `https://<owner>.github.io/<repo>/pr-<n>/` — a static copy of
   the codeloom dashboard at this PR's head, opened on a `/review` screen built for this. Click a changed
   stop to see its diff (added/removed lines), its code now, or its code before. Nothing here is live:

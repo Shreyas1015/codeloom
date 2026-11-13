@@ -82,7 +82,7 @@ Contents (as in the approved mockup):
   nodes marked ✏️ and styled. Labels are escaped (quotes, brackets, `|`, backticks, HTML). At most 30 nodes; beyond
   that "+N more — see the full map". With no journeys named yet, chains are shown instead.
 - A table: journey · changed stops · spec state.
-- "Not on any journey:" the changed files that reach no chain (up to 10, then "+N more").
+- "Not on any mapped chain:" the changed files that reach no chain (up to 10, then "+N more").
 - "→ Open the full review map" with the URL and the commit it was built for.
 
 ## 5. Security (public repos take PRs from strangers)

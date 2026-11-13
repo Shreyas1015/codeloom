@@ -39,7 +39,7 @@ const fileSchema = z.object({
   file: z.string(),
   added: count,
   removed: count,
-  onJourney: z.boolean(),
+  onChain: z.boolean(),
 });
 
 const stopSchema = z.object({

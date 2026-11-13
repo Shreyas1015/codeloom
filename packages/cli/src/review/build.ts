@@ -330,7 +330,7 @@ export function buildReview(start: string, baseRef: string): Review {
       const h = hunksFor(cache, repo.abs, base, head, file);
       const added = h.reduce((n, x) => n + x.added.length, 0);
       const removed = h.reduce((n, x) => n + x.removed.length, 0);
-      files.push({ repo: repo.ref.id, file, added, removed, onJourney: stopFiles.has(`${repo.ref.id}\0${file}`) });
+      files.push({ repo: repo.ref.id, file, added, removed, onChain: stopFiles.has(`${repo.ref.id}\0${file}`) });
     }
 
     for (const ref of repoImpact.changedNodes) {

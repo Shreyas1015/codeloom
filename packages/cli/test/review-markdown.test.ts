@@ -58,8 +58,8 @@ function baseReview(partial: Partial<Review> = {}): Review {
     head: "b".repeat(40),
     baseRef: "main",
     files: [
-      { repo: "api", file: "app/services/customer_service.ts", added: 3, removed: 1, onJourney: true },
-      { repo: "api", file: "lib/gst.ts", added: 1, removed: 0, onJourney: false },
+      { repo: "api", file: "app/services/customer_service.ts", added: 3, removed: 1, onChain: true },
+      { repo: "api", file: "lib/gst.ts", added: 1, removed: 0, onChain: false },
     ],
     nodes: [changedNode()],
     journeys: [{ id: "j_1", name: "Create a customer", changedStops: [CHANGED_REF], spec: "unchecked", chains: ["ch_1"] }],
@@ -165,7 +165,7 @@ describe("renderReviewMarkdown", () => {
     expect(out).toContain("### 🗺 codeloom review map");
     expect(out).toContain("This PR touches 1 journey, 1 chain, 1 table, 0 queues.");
     expect(out).toContain("```mermaid");
-    expect(out).toContain("Not on any journey:");
+    expect(out).toContain("Not on any mapped chain:");
     expect(out).toContain("lib/gst.ts");
     expect(out).toContain("→ Open the full review map: https://x.github.io/demo/pr-1/ (built for a41c9e2)");
     expectGolden("review-basic.md", out);
@@ -215,7 +215,7 @@ describe("renderReviewMarkdown", () => {
   });
 
   it("[FIX ROUND 2 RED PROBE] a backtick in a file path cannot close its own code span early", () => {
-    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil`.ts` injected", added: 1, removed: 0, onJourney: false }] }), {});
+    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil`.ts` injected", added: 1, removed: 0, onChain: false }] }), {});
     // A single-backtick-fenced span ("`evil`") would close right after "evil", leaving ".ts` injected`"
     // as plain text outside any span — i.e. the raw backtick survives OUTSIDE a code span. The fix must
     // use a longer fence so the whole path stays inside one span and no bare "`" escapes it.
@@ -322,7 +322,7 @@ describe("renderReviewMarkdown", () => {
   it("I1b: a non-numeric added/removed count renders as 0, never crashing or leaking raw content (defense in depth)", () => {
     const review = baseReview({
       files: [
-        { repo: "api", file: "a.ts", added: "<script>evil</script>" as unknown as number, removed: Number.NaN, onJourney: false },
+        { repo: "api", file: "a.ts", added: "<script>evil</script>" as unknown as number, removed: Number.NaN, onChain: false },
       ],
     });
     const out = renderReviewMarkdown(review, {});
@@ -357,7 +357,7 @@ describe("renderReviewMarkdown", () => {
   });
 
   it("keeps an attacker-controlled file path inert inside its code span (CommonMark never reads link/image syntax inside one)", () => {
-    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil](https://evil.example)|x.ts", added: 1, removed: 0, onJourney: false }] }), {});
+    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil](https://evil.example)|x.ts", added: 1, removed: 0, onChain: false }] }), {});
     const line = out.split("\n").find((l) => l.includes("evil"))!;
     // The whole path, "](" included, must sit inside ONE code span (a backtick fence on both sides of it)
     // rather than the fence breaking partway through and leaving "](https://evil.example)" as live prose.

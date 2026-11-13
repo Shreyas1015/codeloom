@@ -58,9 +58,9 @@ describe("buildReview", () => {
     expect(review.base).not.toBe(review.head);
 
     const svc = review.files.find((f) => f.file === "app/services/customer_service.ts" && f.repo === "api");
-    expect(svc).toMatchObject({ added: 3, removed: 1, onJourney: true });
+    expect(svc).toMatchObject({ added: 3, removed: 1, onChain: true });
     const gst = review.files.find((f) => f.file === "lib/gst.ts" && f.repo === "api");
-    expect(gst).toMatchObject({ onJourney: false });
+    expect(gst).toMatchObject({ onChain: false });
 
     expect(review.nodes).toHaveLength(1);
     const node = review.nodes[0]!;
@@ -192,7 +192,7 @@ describe("buildReview — indexed at HEAD (the real CI flow: checkout PR head, i
     expect(review.chains.length).toBeGreaterThan(0);
     expect(review.journeys).toHaveLength(1);
     const svc = review.files.find((f) => f.file === "app/services/customer_service.ts");
-    expect(svc?.onJourney).toBe(true);
+    expect(svc?.onChain).toBe(true);
   });
 
   it("does not mark a function touched just because a new sibling was inserted right after its closing brace", async () => {
