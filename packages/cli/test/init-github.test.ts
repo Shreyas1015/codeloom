@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
@@ -135,13 +137,14 @@ describe("codeloom init --github", () => {
 
     // Important #7: a single global concurrency group would let GitHub cancel one PR's pending
     // publish because another PR's publish queued after it (GitHub keeps only one pending run per
-    // group). The group must be scoped per PR (or, for a fork PR, per source branch).
+    // group). The group must be scoped per PR (or, for a fork PR, per source repo + branch — two
+    // different forks can share a branch name, so the branch name alone is not a unique key).
     it("the publish/cleanup concurrency group is scoped per PR, not one global group", () => {
       const group = publish.concurrency.group as string;
       expect(group).not.toBe("codeloom-pages");
       expect(group).toContain("github.event.pull_request.number");
       expect(group).toContain("github.event.workflow_run.pull_requests[0].number");
-      expect(group).toContain("github.event.workflow_run.head_branch");
+      expect(group).toMatch(/format\(\s*'\{0\}:\{1\}'\s*,\s*github\.event\.workflow_run\.head_repository\.full_name\s*,\s*github\.event\.workflow_run\.head_branch\s*\)/);
     });
 
     // Important #2: gh-pages must only ever be written for a real, successfully-validated snapshot —
@@ -184,18 +187,50 @@ describe("codeloom init --github", () => {
       expect(publishText).not.toMatch(/(?<!-)-f body=@/);
     });
 
-    // Minor: the comment lookup must resolve to a single id even when GitHub paginates the issue's
-    // comments across pages (a per-page --jq filter without --slurp can otherwise yield one line per
-    // page, some empty).
-    it("the comment lookup slurps every page before filtering to a single id", () => {
-      expect(publishText).toContain("--slurp");
-      expect(publishText).toMatch(/jq\s+'add \| map\(select\(/);
+    // Round 2 fix: gh rejects "--paginate --slurp --jq" together ("--slurp option is not supported
+    // with --jq"); with no pipefail, that failure is swallowed and ID comes out empty, so every run
+    // posted a new comment instead of finding the old one. --slurp and --jq must never be flags of
+    // the same gh api invocation (a per-page --jq filter is fine here: there is ever at most one
+    // codeloom comment to find, so one matching line, however many pages it takes to reach it).
+    function ghApiInvocations(text: string): string[] {
+      const lines = text.split("\n");
+      const commands: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i]!.includes("gh api")) continue;
+        let cmd = lines[i]!;
+        while (cmd.trimEnd().endsWith("\\") && i + 1 < lines.length) {
+          i++;
+          cmd = `${cmd.trimEnd().slice(0, -1)} ${lines[i]!.trim()}`;
+        }
+        commands.push(cmd);
+      }
+      return commands;
+    }
+
+    it("never combines --slurp with --jq in the same gh api call (gh rejects that combination)", () => {
+      const invocations = ghApiInvocations(publishText);
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const cmd of invocations) if (cmd.includes("--slurp")) expect(cmd).not.toContain("--jq");
+    });
+
+    it("the comment lookup paginates and takes the single match", () => {
+      expect(publishText).toContain('gh api --paginate "repos/$REPO/issues/$PR/comments"');
+      expect(publishText).toMatch(/--jq '\.\[\] \| select\(/);
+      expect(publishText).toContain("| head -1");
     });
 
     // Minor: filter the comment lookup to codeloom's own comments, not any comment that happens to
     // start with the marker.
     it("the comment lookup is filtered to codeloom's own bot comments", () => {
       expect(publishText).toContain('.user.login == "github-actions[bot]"');
+    });
+
+    // Minor: once the block fits back in the body (no more comment.md), any earlier codeloom comment
+    // must be deleted, not left behind forever.
+    it("deletes a leftover codeloom comment when there is no comment.md to upsert", () => {
+      const step = allSteps(publish).find((s) => s.name === "Update the pull request");
+      const run = step!.run as string;
+      expect(run).toMatch(/elif \[ -n "\$ID" \]; then\s*\n\s*gh api --method DELETE "repos\/\$REPO\/issues\/comments\/\$ID"/);
     });
 
     // Important #4: the "Pages not enabled" note is now rendered by snapshot-site itself (--pages-disabled),
@@ -228,7 +263,82 @@ describe("codeloom init --github", () => {
     // whole run on the first conflict.
     it("retries the gh-pages push up to 3 times", () => {
       const pushRetries = publishText.match(/for attempt in 1 2 3/g) ?? [];
-      expect(pushRetries.length).toBeGreaterThanOrEqual(2); // publish job's push + cleanup job's push
+      expect(pushRetries.length).toBeGreaterThanOrEqual(3); // publish's gh-pages push + its closed-PR cleanup push + the cleanup job's push
+    });
+
+    // Round 2 fix: a nonzero exit_code is always worth failing the run over, in whatever mode
+    // produced it — not just when mode happens to be "data".
+    it("fails the run on any nonzero exit_code, regardless of mode", () => {
+      const step = allSteps(publish).find((s) => s.name === "Fail the run if codeloom refused the artifact");
+      const condition = step!.if as string;
+      expect(condition).not.toContain("mode.outputs.mode");
+      expect(condition).toContain("build_site.outputs.exit_code != '0'");
+    });
+
+    // Round 2 fix: the same-repo PR number (pull_requests[0]) is only trusted when there is exactly
+    // one entry, and is re-checked against the PR's own head repo the same way the fork path is —
+    // never just taken on the event payload's word.
+    it("requires exactly one pull_requests entry before trusting its number, and checks its head repo", () => {
+      expect(publishText).toContain("length(github.event.workflow_run.pull_requests)");
+      expect(publishText).toContain('if [ "$EVENT_PR_COUNT" = "1" ]; then');
+      expect(publishText).toContain("headRepositoryOwner,headRepository");
+      expect(publishText).toContain('[ "$PR_HEAD_REPO" != "$HEAD_REPO" ]');
+    });
+
+    // Round 2 fix: the mode step's own conclusion set must be exactly failure/timed_out/startup_failure
+    // (plus an uploaded failed marker) for mode=failed — action_required, skipped, neutral and stale
+    // must fall through to skip, not failed.
+    it("classifies only failure/timed_out/startup_failure conclusions (or a failed marker) as mode=failed", () => {
+      const step = allSteps(publish).find((s) => s.name === "Decide what to do");
+      const run = step!.run as string;
+      expect(run).toMatch(/failure \| timed_out \| startup_failure\)/);
+      for (const other of ["action_required", "skipped", "neutral", "stale"]) expect(run).not.toContain(other);
+    });
+
+    // The mode step's actual bash, executed for real with each conclusion GitHub can report (plus
+    // the "uploaded a failed marker" case), is the most direct check that the classification matrix
+    // in review item 3 holds — not just that the right literals appear in the script.
+    it("the mode step's script classifies every conclusion correctly when run for real", () => {
+      const step = allSteps(publish).find((s) => s.name === "Decide what to do");
+      const script = step!.run as string;
+      const cases: Array<{ conclusion: string; download: "success" | "failure"; failedMarker?: boolean; want: string }> = [
+        { conclusion: "failure", download: "failure", want: "failed" },
+        { conclusion: "timed_out", download: "failure", want: "failed" },
+        { conclusion: "startup_failure", download: "failure", want: "failed" },
+        { conclusion: "success", download: "success", want: "data" },
+        { conclusion: "success", download: "success", failedMarker: true, want: "failed" },
+        { conclusion: "success", download: "failure", want: "skip" }, // no workspace: nothing uploaded
+        { conclusion: "action_required", download: "failure", want: "skip" },
+        { conclusion: "skipped", download: "failure", want: "skip" },
+        { conclusion: "neutral", download: "failure", want: "skip" },
+        { conclusion: "stale", download: "failure", want: "skip" },
+      ];
+      for (const c of cases) {
+        const dir = mkdtempSync(join(tmpdir(), "codeloom-mode-"));
+        if (c.failedMarker) {
+          mkdirSync(join(dir, "artifact"), { recursive: true });
+          writeFileSync(join(dir, "artifact", "failed"), "");
+        }
+        const outFile = join(dir, "github_output");
+        writeFileSync(outFile, "");
+        execFileSync("bash", ["-c", script], {
+          cwd: dir,
+          env: { ...process.env, CONCLUSION: c.conclusion, DOWNLOAD_OUTCOME: c.download, GITHUB_OUTPUT: outFile },
+        });
+        const got = readFileSync(outFile, "utf8").trim();
+        expect(got, JSON.stringify(c)).toBe(`mode=${c.want}`);
+      }
+    });
+
+    // Round 2 fix: a cleanup that the dedicated pull_request_target job would have done can itself be
+    // cancelled (it shares this workflow's per-PR concurrency group), so publish must notice a
+    // closed/merged PR on its own and clean up gh-pages too.
+    it("cleans up gh-pages itself when it finds the PR is closed or merged", () => {
+      expect(publishText).toContain('[ "$STATE" = "CLOSED" ] || [ "$STATE" = "MERGED" ]');
+      expect(publishText).toContain("echo \"closed=1\" >> \"$GITHUB_OUTPUT\"");
+      const step = allSteps(publish).find((s) => s.name === "Remove the PR's review map (closed/merged, found during publish)");
+      expect(step, "closed-PR cleanup step").toBeTruthy();
+      expect(step!.if).toContain("pr.outputs.closed == '1'");
     });
   });
 

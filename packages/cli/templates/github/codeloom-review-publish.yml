@@ -11,11 +11,12 @@ on:
   pull_request_target:
     types: [closed]
 
-# Scoped per PR (or, for a fork PR with no same-repo pull_requests entry, per source branch): a global
+# Scoped per PR (or, for a fork PR with no same-repo pull_requests entry, per source repo + branch —
+# two different forks can share a branch name, so the branch name alone is not a unique key): a global
 # group would let GitHub's "one pending run per group" rule cancel one PR's pending publish because
 # another PR just queued one. No cancel-in-progress — a half-finished push is worse than a late one.
 concurrency:
-  group: codeloom-pages-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
+  group: codeloom-pages-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || format('{0}:{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) }}
 
 jobs:
   publish:
@@ -43,35 +44,44 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
-      # mode=skip: the build ran (conclusion success) but uploaded nothing, because it found no
-      # codeloom.workspace.json — spec §6 says the PR shows nothing, so this job does nothing either.
-      # mode=failed: the build itself failed before it could upload anything, or it uploaded a
-      # snapshot/failed marker (its own "codeloom snapshot" step failed). mode=data: a normal
-      # snapshot was uploaded.
+      # mode=failed only for a conclusion that means the build itself blew up (failure, timed_out,
+      # startup_failure), or a normal-looking run that still uploaded a snapshot/failed marker (its
+      # own "codeloom snapshot" step failed). mode=data only for conclusion success with the artifact
+      # actually downloaded and no failed marker. Everything else — action_required, skipped,
+      # neutral, stale, or success with nothing uploaded (no codeloom.workspace.json; spec §6 says the
+      # PR shows nothing) — is mode=skip: this job does nothing.
       - name: Decide what to do
         id: mode
         env:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
         run: |
-          if [ "$DOWNLOAD_OUTCOME" != "success" ]; then
-            if [ "$CONCLUSION" = "success" ]; then MODE=skip; else MODE=failed; fi
-          elif [ -f artifact/failed ]; then
-            MODE=failed
-          elif [ "$CONCLUSION" = "success" ]; then
-            MODE=data
-          else
-            MODE=failed
-          fi
+          case "$CONCLUSION" in
+            failure | timed_out | startup_failure)
+              MODE=failed
+              ;;
+            *)
+              if [ -f artifact/failed ]; then
+                MODE=failed
+              elif [ "$CONCLUSION" = "success" ] && [ "$DOWNLOAD_OUTCOME" = "success" ]; then
+                MODE=data
+              else
+                MODE=skip
+              fi
+              ;;
+          esac
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       # Resolves and validates the PR this build ran for, straight from the triggering event — never
-      # from the artifact. A same-repo PR's number comes with the event; a fork PR's does not, so it's
-      # looked up by head commit instead, filtered to exactly one open PR whose head is that commit and
-      # whose head repo matches (never an old, merged PR that happens to share the commit). Either way
-      # the result is re-checked against the PR's live state, since it may have closed or moved on since
-      # the build started. Anything that doesn't resolve to exactly one open, matching PR is logged and
-      # skipped (valid=0) — never a hard failure.
+      # from the artifact. A same-repo PR's number comes with the event (exactly one entry, else it's
+      # treated the same as a fork); a fork PR's doesn't, so it's looked up by head commit instead,
+      # filtered to exactly one open PR whose head is that commit and whose head repo matches (never
+      # an old, merged PR that happens to share the commit). Either way, the candidate is then
+      # re-checked against the PR's own live state (gh pr view), including its head repo — the same
+      # check the fork path already applies — since it may have closed, merged or moved to a new head
+      # since the build started. Closed/merged sets closed=1 (so gh-pages gets a self-healing cleanup
+      # below, in case the dedicated pull_request_target cleanup job was itself cancelled by a later
+      # publish queuing in the same concurrency group) instead of just valid=0.
       - name: Find and validate the pull request
         id: pr
         if: steps.mode.outputs.mode != 'skip'
@@ -80,20 +90,19 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          EVENT_PR_COUNT: ${{ length(github.event.workflow_run.pull_requests) }}
           EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
-          PR="$EVENT_PR_NUMBER"
-          case "$PR" in '' | *[!0-9]*) PR="" ;; esac
+          PR=""
+          if [ "$EVENT_PR_COUNT" = "1" ]; then
+            PR="$EVENT_PR_NUMBER"
+            case "$PR" in '' | *[!0-9]*) PR="" ;; esac
+          fi
 
           if [ -z "$PR" ]; then
             CANDIDATES=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" | jq --arg sha "$HEAD_SHA" --arg repo "$HEAD_REPO" \
               '[.[] | select(.state == "open" and .head.sha == $sha and .head.repo.full_name == $repo) | .number]')
             if [ "$(echo "$CANDIDATES" | jq 'length')" = "1" ]; then PR=$(echo "$CANDIDATES" | jq '.[0]'); else PR=""; fi
-          else
-            READ=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid 2>/dev/null || echo '{}')
-            STATE=$(echo "$READ" | jq -r '.state // empty')
-            SHA=$(echo "$READ" | jq -r '.headRefOid // empty')
-            if [ "$STATE" != "OPEN" ] || [ "$SHA" != "$HEAD_SHA" ]; then PR=""; fi
           fi
 
           case "$PR" in
@@ -103,9 +112,67 @@ jobs:
               exit 0
               ;;
           esac
+
+          READ=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid,headRepositoryOwner,headRepository 2>/dev/null || echo '{}')
+          STATE=$(echo "$READ" | jq -r '.state // empty')
+          SHA=$(echo "$READ" | jq -r '.headRefOid // empty')
+          PR_HEAD_REPO=$(echo "$READ" | jq -r 'if .headRepositoryOwner and .headRepository then (.headRepositoryOwner.login + "/" + .headRepository.name) else empty end')
+
+          if [ "$STATE" = "CLOSED" ] || [ "$STATE" = "MERGED" ]; then
+            echo "pull request #$PR is $STATE; cleaning up its gh-pages folder instead of publishing" >&2
+            echo "number=$PR" >> "$GITHUB_OUTPUT"
+            echo "valid=0" >> "$GITHUB_OUTPUT"
+            echo "closed=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$STATE" != "OPEN" ] || [ "$SHA" != "$HEAD_SHA" ] || [ "$PR_HEAD_REPO" != "$HEAD_REPO" ]; then
+            echo "no single open pull request matches commit $HEAD_SHA; skipping" >&2
+            echo "valid=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "number=$PR" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "valid=1" >> "$GITHUB_OUTPUT"
+
+      # Self-healing: the dedicated pull_request_target cleanup job removes pr-$PR when the PR closes,
+      # but that job shares this workflow's per-PR concurrency group, so a cleanup that was still
+      # pending when a later publish queued could itself get cancelled (GitHub keeps only one pending
+      # run per group) and never run. Finding the PR closed/merged here removes it too, so the next
+      # publish for this PR (if any) still cleans it up even then.
+      - name: Checkout gh-pages (closed/merged PR, found while publishing)
+        id: checkout_closed
+        if: steps.pr.outputs.closed == '1'
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: Remove the PR's review map (closed/merged, found during publish)
+        if: steps.pr.outputs.closed == '1' && steps.checkout_closed.outcome == 'success'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          git config user.name "codeloom[bot]"
+          git config user.email "codeloom[bot]@users.noreply.github.com"
+          git rm -rq --ignore-unmatch "pr-$PR"
+          if git diff --cached --quiet; then
+            echo "nothing to remove for pr-$PR"
+          else
+            git commit -q -m "codeloom: remove PR #$PR review map (closed, found during publish)"
+            PUSHED=0
+            for attempt in 1 2 3; do
+              if git push origin gh-pages; then
+                PUSHED=1
+                break
+              fi
+              git pull --rebase origin gh-pages
+            done
+            if [ "$PUSHED" != "1" ]; then
+              echo "failed to push gh-pages after 3 tries" >&2
+              exit 1
+            fi
+          fi
 
       # Only HTTP 404 means "not enabled"; any other error (a transient API problem, a permissions
       # quirk) assumes Pages IS enabled, so a glitch here never adds a false "enable Pages" note.
@@ -242,7 +309,11 @@ jobs:
       # say). Pushed to gh-pages first (above), so by the time the PR points at the hosted link, that
       # link already works. body.md and comment.md are not mutually exclusive: over GitHub's body
       # limit, codeloom writes both (body.md: the description with the block removed; comment.md: the
-      # block itself, upserted by finding codeloom's own earlier comment by its start marker).
+      # block itself, upserted by finding codeloom's own earlier comment by its start marker). gh's
+      # --paginate combined with --jq rejects --slurp ("--slurp option is not supported with --jq"),
+      # so the filter runs per page instead — fine here, since there is ever at most one codeloom
+      # comment to find. When codeloom no longer needs a comment (the block now fits in the body) but
+      # an old one from before still exists, it's deleted rather than left behind.
       - name: Update the pull request
         if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
         env:
@@ -253,21 +324,24 @@ jobs:
           if [ -f site/body.md ]; then
             gh pr edit "$PR" --repo "$REPO" --body-file site/body.md
           fi
+          ID=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith("<!-- codeloom:review:start -->"))) | .id' \
+            | head -1)
           if [ -f site/comment.md ]; then
-            ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp \
-              --jq 'add | map(select(.user.login == "github-actions[bot]" and .body != null and (.body | startswith("<!-- codeloom:review:start -->")))) | .[0].id // empty' \
-              | head -1)
             if [ -n "$ID" ]; then
               gh api --method PATCH "repos/$REPO/issues/comments/$ID" -F body=@site/comment.md
             else
               gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@site/comment.md
             fi
+          elif [ -n "$ID" ]; then
+            gh api --method DELETE "repos/$REPO/issues/comments/$ID"
           fi
 
       # The PR already got its "refused" block above; this just makes the run itself show red, so a
-      # refusal is not silently green.
+      # refusal is not silently green. Not mode-specific: whatever mode produced it, a nonzero
+      # exit_code from codeloom is always worth failing the run over.
       - name: Fail the run if codeloom refused the artifact
-        if: steps.mode.outputs.mode == 'data' && steps.pr.outputs.valid == '1' && steps.build_site.outputs.exit_code != '0'
+        if: steps.pr.outputs.valid == '1' && steps.build_site.outputs.exit_code != '0'
         env:
           EXIT_CODE: ${{ steps.build_site.outputs.exit_code }}
         run: |
