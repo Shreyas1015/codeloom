@@ -214,6 +214,13 @@ describe("in static mode", () => {
       await expect(apiGet<CodeResponse>("/api/code", { repo: "api", file, start: 1 })).resolves.toMatchObject({ text: "x" });
     });
 
+    it("an empty param (the Map root asks for dir: \"\") is dropped, like the server's own reading of it, so it reads the writer's graph@repo=<repo>", async () => {
+      const fetch = vi.fn(async (_url: string) => json({ ok: true }));
+      vi.stubGlobal("fetch", fetch);
+      await apiGet("/api/graph", { repo: "web", dir: "" });
+      expect(fetch).toHaveBeenCalledWith(`./data/${encodeURIComponent("graph@repo=web")}.json`, expect.anything());
+    });
+
     it("final review I1: the fetch URL is the key, URL-encoded (a static host decodes the path back to the real file name)", async () => {
       const fetch = vi.fn(async (_url: string) => json({ ok: true }));
       vi.stubGlobal("fetch", fetch);

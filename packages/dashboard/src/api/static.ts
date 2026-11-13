@@ -205,10 +205,13 @@ export function snapshotKey(path: string, params?: Record<string, string | numbe
 
 // ---- staticGet: apiGet's static-mode path -------------------------------------------------------------
 
+/** `apiGet`'s params as snapshotKey takes them. An empty string is dropped like `undefined`: the server
+ * reads an empty query value as absent (api.ts strParam; `dir` "" is the repo root), and the writer never
+ * passes one, so the Map root's `dir: ""` must name the same file as no `dir` at all. */
 function toKeyParams(params?: QueryParams): Record<string, string | number | undefined> | undefined {
   if (!params) return undefined;
   const out: Record<string, string | number | undefined> = {};
-  for (const [k, v] of Object.entries(params)) out[k] = v === undefined ? undefined : typeof v === "boolean" ? String(v) : v;
+  for (const [k, v] of Object.entries(params)) out[k] = v === undefined || v === "" ? undefined : typeof v === "boolean" ? String(v) : v;
   return out;
 }
 
