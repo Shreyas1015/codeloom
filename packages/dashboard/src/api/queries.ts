@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost } from "./client.js";
+import { isSnapshot } from "./static.js";
 import type {
   CodeResponse,
   DocResponse,
@@ -110,9 +111,12 @@ export function useCode(repo: string | undefined, file: string | undefined, star
   });
 }
 
-/** Your personal progress: every journey's level, needs-re-walk stops, last check, and totals. */
+/** Your personal progress: every journey's level, needs-re-walk stops, last check, and totals. A hosted
+ * snapshot never has progress (review-maps-constraints.md), so this is disabled there: every screen that
+ * reads it (Home's Understood and Continue band, the Journey nameplate pill, the journey list's progress
+ * strip, the Progress screen itself) already renders without it when it is `undefined`. */
 export function useProgress() {
-  return useQuery({ queryKey: queryKeys.progress(), queryFn: () => apiGet<ProgressResponse>("/api/progress") });
+  return useQuery({ queryKey: queryKeys.progress(), queryFn: () => apiGet<ProgressResponse>("/api/progress"), enabled: !isSnapshot() });
 }
 
 /** One journey's tour (`tour: null` when none yet), its stale and removed stops. Disabled until `journeyId` is known. */
