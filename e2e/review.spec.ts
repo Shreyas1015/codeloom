@@ -154,7 +154,7 @@ test("a hosted PR snapshot: This PR screen, the diff, rail navigation, hash relo
   const map = page.getByTestId("screen-map");
   await map.getByRole("group", { name: "Repo" }).getByRole("button", { name: "web" }).click();
   const openFolder = async (name: string) => {
-    await page.locator('[data-card="folder"]').getByRole("button", { name: new RegExp(`^${name.replace(/[[\]]/g, "\\$&")}/ folder`) }).dblclick();
+    await page.locator('[data-card="folder"]').getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/ folder`) }).dblclick();
     await expect(map.getByRole("navigation", { name: "Folder" }).locator('[aria-current="location"]')).toHaveText(name);
   };
   await openFolder("app");
