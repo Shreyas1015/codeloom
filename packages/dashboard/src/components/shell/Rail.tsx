@@ -1,6 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChartNoAxesColumn, House, LayoutDashboard, Map as MapIcon, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
+import { isSnapshot } from "@/api/static";
 import type { Overview, RepoRole, ViewSummary } from "@/api/types";
 import { cn } from "@/lib/utils";
 
@@ -114,14 +115,17 @@ export function Rail({
       <nav aria-label="Main" className="flex flex-col gap-0.5">
         <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress && !onTour && !onViews} />
         <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
-        <NavItem
-          to="/progress"
-          icon={<ChartNoAxesColumn className={iconCls} strokeWidth={1.6} />}
-          label="Progress"
-          count={understood === undefined ? undefined : `${understood}%`}
-          countLabel="understood"
-          current={onProgress}
-        />
+        {/* A snapshot never has progress (review-maps-constraints.md): no nav item to a screen with nothing to show. */}
+        {!isSnapshot() && (
+          <NavItem
+            to="/progress"
+            icon={<ChartNoAxesColumn className={iconCls} strokeWidth={1.6} />}
+            label="Progress"
+            count={understood === undefined ? undefined : `${understood}%`}
+            countLabel="understood"
+            current={onProgress}
+          />
+        )}
       </nav>
 
       {views && views.length > 0 && <ViewsList views={views} pathname={pathname} />}

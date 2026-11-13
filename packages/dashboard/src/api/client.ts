@@ -1,5 +1,7 @@
-/** Same-origin JSON fetch for the local codeloom server. The session cookie rides along. */
+/** Same-origin JSON fetch for the local codeloom server — or, in a hosted PR snapshot, the static
+ * `data/*.json` files beside `index.html` (api/static.ts). The session cookie rides along in live mode. */
 
+import { isSnapshot, staticGet } from "./static";
 import type { ApiErrorCode } from "./types";
 
 export class ApiError extends Error {
@@ -54,12 +56,15 @@ async function errorMessage(res: Response): Promise<{ message: string; code?: st
 }
 
 export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> {
+  if (isSnapshot()) return staticGet<T>(path, params);
   const res = await fetch(apiUrl(path, params), { credentials: "same-origin", headers: { accept: "application/json" } });
   return readResponse<T>(res);
 }
 
-/** Same-origin JSON POST: only the two progress writes take one (the server refuses any other). */
+/** Same-origin JSON POST: only the two progress writes take one (the server refuses any other). A hosted
+ * snapshot is read-only and has no server to post to, so this never makes a network call there. */
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  if (isSnapshot()) throw new ApiError("This is a read-only snapshot: nothing here can be changed.", 403);
   const res = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
