@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-11-13 (GitHub release and npm)
 
 PR review maps, for public GitHub repos:
 
