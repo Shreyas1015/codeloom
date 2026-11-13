@@ -349,7 +349,9 @@ export function graphLevel(
 
 export const CODE_MAX_LINES = 400;
 export const CODE_MAX_CHARS = 60_000;
-const CODE_MAX_BYTES = 10 * 1024 * 1024;
+/** Exported for the snapshot writer (snapshot/write.ts), which applies the same cap to a file's whole
+ * text, outside any HTTP request. */
+export const CODE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Lines start..end (1-based, inclusive; no end = to the end of the file) of `source`, capped at 400
  * lines and 60 000 chars (cut on a line boundary; a single longer line is cut mid-line). `truncated`
@@ -381,8 +383,9 @@ export function sliceCode(file: string, source: string, start: number, end: numb
 /** The real path of `file` (a `file` query param) inside repo `repo` (a `repo` query param), for
  * /api/code and /api/docs: resolved inside the repo root (the explain_context check, plus a realpath check
  * so a symlink cannot lead outside), never git internals, .env files or codeloom's own folder. Escape /
- * absolute path / not a file → 400; unknown repo or missing file → 404. */
-function repoFile(start: string, url: URL): { repoId: string; file: string; real: string; size: number } {
+ * absolute path / not a file → 400; unknown repo or missing file → 404. Exported for the snapshot writer
+ * (snapshot/write.ts), which reads a stop's whole file the same way, outside any HTTP request. */
+export function repoFile(start: string, url: URL): { repoId: string; file: string; real: string; size: number } {
   const repoId = requiredParam(url, "repo");
   const file = requiredParam(url, "file");
   const ws = loadWorkspace(start);

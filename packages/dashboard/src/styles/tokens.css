@@ -32,6 +32,12 @@
   --destructive-soft: #F7E3E0;
   --success: #3E8A6E;
   --success-soft: #DDEEE6;
+  /* diff lines in the PR review code panel: GitHub's own add/delete washes, distinct from success/destructive
+   * soft (those mark journey/spec state, not code) */
+  --diff-add: #E6F4EA;
+  --diff-add-ink: #1A7F37;
+  --diff-delete: #FCE8E6;
+  --diff-delete-ink: #CF222E;
   /* progress strip: understood (success green), toured, seen — lighter steps of the same green */
   --progress-understood: #3E8A6E;
   --progress-toured: #8FC1AC;
@@ -103,6 +109,10 @@
   --color-destructive-soft: var(--destructive-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-diff-add: var(--diff-add);
+  --color-diff-add-ink: var(--diff-add-ink);
+  --color-diff-delete: var(--diff-delete);
+  --color-diff-delete-ink: var(--diff-delete-ink);
   --color-progress-understood: var(--progress-understood);
   --color-progress-toured: var(--progress-toured);
   --color-progress-seen: var(--progress-seen);

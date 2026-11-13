@@ -4,6 +4,7 @@ import { useNavigate, useSearch as useRouteSearch } from "@tanstack/react-router
 import { ChevronRight, Layers } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useGraphLevel, useJourney, useJourneys, useOverview } from "@/api/queries";
+import { isSnapshot } from "@/api/static";
 import type { GraphFile, GraphLevel, Lane, SearchHit } from "@/api/types";
 import { isBlocking, MapStateScreen } from "@/components/shell/StateBanner";
 import { cn } from "@/lib/utils";
@@ -204,7 +205,8 @@ export function MapScreen() {
             </option>
           ))}
         </select>
-        {repo && (
+        {/* /api/search is never in a snapshot (review-maps-constraints.md): no box that would only 404. */}
+        {repo && !isSnapshot() && (
           <div className="ml-auto">
             <MapSearch repo={repo} onPick={pickHit} />
           </div>

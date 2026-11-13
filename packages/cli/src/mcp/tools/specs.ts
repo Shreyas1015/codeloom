@@ -164,8 +164,23 @@ function countInto(c: SpecCoverage, s: SpecState, checked: boolean): void {
   if (checked) c.checked++;
 }
 
-export function listSpecs(start: string, args: { repo?: string; area?: string }): Record<string, unknown> {
-  const state = loadMapState(start);
+/** The per-journey row list_specs returns. Only the fields review/build.ts reads are named; the rest
+ * (name, area, repos, checkedAt, links, candidates — see the return below) still type-check, since this
+ * extends Record<string, unknown>. */
+export interface ListSpecsJourney extends Record<string, unknown> {
+  journeyId: string;
+  state: SpecState;
+  checked: boolean;
+}
+
+export interface ListSpecsResult extends Record<string, unknown> {
+  journeys: ListSpecsJourney[];
+}
+
+/** `preloaded`: a MapState the caller already loaded (review/build.ts), so the workspace isn't read from
+ * disk again. */
+export function listSpecs(start: string, args: { repo?: string; area?: string }, preloaded?: MapState): ListSpecsResult {
+  const state = preloaded ?? loadMapState(start);
   const repoIds = state.ws.repos.map((r) => r.ref.id).sort(compare);
   if (args.repo !== undefined && !repoIds.includes(args.repo)) {
     throw dataError(`Unknown repo "${args.repo}". Repos in this workspace: ${repoIds.join(", ")}.`);
@@ -176,7 +191,7 @@ export function listSpecs(start: string, args: { repo?: string; area?: string })
   const byRepo: Record<string, SpecCoverage> = {};
   for (const id of args.repo !== undefined ? [args.repo] : repoIds) byRepo[id] = zero();
   const byArea: Record<string, SpecCoverage> = {};
-  const journeys: Record<string, unknown>[] = [];
+  const journeys: ListSpecsJourney[] = [];
   for (const j of [...state.journeys].sort((a, b) => compare(a.id, b.id))) {
     const repos = journeyRepos(state, j);
     if (args.repo !== undefined && !repos.includes(args.repo)) continue;

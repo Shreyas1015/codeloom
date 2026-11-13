@@ -66,7 +66,8 @@ mkdir -p "$WORK/unpacked"
 tar -xzf "$TARBALL" -C "$WORK/unpacked"
 PKG="$WORK/unpacked/package"
 
-for f in package.json LICENSE NOTICE dist/bin.js dist/bin.js.map dist/dashboard/index.html; do
+for f in package.json LICENSE NOTICE dist/bin.js dist/bin.js.map dist/dashboard/index.html \
+  templates/github/codeloom-review-build.yml templates/github/codeloom-review-publish.yml; do
   grep -qx "$f" "$WORK/files.txt" || die "missing from the tarball: $f"
 done
 WASM_COUNT=$(grep -c '^dist/grammars/[^/]*\.wasm$' "$WORK/files.txt" || true)
@@ -153,6 +154,15 @@ step "codeloom init"
 "$CODELOOM" init "$WS" >"$WORK/init.log" 2>&1 || { cat "$WORK/init.log" >&2; die "init failed"; }
 [ -f "$WS/codeloom.workspace.json" ] || die "init wrote no codeloom.workspace.json"
 ok "init: $(head -1 "$WORK/init.log" | sed "s# in $WS##")"
+
+step "codeloom init --github"
+"$CODELOOM" init --github "$WS" >"$WORK/init-github.log" 2>&1 || { cat "$WORK/init-github.log" >&2; die "init --github failed"; }
+for f in .github/workflows/codeloom-review-build.yml .github/workflows/codeloom-review-publish.yml; do
+  [ -f "$WS/$f" ] || die "init --github wrote no $f"
+  grep -q '{{version}}' "$WS/$f" && die "$f still has an unreplaced {{version}} placeholder"
+  grep -q "codeloom@$VERSION " "$WS/$f" || die "$f does not pin codeloom@$VERSION"
+done
+ok "init --github: both workflow templates written, pinned to codeloom@$VERSION"
 
 step "codeloom index"
 (cd "$WS" && "$CODELOOM" index) >"$WORK/index.log" 2>&1 || { cat "$WORK/index.log" >&2; die "index failed"; }

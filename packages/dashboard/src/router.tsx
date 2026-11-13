@@ -1,16 +1,19 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { createRootRouteWithContext, createRoute, createRouter, Outlet, type RouterHistory } from "@tanstack/react-router";
+import { createRootRouteWithContext, createRoute, createRouter, Outlet, redirect, type RouterHistory } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { SessionError } from "@/api/client";
 import { useMapEvents } from "@/api/events";
 import { useOverview, useProgress, useViews } from "@/api/queries";
+import { getSnapshot, isSnapshot } from "@/api/static";
 import { Rail } from "@/components/shell/Rail";
 import { understoodPercent } from "@/lib/progress";
 import { isBlocking, MapStateScreen, StateBanners } from "@/components/shell/StateBanner";
+import { SnapshotBanner } from "@/components/shell/SnapshotBanner";
 import { HomeRoute } from "@/routes/index";
 import { JourneyRoute } from "@/routes/journey";
 import { MapRoute } from "@/routes/map";
 import { ProgressRoute } from "@/routes/progress";
+import { ReviewRoute } from "@/routes/review";
 import { TourRoute } from "@/routes/tour";
 import { ViewRoute } from "@/routes/views";
 import { isPhase } from "@/screens/tour/model";
@@ -50,10 +53,12 @@ function Shell() {
   useEffect(() => {
     if (!blocking && data) screenShown.current = true;
   });
+  const snapshot = getSnapshot();
   return (
     <div className="flex h-dvh min-h-0 bg-background">
       <Rail overview={data} failed={!!error} livePaused={paused} understood={progress.data ? understoodPercent(progress.data.totals.all) : undefined} views={views.data?.views} />
       <main className="flex min-w-0 flex-1 flex-col gap-5.5 overflow-y-auto px-9 py-7">
+        {snapshot && <SnapshotBanner snapshot={snapshot} />}
         {blocking ? (
           <MapStateScreen error={blocking} focusOnShow={focusState} />
         ) : (
@@ -92,7 +97,25 @@ export interface MapSearch {
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({ component: Shell });
 
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: HomeRoute });
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  // A hosted snapshot's start page is Review (spec §7), but that is main.tsx's job (startOnReview, for a
+  // bare link only): "/" itself stays Home, so the rail's Home is reachable in a snapshot too.
+  component: HomeRoute,
+});
+
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/review",
+  // Review is the hosted snapshot's start page (spec §7): there is no review data outside a snapshot
+  // (useReview() would 404 forever), so a direct visit there redirects Home — the mirror of "/progress"
+  // redirecting to Review once a snapshot is detected.
+  beforeLoad: () => {
+    if (!isSnapshot()) throw redirect({ to: "/" });
+  },
+  component: ReviewRoute,
+});
 
 const journeyRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -133,11 +156,20 @@ const mapRoute = createRoute({
   component: MapRoute,
 });
 
-const progressRoute = createRoute({ getParentRoute: () => rootRoute, path: "/progress", component: ProgressRoute });
+const progressRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/progress",
+  // A snapshot never has progress (review-maps-constraints.md) and useProgress() is disabled there, so
+  // this screen would otherwise load forever: redirect to Review (spec §7).
+  beforeLoad: () => {
+    if (isSnapshot()) throw redirect({ to: "/review" });
+  },
+  component: ProgressRoute,
+});
 
 const viewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/views/$id", component: ViewRoute });
 
-export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, tourRoute, mapRoute, progressRoute, viewRoute]);
+export const routeTree = rootRoute.addChildren([indexRoute, journeyRoute, tourRoute, mapRoute, progressRoute, viewRoute, reviewRoute]);
 
 export function createAppRouter({ queryClient, history }: { queryClient: QueryClient; history?: RouterHistory }) {
   return createRouter({ routeTree, context: { queryClient }, defaultPreload: false, ...(history ? { history } : {}) });

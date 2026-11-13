@@ -42,10 +42,28 @@ export function materializeFixture(name: string): string {
 }
 
 /** Commit `message` in `repo` after appending `line` to each of `files` (repo-relative). */
-export function commitChange(repo: string, files: string[], message: string, line = "// changed"): void {
-  for (const rel of files) writeFileSync(join(repo, rel), `${readFileSync(join(repo, rel), "utf8")}${line}\n`);
-  git(repo, "add", "-A");
-  git(repo, "commit", "-q", "-m", message);
+export function commitChange(repo: string, files: string[], message: string, line?: string): void;
+/** Commit `message` in `root` after rewriting `file` (root-relative) with `edit(currentText)`. */
+export function commitChange(root: string, file: string, edit: (text: string) => string, message: string): void;
+export function commitChange(
+  root: string,
+  filesOrFile: string[] | string,
+  messageOrEdit: string | ((text: string) => string),
+  lineOrMessage?: string,
+): void {
+  let message: string;
+  if (Array.isArray(filesOrFile)) {
+    message = messageOrEdit as string;
+    const line = lineOrMessage ?? "// changed";
+    for (const rel of filesOrFile) writeFileSync(join(root, rel), `${readFileSync(join(root, rel), "utf8")}${line}\n`);
+  } else {
+    const edit = messageOrEdit as (text: string) => string;
+    message = lineOrMessage!;
+    const path = join(root, filesOrFile);
+    writeFileSync(path, edit(readFileSync(path, "utf8")));
+  }
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", message);
 }
 
 /** Give a materialized demo-shop's `api` repo a short history with generic ticket keys (spec §1 tickets):
@@ -61,6 +79,18 @@ export function commitTicketHistory(root: string): void {
   commitChange(api, ["app/controllers/customers_controller.ts"], "tweak the show handler");
   git(api, "checkout", "-q", "main");
   git(api, "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/SHOP-14-show-customer'", "feat/SHOP-14-show-customer");
+}
+
+/** Copy fixtures/<name> to a temp folder and git-init it ONCE at the root (unlike materializeFixture, which
+ * git-inits every child folder separately): for a workspace that is itself a single git repo, with other
+ * repos as subfolders (PR review maps design §2). The caller writes codeloom.workspace.json. */
+export function materializeSingleRepo(name: string): string {
+  const src = fileURLToPath(new URL(`../../../fixtures/${name}`, import.meta.url));
+  const root = mkdtempSync(join(tmpdir(), `codeloom-${name}-`));
+  cpSync(src, root, { recursive: true });
+  git(root, "init", "-q", "-b", "main");
+  commitAll(root);
+  return root;
 }
 
 /** Copy fixtures/evals/<app> to a temp folder and git-init every repo its own codeloom.workspace.json lists

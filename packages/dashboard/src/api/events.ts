@@ -1,5 +1,6 @@
 import { type QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { isSnapshot } from "./static.js";
 import type { ChangeEvent, ChangeKey } from "./types.js";
 
 /** One query-key predicate per affected family, or "all". */
@@ -67,13 +68,15 @@ const MAX_RETRY_MS = 30_000;
  * until a stream opens again, and on reopening every query is invalidated, since changes may have been
  * missed meanwhile. The first error after an open stream also refetches the overview once: an idle viewer
  * whose session expired makes no other request, and that 401 is what shows the session-expired state.
- * Mount once (the shell). */
+ * Mount once (the shell). In a static snapshot (isSnapshot()) it opens nothing and stays unpaused: there
+ * is no server to push changes from. */
 export function useMapEvents(): { paused: boolean } {
   const queryClient = useQueryClient();
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
-    if (typeof EventSource === "undefined") return;
+    // A hosted snapshot has no server to push changes from: nothing to listen to, nothing to pause.
+    if (typeof EventSource === "undefined" || isSnapshot()) return;
     let es: EventSource | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let retryMs = FIRST_RETRY_MS;

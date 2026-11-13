@@ -72,7 +72,8 @@ describe("built dist", () => {
 
   it("splits vendors and lazy screens, keeping every chunk under Vite's 500 kB warning", () => {
     const html = readFileSync(join(out, "index.html"), "utf8");
-    const entry = /src="\/assets\/(index-[^"]+\.js)"/.exec(html)![1]!;
+    // base: "./" (relative asset links, so the same build also works hosted under a sub-path).
+    const entry = /src="\.\/assets\/(index-[^"]+\.js)"/.exec(html)![1]!;
     const assets = readdirSync(join(out, "assets"));
     expect(assets.some((f) => f.startsWith("vendor-react-"))).toBe(true);
     expect(assets.some((f) => f.startsWith("vendor-tanstack-"))).toBe(true);

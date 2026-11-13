@@ -22,6 +22,10 @@ colors:
   connector-tan: "#94804E"
   success-green: "#3E8A6E"
   success-wash: "#DDEEE6"
+  diff-add-wash: "#E6F4EA"
+  diff-add-ink: "#1A7F37"
+  diff-delete-wash: "#FCE8E6"
+  diff-delete-ink: "#CF222E"
   lane-ui-blue: "#2F5E9E"
   lane-ui-wash: "#E3ECF8"
   lane-api-viridian: "#1F4D45"
@@ -205,6 +209,9 @@ colour and four lane hues.
   `lane-queue-umber` ring with umber ink). Each hue has a wash (`*-wash`) for lane grounds and Map layer cards.
   Every lane ink reads at 4.5:1 or better on its own wash.
 - **Oxblood** (`oxblood`, `oxblood-wash`): errors, "orphaned", unresolved hops (always with a dashed edge).
+- **Diff washes** (`diff-add-wash`/`diff-add-ink`, `diff-delete-wash`/`diff-delete-ink`): the "This PR" screen's
+  code panel only, for an added or removed diff line. Distinct from Success/Oxblood washes, which mark a
+  journey's or a spec's state, not a line of code.
 
 ### Neutral
 - **Gallery White** (`gallery-white`): the page ground.

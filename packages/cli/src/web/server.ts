@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, sep } from "node:path";
@@ -120,6 +120,32 @@ function resolveStatic(root: string, rawPath: string): { file: string; rel: stri
   if (!real.startsWith(realRoot + sep)) return "bad";
   if (!statSync(real).isFile()) return "missing";
   return { file: real, rel: segs.join("/") };
+}
+
+/** The built dashboard now uses vite's `base: "./"` (relative asset links), so the same build also works
+ * hosted at `https://<owner>.github.io/<repo>/pr-<n>/` (the dashboard's static mode, design spec §7).
+ * Served live, this page can sit at any path depth (e.g. `/journeys/x`), where a relative "./assets/…"
+ * would resolve against the wrong folder; inserting `<base href="/">` right after `<head>` fixes that
+ * for every page this server sends, regardless of the request path. A one-time string replace: an
+ * index.html with no literal "<head>" (e.g. a minimal test fixture) is served byte-identical. */
+function injectBaseHref(html: string): string {
+  return html.includes("<head>") ? html.replace("<head>", '<head>\n    <base href="/">') : html;
+}
+
+/** Sends `<assetsDir>/index.html`, with the base-href fix above applied. */
+function sendIndexHtml(res: ServerResponse, assetsDir: string, head: boolean): void {
+  const html = injectBaseHref(readFileSync(join(assetsDir, "index.html"), "utf8"));
+  res.writeHead(200, {
+    ...BASE_HEADERS,
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html, "utf8"),
+    "Cache-Control": "no-cache",
+  });
+  if (head) {
+    res.end();
+    return;
+  }
+  res.end(html);
 }
 
 function sendFile(res: ServerResponse, file: string, rel: string, head: boolean): void {
@@ -314,7 +340,8 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       return;
     }
     if (found !== "missing") {
-      sendFile(res, found.file, found.rel, head);
+      if (found.rel === "index.html") sendIndexHtml(res, assetsDir, head);
+      else sendFile(res, found.file, found.rel, head);
       return;
     }
     // SPA fallback: a route-like path (no extension in its last segment) gets index.html; a missing
@@ -324,7 +351,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       sendText(res, 404, "Not found.", head);
       return;
     }
-    sendFile(res, join(assetsDir, "index.html"), "index.html", head);
+    sendIndexHtml(res, assetsDir, head);
   };
 
   const server = createServer((req, res) => {

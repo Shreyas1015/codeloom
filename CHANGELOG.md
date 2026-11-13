@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 — unreleased
+
+PR review maps, for public GitHub repos:
+
+- Every pull request can get a short codeloom block in its description: a summary line, a Mermaid diagram
+  of the chains it touches (changed stops marked ✏️), a journey/spec table, and the changed files on no
+  journey. `codeloom review --base <ref>` renders it locally (paste it into a PR yourself); `codeloom init
+  --github` installs two workflows that do it on every push and clean up when the PR closes.
+- A link in that block opens a hosted, read-only snapshot of the dashboard for that PR, on GitHub Pages —
+  nothing runs on a server. `codeloom snapshot --base <ref> --out <dir>` writes it: the dashboard's data at
+  that diff, plus (unless `--data-only`) the dashboard itself and `review.md`. `codeloom snapshot-site`
+  is the workflow's trusted publish step.
+- New dashboard screen "This PR": counts, affected journeys with changed stops in ochre, a code panel with
+  Change / Code now / Code before tabs and a diff view, and a "Comment on GitHub" link per stop. A snapshot
+  banner marks every screen read-only. Static snapshot mode detects itself from `data/manifest.json`, reads
+  `data/<key>.json` beside `index.html` instead of calling a server, and switches to hash routing so a
+  reload or a direct link works with no server-side routing at all.
+- Security: the publish workflow only ever trusts `data/*.json` from a PR's own (untrusted)
+  build — it builds the hosted site and the PR block itself, from codeloom's own install, so no code or
+  markup from the PR ever reaches the published page.
+- Scope: a workspace that is the repo itself (`codeloom.workspace.json` at the git root, repos as
+  subfolders); several separate git repos in one workspace are still out of scope.
+
 ## 0.3.1 — 2026-11-08 (GitHub release and npm)
 
 Security fixes and a shorter README:

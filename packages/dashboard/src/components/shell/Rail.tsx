@@ -1,6 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChartNoAxesColumn, House, LayoutDashboard, Map as MapIcon, TriangleAlert } from "lucide-react";
+import { ChartNoAxesColumn, GitPullRequest, House, LayoutDashboard, Map as MapIcon, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
+import { isSnapshot } from "@/api/static";
 import type { Overview, RepoRole, ViewSummary } from "@/api/types";
 import { cn } from "@/lib/utils";
 
@@ -31,12 +32,12 @@ function NavItem({
   countLabel,
   current,
 }: {
-  to: "/" | "/map" | "/progress";
+  to: "/" | "/map" | "/progress" | "/review";
   icon: ReactNode;
   label: string;
   /** A number (grouped) or ready text such as "34%". */
   count?: number | string;
-  countLabel: string;
+  countLabel?: string;
   current: boolean;
 }) {
   return (
@@ -81,6 +82,7 @@ export function Rail({
   const onMap = under("/map");
   const onProgress = under("/progress");
   const onViews = under("/views");
+  const onReview = under("/review");
   // Tour mode is a journey, not Home: no rail item is current there
   const onTour = /^\/journeys\/[^/]+\/tour\/?$/.test(pathname);
   const files = overview?.repos.reduce((s, r) => s + r.files, 0);
@@ -112,16 +114,31 @@ export function Rail({
       )}
 
       <nav aria-label="Main" className="flex flex-col gap-0.5">
-        <NavItem to="/" icon={<House className={iconCls} strokeWidth={1.6} />} label="Home" count={overview?.journeys.total} countLabel="journeys" current={!onMap && !onProgress && !onTour && !onViews} />
-        <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
+        {/* a hosted PR snapshot's own start page (spec §7): first in the rail, as both approved mockups
+            show, current only there — so Home below is never lit up while you're on it */}
+        {isSnapshot() && (
+          <NavItem to="/review" icon={<GitPullRequest className={iconCls} strokeWidth={1.6} />} label="This PR" current={onReview} />
+        )}
         <NavItem
-          to="/progress"
-          icon={<ChartNoAxesColumn className={iconCls} strokeWidth={1.6} />}
-          label="Progress"
-          count={understood === undefined ? undefined : `${understood}%`}
-          countLabel="understood"
-          current={onProgress}
+          to="/"
+          icon={<House className={iconCls} strokeWidth={1.6} />}
+          label="Home"
+          count={overview?.journeys.total}
+          countLabel="journeys"
+          current={!onMap && !onProgress && !onTour && !onViews && !onReview}
         />
+        <NavItem to="/map" icon={<MapIcon className={iconCls} strokeWidth={1.6} />} label="Map" count={files} countLabel="files" current={onMap} />
+        {/* A snapshot never has progress (review-maps-constraints.md): no nav item to a screen with nothing to show. */}
+        {!isSnapshot() && (
+          <NavItem
+            to="/progress"
+            icon={<ChartNoAxesColumn className={iconCls} strokeWidth={1.6} />}
+            label="Progress"
+            count={understood === undefined ? undefined : `${understood}%`}
+            countLabel="understood"
+            current={onProgress}
+          />
+        )}
       </nav>
 
       {views && views.length > 0 && <ViewsList views={views} pathname={pathname} />}
