@@ -319,4 +319,14 @@ describe("validateSnapshotData", () => {
     const manifest = validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD });
     expect(manifest.tooLarge).toEqual({ bytes: 100, max: 50 });
   });
+
+  it("round 3 item 3: refuses a non-integer manifest.tooLarge.bytes (must be a non-negative integer, like count)", () => {
+    const dir = validDataDir({ manifestOverrides: { tooLarge: { bytes: 2.5, max: 100 } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
+  it("round 3 item 3: refuses a non-integer manifest.tooLarge.max", () => {
+    const dir = validDataDir({ manifestOverrides: { tooLarge: { bytes: 100, max: 50.5 } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
 });

@@ -109,5 +109,8 @@ export const manifestFieldsSchema = z.object({
   builtAt: z.string(),
   omitted: z.object({ mapFolders: z.array(z.string()), codeFiles: z.array(z.string()) }),
   bytes: nonNegativeFinite,
-  tooLarge: z.object({ bytes: nonNegativeFinite, max: nonNegativeFinite }).optional(),
+  // Round 3 item 3: byte counts are always whole numbers — `count` (the same non-negative-integer
+  // schema review.json's own added/removed/oldLines/newLines use), not the merely-finite
+  // `nonNegativeFinite` above.
+  tooLarge: z.object({ bytes: count, max: count }).optional(),
 });

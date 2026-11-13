@@ -1,9 +1,9 @@
 import { compare } from "../util.js";
+import { HEADING } from "./heading.js";
 import { renderMermaid } from "./mermaid.js";
 import { GITHUB_BODY_LIMIT } from "./pr-body.js";
 import type { Review, ReviewFile } from "./types.js";
 
-const HEADING = "### 🗺 codeloom review map";
 /** PR description bodies and files this block is embedded in (spec §4) may show at most this many
  * entries before collapsing the rest into "+N more". */
 const MAX_LISTED = 10;
