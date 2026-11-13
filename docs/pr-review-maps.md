@@ -20,7 +20,9 @@ single codeloom comment instead):
   stop to see its diff (added/removed lines), its code now, or its code before. Nothing here is live:
   search and your own progress are turned off.
 
-The block updates in place on every push, and `pr-<n>/` is removed when the PR closes.
+The block updates in place on every push, and `pr-<n>/` is removed when the PR closes. Only a marker pair
+whose content starts with codeloom's own heading is ever replaced, so quoting the markers in your own text is
+safe — codeloom then adds its block below instead.
 
 ## Setup
 
@@ -419,13 +421,15 @@ jobs:
       # --paginate combined with --jq rejects --slurp ("--slurp option is not supported with --jq"),
       # so the filter runs per page instead — fine here, since there is ever at most one codeloom
       # comment to find. When codeloom no longer needs a comment (the block now fits in the body) but
-      # an old one from before still exists, it's deleted rather than left behind.
+      # an old one from before still exists, it's deleted rather than left behind — only after a clean
+      # snapshot-site run (exit 0): a crash (exit 2) writes no site/ at all, which is not "it fits now".
       - name: Update the pull request
         if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ steps.pr.outputs.number }}
+          EXIT_CODE: ${{ steps.build_site.outputs.exit_code }}
         run: |
           if [ -f site/body.md ]; then
             gh pr edit "$PR" --repo "$REPO" --body-file site/body.md
@@ -439,7 +443,7 @@ jobs:
             else
               gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@site/comment.md
             fi
-          elif [ -n "$ID" ]; then
+          elif [ -n "$ID" ] && [ "$EXIT_CODE" = "0" ]; then
             gh api --method DELETE "repos/$REPO/issues/comments/$ID"
           fi
 

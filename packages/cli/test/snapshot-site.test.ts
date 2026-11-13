@@ -274,6 +274,17 @@ describe("buildFailedBlock", () => {
     expect(result.body).toContain("<!-- codeloom:review:start -->");
   });
 
+  it("final review m6: one trailing newline (what `gh pr view --json body -q .body` adds) is dropped, so re-running on its own output never grows the body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "codeloom-body-"));
+    const bodyFile = join(dir, "body.txt");
+    writeFileSync(bodyFile, "## My PR\n\nDescription.\n"); // gh's own output: the body plus "\n"
+    const first = buildFailedBlock({ outDir: tmpOutDir(), runUrl: "https://github.com/acme/widgets/actions/runs/1", bodyFile });
+    expect(first.body!.startsWith("## My PR\n\nDescription.\n\n<!-- codeloom:review:start -->")).toBe(true);
+    writeFileSync(bodyFile, `${first.body!}\n`); // the next run reads the edited body back through gh again
+    const second = buildFailedBlock({ outDir: tmpOutDir(), runUrl: "https://github.com/acme/widgets/actions/runs/1", bodyFile });
+    expect(second.body).toBe(first.body);
+  });
+
   it("--pages-disabled: valid in --failed mode too, adds the Pages note", () => {
     const outDir = tmpOutDir();
     const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123", pagesDisabled: true });

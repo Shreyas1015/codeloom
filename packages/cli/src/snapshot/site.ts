@@ -54,14 +54,18 @@ export interface SiteResult {
   hosted: boolean;
 }
 
-/** Splices `reviewMd` into the PR body read from `bodyFile` (review/pr-body.ts), if given. Exported so
+/** Splices `reviewMd` into the PR body read from `bodyFile` (review/pr-body.ts), if given — minus one
+ * trailing newline, the one `gh … -q .body` adds (final review m6). Exported so
  * commands/snapshot.ts can reuse it for a *refused* artifact too (security review I2: a refusal must
  * still reach body.md/comment.md when --body was given, not just review.md). splicePrBody (m2) always
  * returns `body` (the spliced body, or — over the limit — the old body with any stale inline block
  * stripped) plus `comment` only when the block had to move out of the body. */
 export function spliceIntoBody(bodyFile: string | undefined, reviewMd: string): { body?: string; comment?: string } {
   if (!bodyFile) return {};
-  const existing = readFileSync(bodyFile, "utf8");
+  const raw = readFileSync(bodyFile, "utf8");
+  // Final review m6: the publish workflow reads the body with `gh pr view --json body -q .body`, which
+  // always adds one "\n" — kept, it would grow the PR description by one newline on every run.
+  const existing = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
   const spliced = splicePrBody(existing, reviewMd);
   return { body: spliced.body, comment: spliced.comment };
 }

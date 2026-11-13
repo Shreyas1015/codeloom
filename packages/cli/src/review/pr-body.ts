@@ -12,8 +12,9 @@ export const GITHUB_BODY_LIMIT = 65_536;
 
 /** Round 3 item 2: a fixed, tiny message for when even a single wrapped block (markers plus any m5
  * neutralisation) is on its own already over GITHUB_BODY_LIMIT — too big to ever post as a comment,
- * regardless of what the rest of the body does. */
-const TOO_LARGE_COMMENT = "Review map too large to show here.";
+ * regardless of what the rest of the body does. Starts with HEADING like every block codeloom writes, so
+ * a later splice recognises it as codeloom's own (final review I6). */
+const TOO_LARGE_COMMENT = `${HEADING}\n\nReview map too large to show here.`;
 
 /** The text START and END share (security review m5): any rendered label (a file path, journey name,
  * chain name, ... — all attacker-controlled, from the PR branch) that happens to literally contain this
@@ -29,8 +30,10 @@ function neutralizeMarkers(block: string): string {
   return block.split(MARKER_PREFIX).join(`<!--${ZWSP} codeloom:review:`);
 }
 
+/** Each marker on a line of its own (final review I3): with START and the block's "### …" heading on one
+ * line, CommonMark reads the whole line as one HTML block and the heading renders as literal text. */
 function wrap(block: string): string {
-  return `${START}${neutralizeMarkers(block)}${END}`;
+  return `${START}\n${neutralizeMarkers(block)}\n${END}`;
 }
 
 interface Pair {
@@ -59,16 +62,14 @@ function findAllPairs(body: string): Pair[] {
   return pairs;
 }
 
-/** Among every valid pair, the real one is whichever's own inner text starts with HEADING — codeloom's
- * own rendered output always starts with it, and an author's incidental quotation of the markers (their
- * own prose, or an inline code span mentioning both) essentially never will. No pair matches that →
- * fall back to the LAST valid pair (the most recently-written one in the body), same as before this
- * fix when there was only ever at most one candidate to begin with. Null when there are no pairs at all
- * (I3: append a fresh block rather than guess). */
+/** Among every valid pair, the real one is whichever's own inner text (leading whitespace aside — wrap()
+ * puts a newline after START, older blocks had none) starts with HEADING: every block codeloom writes
+ * starts with it (normal, refused, failed, markdown.ts's finish() fallback, TOO_LARGE_COMMENT), and an
+ * author's quotation of the markers (their own prose, or an inline code span mentioning both) does not.
+ * No pair matches → null, and a fresh block is appended (final review I6): an author's own START…END pair
+ * is never overwritten, and neither is a lone/unclosed marker (I3). */
 function pickPair(body: string, pairs: Pair[]): Pair | null {
-  if (pairs.length === 0) return null;
-  const real = pairs.find((p) => body.slice(p.startAt + START.length, p.endAt).startsWith(HEADING));
-  return real ?? pairs[pairs.length - 1]!;
+  return pairs.find((p) => body.slice(p.startAt + START.length, p.endAt).trimStart().startsWith(HEADING)) ?? null;
 }
 
 function findBlock(body: string): Pair | null {
@@ -76,8 +77,8 @@ function findBlock(body: string): Pair | null {
 }
 
 /** Splices `block` into `body` between the markers: appended (with a blank line before it) when there is
- * no existing valid START..END pair (including a lone/unclosed START or a stray END — I3), or replacing
- * the first such pair in place — text before and after that pair is byte-identical, and a second,
+ * no existing START..END pair holding a codeloom block (including a lone/unclosed START, a stray END — I3 —
+ * or an author's own quoted pair — final review I6), or replacing that pair in place — text before and after that pair is byte-identical, and a second,
  * unrelated START later in the body (e.g. left over from a manual edit) is never touched, since only the
  * first matched pair is ever replaced.
  *

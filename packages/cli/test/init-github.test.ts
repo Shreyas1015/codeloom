@@ -230,7 +230,17 @@ describe("codeloom init --github", () => {
     it("deletes a leftover codeloom comment when there is no comment.md to upsert", () => {
       const step = allSteps(publish).find((s) => s.name === "Update the pull request");
       const run = step!.run as string;
-      expect(run).toMatch(/elif \[ -n "\$ID" \]; then\s*\n\s*gh api --method DELETE "repos\/\$REPO\/issues\/comments\/\$ID"/);
+      expect(run).toMatch(/elif \[ -n "\$ID" \] && \[ "\$EXIT_CODE" = "0" \]; then\s*\n\s*gh api --method DELETE "repos\/\$REPO\/issues\/comments\/\$ID"/);
+    });
+
+    // Final review m7: a crashed snapshot-site (exit 2: no site/, so no comment.md either) must not be
+    // read as "the block fits in the body now" — the existing comment is deleted only after a clean run.
+    it("deletes the leftover comment only when snapshot-site exited 0", () => {
+      const step = allSteps(publish).find((s) => s.name === "Update the pull request");
+      expect((step!.env as Record<string, string>).EXIT_CODE).toBe("${{ steps.build_site.outputs.exit_code }}");
+      const run = step!.run as string;
+      const deleteLine = run.split("\n").findIndex((l) => l.includes("--method DELETE"));
+      expect(run.split("\n")[deleteLine - 1]).toContain('[ "$EXIT_CODE" = "0" ]');
     });
 
     // Important #4: the "Pages not enabled" note is now rendered by snapshot-site itself (--pages-disabled),
