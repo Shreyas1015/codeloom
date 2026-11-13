@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HEADING } from "../src/review/heading.js";
 import { END, GITHUB_BODY_LIMIT, splicePrBody, START } from "../src/review/pr-body.js";
 
 describe("splicePrBody", () => {
@@ -65,6 +66,36 @@ describe("splicePrBody", () => {
     expect(result).toEqual({ body: `${before}${START}NEW BLOCK${END}${after}` });
   });
 
+  // --- round 3 item 1: every valid pair is considered, picking the one whose content is OUR block -----
+
+  it("round 3 item 1: an author quoting only END above the real block no longer blocks the real block from being found (stale blocks were piling up)", () => {
+    const before = `Note: \`${END}\` ends it.\n\n`;
+    const after = "\n\nTrailer.";
+    const realBlockContent = `${HEADING}\n\nReal block content.`;
+    const body = `${before}${START}${realBlockContent}${END}${after}`;
+
+    const first = splicePrBody(body, `${HEADING}\n\nUpdated block content.`);
+    expect(first).toEqual({ body: `${before}${START}${HEADING}\n\nUpdated block content.${END}${after}` });
+
+    // Two splices: a second run must still find exactly the same real pair, not append a second one.
+    const second = splicePrBody(first.body, `${HEADING}\n\nSecond update.`);
+    expect(second).toEqual({ body: `${before}${START}${HEADING}\n\nSecond update.${END}${after}` });
+    // Exactly one block: only one START and one END anywhere (besides the author's own quoted END text,
+    // which is defused/neutralized text, not a literal match).
+    expect(second.body.split(START).length - 1).toBe(1);
+  });
+
+  it("round 3 item 1: an author quoting both START and END inline above the real block gets neither marker touched — the splice finds the real (heading-prefixed) block by content, not position", () => {
+    const before = `Use \`${START}...stuff...${END}\` to mark it.\n\n`;
+    const after = "\n\nTrailer.";
+    const realBlockContent = `${HEADING}\n\nReal block content.`;
+    const body = `${before}${START}${realBlockContent}${END}${after}`;
+
+    const result = splicePrBody(body, `${HEADING}\n\nUpdated block content.`);
+
+    expect(result).toEqual({ body: `${before}${START}${HEADING}\n\nUpdated block content.${END}${after}` });
+  });
+
   // --- m5 (security review): a label containing literal marker text must never corrupt a later splice -
 
   it("m5: a block containing the literal END marker text is neutralized, so a later splice still finds exactly the one real pair", () => {
@@ -85,8 +116,13 @@ describe("splicePrBody", () => {
   });
 
   // --- m2 (security review): moving to a comment must strip the stale inline block, not leave it -----
+  //
+  // `"x".repeat(GITHUB_BODY_LIMIT)` is AT the limit on its own; wrap() adds START/END on top of it, so
+  // the wrapped comment itself is already over GITHUB_BODY_LIMIT — round 3 item 2's exact scenario, so
+  // these two now expect the fixed too-large comment rather than `wrap(hugeBlock)` (which would itself
+  // be too long to post as a comment).
 
-  it("m2: over the limit, the old inline block is removed from body (not left stale) alongside comment", () => {
+  it("m2: over the limit, the old inline block is removed from body (not left stale) alongside the comment", () => {
     const before = "# Title\n\n";
     const after = "\n\nTrailer.";
     const body = `${before}${START}old small block${END}${after}`;
@@ -94,12 +130,35 @@ describe("splicePrBody", () => {
 
     const result = splicePrBody(body, hugeBlock);
 
-    expect(result).toEqual({ body: `${before}${after}`, comment: `${START}${hugeBlock}${END}` });
+    expect(result.body).toBe(`${before}${after}`);
+    expect(result.comment).toBeDefined();
+    expect(result.comment!.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(result.comment).toContain(START);
+    expect(result.comment).toContain(END);
+    expect(result.comment).not.toContain("x".repeat(100));
   });
 
-  it("m2: over the limit with no prior block, body is unchanged (nothing to strip) and comment carries the block", () => {
+  it("m2: over the limit with no prior block, body is unchanged (nothing to strip) and the comment carries a (possibly fixed) block", () => {
     const block = "x".repeat(GITHUB_BODY_LIMIT);
     const result = splicePrBody("", block);
-    expect(result).toEqual({ body: "", comment: `${START}${block}${END}` });
+    expect(result.body).toBe("");
+    expect(result.comment).toBeDefined();
+    expect(result.comment!.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+  });
+
+  // --- round 3 item 2: the wrapped comment itself must never pass GitHub's limit --------------------
+
+  it("round 3 item 2: wrap(block) alone over the limit (markers pushed it over finish()'s own cap) falls back to a fixed too-large comment", () => {
+    // Exactly at the limit on its own: adding START/END (and any m5 neutralisation) pushes the WRAPPED
+    // form over, even though `block.length` itself is not over the limit.
+    const block = "x".repeat(GITHUB_BODY_LIMIT);
+    const result = splicePrBody("Some existing body.", block);
+
+    expect(result.comment).toBeDefined();
+    expect(result.comment!.length).toBeLessThanOrEqual(GITHUB_BODY_LIMIT);
+    expect(result.comment).toContain("too large");
+    expect(result.comment).not.toContain("x".repeat(100));
+    // Body is the ORIGINAL text, untouched (nothing to strip — there was no existing inline block).
+    expect(result.body).toBe("Some existing body.");
   });
 });
