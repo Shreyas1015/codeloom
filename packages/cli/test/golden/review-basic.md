@@ -23,6 +23,6 @@ classDef changed fill:#FBF0D6,stroke:#E3A72F,stroke-width:2px
 | Create a customer | CustomerService.create | unchecked |
 
 Not on any journey:
-- `api/lib/gst.ts` (+1/-0)
+- ` api/lib/gst.ts ` (+1/-0)
 
 → Open the full review map: https://x.github.io/demo/pr-1/ (built for a41c9e2)

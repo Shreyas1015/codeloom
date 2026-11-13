@@ -41,8 +41,22 @@ export function escapeMarkdownCell(s: string): string {
   return esc === "" ? "\\_" : esc;
 }
 
+/** Wraps `text` in a CommonMark inline code span that no content of `text` can break: the fence is one
+ * backtick longer than the longest run of backticks already in `text`, with one padding space on each
+ * side (so content starting/ending with a backtick, or that is itself all backticks, still round-trips —
+ * CommonMark strips at most one such padding space per side) and newlines flattened to spaces (a code span
+ * is one line). No backslash-escaping: CommonMark does not process backslash escapes inside a code span,
+ * so escaping here would show literal backslashes instead of hiding anything (I2 — a file path belongs in
+ * a code span, not escaped prose). */
+export function codeSpan(text: string): string {
+  const flat = text.replace(/\r?\n/g, " ");
+  const longestRun = (flat.match(/`+/g) ?? []).reduce((m, run) => Math.max(m, run.length), 0);
+  const fence = "`".repeat(longestRun + 1);
+  return `${fence} ${flat} ${fence}`;
+}
+
 function fileLine(f: ReviewFile): string {
-  return `- \`${escapeMarkdownInline(f.repo)}/${escapeMarkdownInline(f.file)}\` (+${f.added}/-${f.removed})`;
+  return `- ${codeSpan(`${f.repo}/${f.file}`)} (+${f.added}/-${f.removed})`;
 }
 
 function listFiles(files: ReviewFile[]): string[] {
@@ -86,8 +100,9 @@ function journeyTable(review: Review): string[] {
 }
 
 /** No journey names any of the touched chains yet: list the bare chains instead (spec §4: "with no
- * journeys named yet, chains are shown instead"). Review is self-contained (chainStops), so this needs no
- * MapState — a chain shows its id (Review carries no chain names) and its changed stops' labels. */
+ * journeys named yet, chains are shown instead"). Review is self-contained (chainStops/chainNames), so
+ * this needs no MapState — M2: shows the chain's own NAME (not its opaque id) and its changed stops'
+ * labels. */
 function chainsTable(review: Review): string[] {
   const lines = ["| Chain | Changed stops |", "|---|---|"];
   for (const id of [...review.chains].sort(compare)) {
@@ -97,7 +112,7 @@ function chainsTable(review: Review): string[] {
       .sort(compare)
       .map(escapeMarkdownCell)
       .join(", ");
-    lines.push(`| ${escapeMarkdownCell(id)} | ${labels} |`);
+    lines.push(`| ${escapeMarkdownCell(review.chainNames[id] ?? id)} | ${labels} |`);
   }
   return lines;
 }

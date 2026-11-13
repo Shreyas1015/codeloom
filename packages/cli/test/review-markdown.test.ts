@@ -21,15 +21,16 @@ function expectGolden(name: string, actual: string): void {
 
 const CHANGED_REF = "api::function:app/services/customer_service.ts:CustomerService.create";
 
-/** page -> call -> route -> handler -> function (CustomerService.create, changed) -> db(customers). */
+/** page -> call -> route -> handler -> function (CustomerService.create, changed) -> db(customers), each
+ * with `from` wired to its real predecessor (I1: no stop is identified only by position). */
 function createCustomerStops(): ReviewStop[] {
   return [
     { ref: "web::function:app/customers/new/page.tsx:NewCustomerPage", repo: "web", lane: "ui", label: "NewCustomerPage", file: "app/customers/new/page.tsx", changed: false },
-    { ref: "web::function:lib/use-create-customer.ts:useCreateCustomer", repo: "web", lane: "ui", label: "useCreateCustomer", file: "lib/use-create-customer.ts", changed: false },
-    { ref: "api::route:POST /api/customers", repo: "api", lane: "api", label: "POST /api/customers", file: "start/routes.ts", changed: false },
-    { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.store", repo: "api", lane: "code", label: "CustomersController.store", file: "app/controllers/customers_controller.ts", changed: false },
-    { ref: CHANGED_REF, repo: "api", lane: "code", label: "CustomerService.create", file: "app/services/customer_service.ts", changed: true },
-    { ref: "api::db:customers", repo: "api", lane: "db", label: "customers (insert)", file: "app/services/customer_service.ts", changed: false },
+    { ref: "web::call:lib/use-create-customer.ts:5", repo: "web", lane: "ui", label: "useCreateCustomer", file: "lib/use-create-customer.ts", changed: false, from: 0 },
+    { ref: "api::route:POST POST /api/customers", repo: "api", lane: "api", label: "POST /api/customers", file: "start/routes.ts", changed: false, from: 1 },
+    { ref: "api::function:app/controllers/customers_controller.ts:CustomersController.store", repo: "api", lane: "code", label: "CustomersController.store", file: "app/controllers/customers_controller.ts", changed: false, from: 2 },
+    { ref: CHANGED_REF, repo: "api", lane: "code", label: "CustomerService.create", file: "app/services/customer_service.ts", changed: true, from: 3 },
+    { ref: "api::db:customers:insert", repo: "api", lane: "db", label: "customers (insert)", file: "app/services/customer_service.ts", changed: false, from: 4 },
   ];
 }
 
@@ -63,6 +64,7 @@ function baseReview(partial: Partial<Review> = {}): Review {
     journeys: [{ id: "j_1", name: "Create a customer", changedStops: [CHANGED_REF], spec: "unchecked", chains: ["ch_1"] }],
     chains: ["ch_1"],
     chainStops: { ch_1: createCustomerStops() },
+    chainNames: { ch_1: "POST /api/customers · NewCustomerPage" },
     tables: ["customers"],
     queues: [],
     truncated: false,
@@ -80,6 +82,11 @@ describe("escapeMermaidLabel", () => {
     ["<script>alert(1)</script>", "#lt;script#gt;alert(1)#lt;/script#gt;"],
   ])("escapes %s", (input, expected) => {
     expect(escapeMermaidLabel(input)).toBe(expected);
+  });
+
+  it("[FIX ROUND 2 RED PROBE] flattens a newline to a space (a raw newline inside a quoted Mermaid label breaks the diagram)", () => {
+    expect(escapeMermaidLabel("line1\nline2")).toBe("line1 line2");
+    expect(escapeMermaidLabel("line1\r\nline2")).toBe("line1 line2");
   });
 
   it("escapes a literal # first, so pre-existing text can't be decoded as an entity Mermaid understands", () => {
@@ -159,10 +166,11 @@ describe("renderReviewMarkdown", () => {
     expect(renderReviewMarkdown(review, { link: "https://x" })).toBe(renderReviewMarkdown(review, { link: "https://x" }));
   });
 
-  it("falls back to a chains table (by chain id) when no journeys are named yet", () => {
+  it("[FIX ROUND 2 RED PROBE] falls back to a chains table showing the chain's NAME (not an opaque id) when no journeys are named yet", () => {
     const out = renderReviewMarkdown(baseReview({ journeys: [] }), {});
     expect(out).toContain("| Chain | Changed stops |");
-    expect(out).toContain("ch\\_1"); // the chain id's own "_" is escaped like any other label (harmless, consistent)
+    expect(out).toContain("POST /api/customers · NewCustomerPage"); // chainNames, displayed (and escaped like any label)
+    expect(out).not.toContain("| ch"); // never the bare id as the visible cell
     expect(out).toContain("CustomerService.create");
     expect(out).not.toContain("| Journey | Changed stops | Spec |");
   });
@@ -170,9 +178,21 @@ describe("renderReviewMarkdown", () => {
   it("says no journeys were touched and lists the changed files when no chain is touched", () => {
     const out = renderReviewMarkdown(baseReview({ journeys: [], chains: [], chainStops: {}, tables: [], nodes: [] }), {});
     expect(out).toContain("No journeys touched.");
-    expect(out).toContain("customer\\_service.ts"); // file paths are escaped too (their "_" included)
+    // The file path is in a code span: CommonMark never processes backslash escapes there, so there must
+    // be none — a literal backslash would otherwise show up in the rendered path.
+    expect(out).toContain("customer_service.ts");
+    expect(out).not.toContain("customer\\_service.ts");
     expect(out).toContain("lib/gst.ts");
     expect(out).not.toContain("```mermaid");
+  });
+
+  it("[FIX ROUND 2 RED PROBE] a backtick in a file path cannot close its own code span early", () => {
+    const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil`.ts` injected", added: 1, removed: 0, onJourney: false }] }), {});
+    // A single-backtick-fenced span ("`evil`") would close right after "evil", leaving ".ts` injected`"
+    // as plain text outside any span — i.e. the raw backtick survives OUTSIDE a code span. The fix must
+    // use a longer fence so the whole path stays inside one span and no bare "`" escapes it.
+    const line = out.split("\n").find((l) => l.includes("evil"))!;
+    expect(line).not.toMatch(/`evil`/);
   });
 
   it("shows only the heading and the error line when the build failed (review is null)", () => {
@@ -223,17 +243,26 @@ describe("renderReviewMarkdown", () => {
     expect(out).not.toContain("](https://evil.example)");
   });
 
-  it("escapes an attacker-controlled file path in the changed-files list", () => {
+  it("keeps an attacker-controlled file path inert inside its code span (CommonMark never reads link/image syntax inside one)", () => {
     const out = renderReviewMarkdown(baseReview({ files: [{ repo: "api", file: "evil](https://evil.example)|x.ts", added: 1, removed: 0, onJourney: false }] }), {});
-    expect(out).not.toContain("](https://evil.example)");
+    const line = out.split("\n").find((l) => l.includes("evil"))!;
+    // The whole path, "](" included, must sit inside ONE code span (a backtick fence on both sides of it)
+    // rather than the fence breaking partway through and leaving "](https://evil.example)" as live prose.
+    expect(line).toMatch(/`+ api\/evil\]\(https:\/\/evil\.example\)\|x\.ts `+/);
   });
 
   it("escapes an attacker-controlled chain name/stop label in the bare chains table", () => {
     const evilStop: ReviewStop = { ref: "api::evil", repo: "api", lane: "code", label: "injected | cell [link](https://evil.example)", changed: true };
-    const out = renderReviewMarkdown(baseReview({ journeys: [], chains: ["ch_evil"], chainStops: { ch_evil: [evilStop] } }), {});
+    const evilName = "Evil ](x) | chain";
+    const out = renderReviewMarkdown(
+      baseReview({ journeys: [], chains: ["ch_evil"], chainStops: { ch_evil: [evilStop] }, chainNames: { ch_evil: evilName } }),
+      {},
+    );
     const tableLine = out.split("\n").find((l) => l.startsWith("|") && l.includes("injected"))!;
+    expect(tableLine).toContain("Evil");
     // 2 columns (chain, stops) = 3 real (unescaped) pipes: leading + 1 separator + trailing.
     expect(realPipes(tableLine)).toBe(3);
     expect(out).not.toContain("](https://evil.example)");
+    expect(out).not.toContain("](x)");
   });
 });

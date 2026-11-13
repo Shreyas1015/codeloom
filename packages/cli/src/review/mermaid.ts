@@ -8,9 +8,11 @@ const CHANGED_CLASS_DEF = "classDef changed fill:#FBF0D6,stroke:#E3A72F,stroke-w
 /** Mermaid decodes `#name;`/`#NNN;` sequences itself (the same codes as HTML entities, minus the leading
  * `&`); using that form (not `&quot;`/`&#96;`) consistently is what actually survives Mermaid's own
  * parser. A literal `#` is escaped first, so a label that already contains text like "#91;" isn't
- * decoded into "[" by Mermaid — only entities THIS function produced are real. */
+ * decoded into "[" by Mermaid — only entities THIS function produced are real. A newline is flattened to a
+ * space first too: a raw one inside a quoted Mermaid label breaks the diagram's own line-based syntax. */
 export function escapeMermaidLabel(s: string): string {
   return s
+    .replace(/\r?\n/g, " ")
     .replace(/#/g, "#35;")
     .replace(/&/g, "#amp;")
     .replace(/"/g, "#quot;")
@@ -24,9 +26,11 @@ export function escapeMermaidLabel(s: string): string {
 
 /** A Mermaid `flowchart LR` of every chain in `review.chains`, laid out in each chain's own stop order
  * (review.chainStops; page → call → route → handler → … → table/queue, the linker's own order), stops
- * shared by more than one chain (same ReviewStop.ref) drawn once, edges between a chain's consecutive
- * stops. A stop with `changed: true` gets a ✏️ prefix and the `changed` style. At most `maxNodes` nodes;
- * the rest collapse into one "+N more" node. Returns a fenced ```mermaid block, ready to paste into a PR
+ * shared by more than one chain (same ReviewStop.ref) drawn once, edges from each stop's real predecessor
+ * (ReviewStop.from — I1: not just the previous array entry, so a chain that branches, e.g. a handler with
+ * two db writes, draws two edges from the handler rather than one straight line through both writes).
+ * A stop with `changed: true` gets a ✏️ prefix and the `changed` style. At most `maxNodes` nodes; the rest
+ * collapse into one "+N more" node. Returns a fenced ```mermaid block, ready to paste into a PR
  * description. Review is self-contained: no MapState needed (PR review maps design §5 — the publish step
  * renders this from data/review.json alone). */
 export function renderMermaid(review: Review, maxNodes = DEFAULT_MAX_NODES): string {
@@ -47,20 +51,21 @@ export function renderMermaid(review: Review, maxNodes = DEFAULT_MAX_NODES): str
 
   for (const chainId of review.chains) {
     const stops = review.chainStops[chainId] ?? [];
-    let prevId: string | undefined;
-    for (const s of stops) {
+    const idAt: string[] = [];
+    stops.forEach((s, i) => {
       const id = idFor(s.ref);
+      idAt[i] = id;
       if (!stopsByRef.has(s.ref)) stopsByRef.set(s.ref, s);
       if (s.changed) changed.add(s.ref);
-      if (prevId !== undefined) {
-        const edge = `${prevId} --> ${id}`;
+      const fromId = s.from !== undefined ? idAt[s.from] : undefined;
+      if (fromId !== undefined && fromId !== id) {
+        const edge = `${fromId} --> ${id}`;
         if (!seenEdges.has(edge)) {
           seenEdges.add(edge);
           edges.push(edge);
         }
       }
-      prevId = id;
-    }
+    });
   }
 
   const allRefs = [...ids.keys()];

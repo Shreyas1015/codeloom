@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import ts from "typescript";
 import { z } from "zod";
-import { JS_EXT, parseSource, walk } from "../../adapters/ast.js";
+import { functionLikeName, JS_EXT, parseSource, walk } from "../../adapters/ast.js";
 import { buildReport } from "../../commands/check.js";
 import { CodeloomError } from "../../errors.js";
 import { readJson } from "../../store/json.js";
@@ -112,6 +112,28 @@ export function functionExtents(repoAbs: string, base: string, file: string): Ma
     if ((out.get(start) ?? 0) < end) out.set(start, end);
   });
   return out;
+}
+
+/** The start line of the function-like node named `symbol` at `commit` (functionLikeName, adapters/ast.ts
+ * — the same naming rule the indexer itself uses to set a function graph node's `name`), or undefined when
+ * none matches there (a non-JS file, absent at `commit`, or no function there has that name).
+ * review/build.ts's fallback when a node's recorded line can't be mapped across the diff by position alone
+ * (e.g. a signature edit merged into a hunk that also shifts surrounding lines). */
+export function functionStartBySymbol(repoAbs: string, commit: string, file: string, symbol: string): number | undefined {
+  if (!JS_EXT.test(file) || commit === EMPTY_TREE) return undefined;
+  let text: string;
+  try {
+    text = git(repoAbs, ["show", "--end-of-options", `${commit}:./${file}`], { maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    return undefined;
+  }
+  const sf = parseSource(file, text);
+  let found: number | undefined;
+  walk(sf, (n) => {
+    if (found !== undefined || !ts.isFunctionLike(n) || !("body" in n) || !n.body) return;
+    if (functionLikeName(n) === symbol) found = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  });
+  return found;
 }
 
 /** The commit a repo's map was indexed at (the git-ignored fingerprints cache), or undefined when unknown.

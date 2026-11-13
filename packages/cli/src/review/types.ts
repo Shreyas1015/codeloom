@@ -49,6 +49,10 @@ export interface ReviewStop {
   label: string;
   file?: string;
   changed: boolean;
+  /** Index (into this same chain's ReviewStop[]) of the stop this one was reached from — copied from
+   * ChainStop.from (store/schemas.ts), so the diagram can draw the real predecessor instead of assuming a
+   * straight line; absent for a chain's first stop. */
+  from?: number;
 }
 
 /** One journey touched by the diff: which of its stops changed, and its spec state. "unchecked" is "none"
@@ -80,6 +84,9 @@ export interface Review {
   /** Every stop (in the chain's own order) of every chain in `chains` — the full chain layout, not just
    * the changed stops, so the renderers (mermaid.ts, markdown.ts) need nothing beyond this Review. */
   chainStops: Record<string, ReviewStop[]>;
+  /** Every chain in `chains`' own name (the linker's `defaultChainName`), for display when no journey
+   * names it (markdown.ts's bare chains table — Review carries no live chain lookup to read it from). */
+  chainNames: Record<string, string>;
   tables: string[];
   queues: string[];
   truncated: boolean;
