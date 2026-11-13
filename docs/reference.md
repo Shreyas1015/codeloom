@@ -6,7 +6,7 @@ Every command, MCP tool and prompt, and the workspace file. For a first look, st
 
 | Command | What it does |
 |---|---|
-| `codeloom init [dir]` | Set up a repo or a folder of repos: workspace file, `.codeloom/config.json` per repo, post-commit hook, `.gitignore` line, `.mcp.json` entry. |
+| `codeloom init [dir]` | Set up a repo or a folder of repos: workspace file, `.codeloom/config.json` per repo, post-commit hook, `.gitignore` line, `.mcp.json` entry. `--github` also writes the two [PR review map](pr-review-maps.md) workflows to `.github/workflows/`, pinned to this codeloom version; an existing, customised copy of either file is kept as is. |
 | `codeloom index` | Index every repo in the workspace. Only changed files are parsed again. `--quiet` prints nothing on success. |
 | `codeloom check` | Report how complete the map is: chains that run UI → API → DB, chains that run API → DB only (no UI caller), chains missing the DB step or broken at UI → API, how many routes have a UI caller, unresolved calls, guessed links. |
 | `codeloom check --json` | The same report as JSON. |
