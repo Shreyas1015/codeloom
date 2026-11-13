@@ -45,12 +45,24 @@ describe("snapshotKey", () => {
     expect(snapshotKey("/api/journeys/j_1")).toBe("journeys~j_1");
   });
 
-  it("appends sorted, encoded params after @", () => {
-    expect(snapshotKey("/api/graph", { repo: "api", dir: "app/services" })).toBe("graph@dir=app%2Fservices&repo=api");
+  it("appends sorted params after @", () => {
+    expect(snapshotKey("/api/graph", { repo: "api", dir: "app" })).toBe("graph@dir=app&repo=api");
   });
 
   it("drops undefined params and sorts the rest", () => {
     expect(snapshotKey("/api/code", { repo: "api", file: "a.ts", start: 1, end: undefined })).toBe("code@file=a.ts&repo=api&start=1");
+  });
+
+  it("a key with any character outside [A-Za-z0-9._~@=&-] (here the %2F of an encoded \"/\") is made safe: unsafe chars → _, cut to 80, + '-' + 16 hex of the full key's sha256", () => {
+    const full = "graph@dir=app%2Fservices&repo=api";
+    const expectedHash = createHash("sha256").update(full).digest("hex").slice(0, 16);
+    expect(snapshotKey("/api/graph", { repo: "api", dir: "app/services" })).toBe(`graph@dir=app_2Fservices&repo=api-${expectedHash}`);
+  });
+
+  it("a file path with [ ] ( ) + $ space or non-ASCII never yields an unsafe file name", () => {
+    for (const file of ["app/customers/[id]/page.tsx", "app/(shop)/page.tsx", "routes/+page.svelte", "routes/$id.tsx", "a b.md", "café.md"]) {
+      expect(snapshotKey(`/api/files/web/${file}`), file).toMatch(/^[A-Za-z0-9._~@=&-]+$/);
+    }
   });
 
   it("no params → just the path part", () => {
@@ -63,7 +75,7 @@ describe("snapshotKey", () => {
     const full = `code@file=${encodeURIComponent(longFile)}&repo=api`;
     expect(full.length).toBeGreaterThan(120);
     const expectedHash = createHash("sha256").update(full).digest("hex").slice(0, 16);
-    expect(key).toBe(`${full.slice(0, 80)}-${expectedHash}`);
+    expect(key).toBe(`${full.replace(/[^A-Za-z0-9._~@=&-]/g, "_").slice(0, 80)}-${expectedHash}`);
     expect(key.length).toBe(80 + 1 + 16);
   });
 
@@ -170,6 +182,34 @@ describe("in static mode", () => {
       );
       const res = await apiGet<CodeResponse>("/api/code", { repo: "api", file: "x.ts", start: 1 });
       expect(res).toEqual({ file: "x.ts", startLine: 1, endLine: 3, text: "a\nb\nc", truncated: false });
+    });
+
+    it("final review C1/I2: /api/code for a Next.js [id] page reads the same key the writer wrote (snapshotKey of /api/files/<repo>/<file>)", async () => {
+      const text = "export default function Page() {}";
+      const fetch = vi.fn(async (url: string) =>
+        url === "./data/files~web~app~customers~_id_~page.tsx-d15e5510e5cd4598.json" ? json({ file: "app/customers/[id]/page.tsx", text }) : json({}, 404),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const res = await apiGet<CodeResponse>("/api/code", { repo: "web", file: "app/customers/[id]/page.tsx", start: 1 });
+      expect(res.text).toBe(text);
+    });
+
+    it("final review I2: /api/code for a path over 120 characters reads the writer's shortened key, not the raw path", async () => {
+      const file = `app/${"a".repeat(100)}/very_long_file_name.ts`;
+      const key = snapshotKey(`/api/files/api/${file}`);
+      expect(key).toBe("files~api~app~aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-9c28935ea4081ad5");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => (url === `./data/${key}.json` ? json({ file, text: "x" }) : json({}, 404))),
+      );
+      await expect(apiGet<CodeResponse>("/api/code", { repo: "api", file, start: 1 })).resolves.toMatchObject({ text: "x" });
+    });
+
+    it("final review I1: the fetch URL is the key, URL-encoded (a static host decodes the path back to the real file name)", async () => {
+      const fetch = vi.fn(async (_url: string) => json({ ok: true }));
+      vi.stubGlobal("fetch", fetch);
+      await apiGet("/api/graph", { repo: "api" });
+      expect(fetch).toHaveBeenCalledWith(`./data/${encodeURIComponent("graph@repo=api")}.json`, expect.anything());
     });
 
     it("a missing code file → NotInSnapshotError", async () => {

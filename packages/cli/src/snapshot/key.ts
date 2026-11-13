@@ -5,12 +5,17 @@
 import { createHash } from "node:crypto";
 import { compare } from "../util.js";
 
-/** Keys longer than this (including the hash suffix) are shortened; see below. */
+/** Keys longer than this are shortened; see below. */
 const MAX_KEY_LENGTH = 120;
-/** How many characters of the over-long key are kept before the "-<hash>" suffix. */
+/** How many characters of the (made-safe) key are kept before the "-<hash>" suffix. */
 const KEPT_PREFIX_LENGTH = 80;
 /** Hex characters of the sha256 digest kept in a shortened key. */
 const HASH_LENGTH = 16;
+/** The only characters a data file name may hold: every static host (GitHub Pages, `python3 -m
+ * http.server`, ...) serves these as-is, never percent-decoding them into some other name. Shared with
+ * snapshot/validate.ts's FILE_NAME_RE (final review C1/I1). */
+const SAFE_KEY_RE = /^[A-Za-z0-9._~@=&-]*$/;
+const UNSAFE_CHAR_RE = /[^A-Za-z0-9._~@=&-]/g;
 
 /** One data file's name for `path` + `params` (no leading "data/", no ".json"):
  * - the leading "/api" (and the "/" after it) is dropped, then every remaining "/" becomes "~"
@@ -18,10 +23,12 @@ const HASH_LENGTH = 16;
  *   ref embedding a file path — gets the same treatment);
  * - `params` entries are sorted by name, `undefined` dropped, and each value run through
  *   `encodeURIComponent` (param names are not encoded: they are always plain identifiers), joined
- *   with "&" and appended after "@" (e.g. `("/api/graph", {repo:"api", dir:"app/services"})` ->
- *   "graph@dir=app%2Fservices&repo=api");
- * - a key over 120 characters is shortened to its first 80 characters, "-", and the first 16 hex
- *   characters of its own sha256 — still unique enough, and short enough for every filesystem. */
+ *   with "&" and appended after "@" (e.g. `("/api/graph", {repo:"api", dir:"app"})` -> "graph@dir=app&repo=api");
+ * - that full key is kept as-is only when it is entirely [A-Za-z0-9._~@=&-] and at most 120 characters.
+ *   Otherwise (a "%" escape, a ":" of a node ref, a "[id]"/"(group)"/"+page"/"$id" path, a space,
+ *   non-ASCII, or just too long) it becomes: every other character replaced by "_", cut to 80 characters,
+ *   "-", and the first 16 hex characters of the FULL key's own sha256 — always a plain, short, unique
+ *   name a static host serves byte-for-byte (final review C1/I1/I2). */
 export function snapshotKey(path: string, params?: Record<string, string | number | undefined>): string {
   const base = path.replace(/^\/api\/?/, "").replace(/\//g, "~");
   const query = params === undefined
@@ -32,7 +39,7 @@ export function snapshotKey(path: string, params?: Record<string, string | numbe
         .map(([name, value]) => `${name}=${encodeURIComponent(String(value))}`)
         .join("&");
   const full = query === "" ? base : `${base}@${query}`;
-  if (full.length <= MAX_KEY_LENGTH) return full;
+  if (SAFE_KEY_RE.test(full) && full.length <= MAX_KEY_LENGTH) return full;
   const hash = createHash("sha256").update(full).digest("hex").slice(0, HASH_LENGTH);
-  return `${full.slice(0, KEPT_PREFIX_LENGTH)}-${hash}`;
+  return `${full.replace(UNSAFE_CHAR_RE, "_").slice(0, KEPT_PREFIX_LENGTH)}-${hash}`;
 }

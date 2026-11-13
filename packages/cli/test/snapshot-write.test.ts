@@ -6,6 +6,7 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { chainId } from "../src/linker/chains.js";
 import { saveJourneysTool } from "../src/mcp/tools/journeys.js";
 import { snapshotKey } from "../src/snapshot/key.js";
+import { validateSnapshotData } from "../src/snapshot/validate.js";
 import { DEFAULT_MAX_BYTES, writeSnapshotData } from "../src/snapshot/write.js";
 import { CODE_MAX_BYTES } from "../src/web/api.js";
 import { git } from "../src/workspace/git.js";
@@ -95,8 +96,10 @@ describe("writeSnapshotData", () => {
     // Map: every folder on the path to the one changed file (app/services/customer_service.ts), not an
     // unrelated one.
     expect(has("graph@dir=app&repo=api")).toBe(true);
-    expect(has("graph@dir=app%2Fservices&repo=api")).toBe(true);
-    expect(has("graph@dir=app%2Fcontrollers&repo=api")).toBe(false);
+    expect(has(snapshotKey("/api/graph", { repo: "api", dir: "app/services" }))).toBe(true);
+    expect(has(snapshotKey("/api/graph", { repo: "api", dir: "app/controllers" }))).toBe(false);
+    // Every data file name is in the static-host-safe charset (final review C1/I1): no "%", no ":".
+    for (const file of present) expect(file, file).toMatch(/^[A-Za-z0-9._~@=&-]+\.json$/);
 
     // The changed node, and every node-bearing stop of the journey it is on (read back from the journey's
     // own API answer, so this does not assume which stops the indexer gives it).
@@ -164,6 +167,20 @@ describe("writeSnapshotData", () => {
     // A different stop of the same journey is still written in full.
     const keptKey = snapshotKey("/api/files/api/app/services/customer_service.ts");
     expect(existsSync(join(dataDir, `${keptKey}.json`))).toBe(true);
+  });
+
+  it("final review C1: a change to a Next.js [id] page (web/app/customers/[id]/page.tsx) still produces data the publish step accepts", async () => {
+    const { root } = await setUp();
+    git(root, ["checkout", "-q", "-b", "feature"]);
+    commitChange(root, "web/app/customers/[id]/page.tsx", (text) => text.replace("<h1>{customer.name}</h1>", "<h1>{customer.name}!</h1>"), "edit the [id] page");
+
+    const outDir = tmpOutDir();
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir, now: FIXED_NOW });
+    const dataDir = join(outDir, "data");
+    expect(() => validateSnapshotData(dataDir, { maxBytes: DEFAULT_MAX_BYTES, expectedHead: manifest.head })).not.toThrow();
+    for (const file of manifest.files) expect(file, file).toMatch(/^[A-Za-z0-9._~@=&-]+\.json$/);
+    // The [id] folder's own Map level is there, under the same key the dashboard asks for.
+    expect(manifest.files).toContain(`${snapshotKey("/api/graph", { repo: "web", dir: "app/customers/[id]" })}.json`);
   });
 
   it("is deterministic: two runs with the same `now` produce byte-identical data files", async () => {

@@ -164,15 +164,19 @@ function sha256Hex(bytes: Uint8Array): string {
 }
 
 const MAX_KEY_LENGTH = 120;
+const SAFE_KEY_RE = /^[A-Za-z0-9._~@=&-]*$/;
+const UNSAFE_CHAR_RE = /[^A-Za-z0-9._~@=&-]/g;
 
 /** The `data/<key>.json` file name a snapshot stores `path` + `params` at (shared with the writer,
  * packages/cli/src/snapshot/key.ts — the two must stay identical; fixtures/snapshot-keys.json is their
  * shared golden file). `/api/x/y` → the `/api/` prefix is dropped and every other `/` becomes `~`. Params
  * (if any): drop the ones that are `undefined`, sort by name, `encodeURIComponent` each value, join as
- * `name=value` with `&`, and append after `@`. A key over 120 characters is cut to its first 80 characters,
- * `-`, and the first 16 hex characters of the full key's SHA-256 (so it stays one safe, unique file name). */
+ * `name=value` with `&`, and append after `@`. That full key is kept as-is only when it is entirely
+ * [A-Za-z0-9._~@=&-] and at most 120 characters; otherwise every other character becomes `_`, it is cut to
+ * 80 characters, and `-` plus the first 16 hex characters of the FULL key's SHA-256 is appended — always a
+ * plain name a static host serves byte-for-byte (no `%` it would decode into a different file). */
 export function snapshotKey(path: string, params?: Record<string, string | number | undefined>): string {
-  const base = path.replace(/^\/api\//, "").replace(/\//g, "~");
+  const base = path.replace(/^\/api\/?/, "").replace(/\//g, "~");
   const qs = params
     ? Object.entries(params)
         .filter((e): e is [string, string | number] => e[1] !== undefined)
@@ -181,9 +185,9 @@ export function snapshotKey(path: string, params?: Record<string, string | numbe
         .join("&")
     : "";
   const key = qs ? `${base}@${qs}` : base;
-  if (key.length <= MAX_KEY_LENGTH) return key;
+  if (SAFE_KEY_RE.test(key) && key.length <= MAX_KEY_LENGTH) return key;
   const hash = sha256Hex(new TextEncoder().encode(key)).slice(0, 16);
-  return `${key.slice(0, 80)}-${hash}`;
+  return `${key.replace(UNSAFE_CHAR_RE, "_").slice(0, 80)}-${hash}`;
 }
 
 // ---- staticGet: apiGet's static-mode path -------------------------------------------------------------
@@ -198,7 +202,9 @@ function toKeyParams(params?: QueryParams): Record<string, string | number | und
 async function loadData<T>(path: string, key: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`./data/${key}.json`, { headers: { accept: "application/json" } });
+    // The key is already in the safe charset (snapshotKey); encoding it is a safety net so no character
+    // could ever reach the static host as something it would decode into a different file name.
+    res = await fetch(`./data/${encodeURIComponent(key)}.json`, { headers: { accept: "application/json" } });
   } catch {
     throw new NotInSnapshotError(path);
   }
@@ -238,14 +244,15 @@ export function sliceCode(file: string, source: string, start: number, end: numb
   return { file, startLine: start, endLine, text, truncated: cut || endLine < wantEnd };
 }
 
-/** `/api/code?repo=&file=&start=&end=`: the stored whole file (`files~<repo>~<file, / → ~>`, written as
- * `{ file, text }`) sliced locally with `sliceCode`, to the same `CodeResponse` the server returns. */
+/** `/api/code?repo=&file=&start=&end=`: the stored whole file (`snapshotKey("/api/files/<repo>/<file>")`,
+ * exactly the key the writer's fileEntry uses; written as `{ file, text }`) sliced locally with `sliceCode`,
+ * to the same `CodeResponse` the server returns. */
 async function staticCode(params: QueryParams | undefined): Promise<CodeResponse> {
   const repo = String(params?.repo ?? "");
   const file = String(params?.file ?? "");
   const start = params?.start !== undefined ? Number(params.start) : 1;
   const end = params?.end !== undefined ? Number(params.end) : undefined;
-  const key = `files~${repo}~${file.replace(/\//g, "~")}`;
+  const key = snapshotKey(`/api/files/${repo}/${file}`);
   const whole = await loadData<{ file: string; text: string }>("/api/code", key);
   return sliceCode(file, whole.text, start, end);
 }

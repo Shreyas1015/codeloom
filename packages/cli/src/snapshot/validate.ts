@@ -16,11 +16,12 @@ import type { SnapshotManifest } from "./write.js";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 /** manifest.json's `files` entries: the snapshotKey charset (letters, digits, `.`, `_`, `~`, `-`, `@`,
- * `%`, `=`, `&`), always ending in literal ".json". This alone rules out "..", "." and anything
+ * `=`, `&` — never `%`, which a static host would decode into a different file name: final review I1),
+ * always ending in literal ".json". This alone rules out "..", "." and anything
  * containing "/" or "\" (none of those characters are in the charset, and both "." and ".." are too
  * short to also end in the required ".json" suffix) — security review C1 (path traversal via a listed
  * ".." or "../evil.html" entry, which `join(dataDir, entry)` would otherwise resolve outside `dataDir`). */
-const FILE_NAME_RE = /^[A-Za-z0-9._~@%=&-]+\.json$/;
+const FILE_NAME_RE = /^[A-Za-z0-9._~@=&-]+\.json$/;
 
 export interface ValidateOptions {
   /** Total cap across every file in `dataDir` (the same `--max-size` the writer used). */

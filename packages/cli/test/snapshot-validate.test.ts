@@ -165,6 +165,11 @@ describe("validateSnapshotData", () => {
     expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
   });
 
+  it('final review C1/I1: refuses a listed name containing "%" (a percent-escape the static host would decode into a different file)', () => {
+    const dir = validDataDir({ extraFiles: { "graph@dir=app%2Fservices&repo=api.json": "{}" } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
   it("C1: refuses a duplicate entry in manifest.files", () => {
     const dir = validDataDir({ extraListed: ["review.json"] });
     expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
