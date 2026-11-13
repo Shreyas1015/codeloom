@@ -449,7 +449,7 @@ export function formatInit(r: InitResult): string {
           "",
           ...r.github
             .filter((g) => g.status === "kept-custom")
-            .map((g) => `kept your own ${g.path} (customised; not overwritten)`),
+            .map((g) => `${g.path}: differs from this version's template; delete it to update`),
         ]
       : []),
     "",

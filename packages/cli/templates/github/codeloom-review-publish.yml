@@ -1,7 +1,7 @@
 # codeloom PR review map — publish step (trusted: never checks out or runs the PR's own code).
-# Installed by "codeloom init --github"; see docs/pr-review-maps.md. It only ever checks out the
-# "gh-pages" branch and installs codeloom from npm at the version pinned below — nothing from the PR's
-# own checkout or workflow file reaches the published site or the PR description.
+# Installed by "codeloom init --github"; see docs/pr-review-maps.md. It clones the repo's default
+# branch (never the pull request's own ref), then switches to (or creates) the "gh-pages" branch —
+# nothing from the PR's own checkout or workflow file reaches the published site or the PR description.
 name: codeloom review publish
 
 on:
@@ -11,67 +11,27 @@ on:
   pull_request_target:
     types: [closed]
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: read
-
+# Scoped per PR (or, for a fork PR with no same-repo pull_requests entry, per source branch): a global
+# group would let GitHub's "one pending run per group" rule cancel one PR's pending publish because
+# another PR just queued one. No cancel-in-progress — a half-finished push is worse than a late one.
 concurrency:
-  group: codeloom-pages
+  group: codeloom-pages-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
 
 jobs:
   publish:
-    if: github.event_name == 'workflow_run'
+    # Only for the build's own pull_request runs (never some other workflow of the same name, and
+    # never a run GitHub cancelled outright — cancelled carries no usable conclusion to act on).
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      pages: read
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Find the pull request
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-        run: |
-          PR="$EVENT_PR_NUMBER"
-          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
-            # A fork PR: the workflow_run event carries no pull_requests entry for it, so look the PR
-            # up by its head commit instead.
-            PR=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number // empty')
-          fi
-          if [ -z "$PR" ]; then
-            echo "no pull request found for commit $HEAD_SHA" >&2
-            exit 1
-          fi
-          echo "number=$PR" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-
-      # No "ref:" — checkout then defaults to this (the publish) workflow's own trigger context,
-      # which for workflow_run is the base repo's default branch, never the pull request's head. The
-      # clone (with its origin remote and push credentials, courtesy of actions/checkout) lands in
-      # ./gh-pages, so the rest of this job keeps its own working directory for the artifact and
-      # site/; the gh-pages branch is then checked out (or created, orphaned, the first time) inside
-      # that same already-authenticated clone, so the later push needs no extra credential setup.
-      - name: Checkout the repo (for its gh-pages branch)
-        uses: actions/checkout@v4
-        with:
-          path: gh-pages
-          fetch-depth: 0
-
-      - name: Switch to gh-pages, creating it the first time
-        working-directory: gh-pages
-        run: |
-          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
-            git fetch -q origin gh-pages
-            git checkout -q gh-pages
-          else
-            git checkout -q --orphan gh-pages
-            git rm -rqf . >/dev/null 2>&1 || true
-            git commit -q --allow-empty -m "codeloom: create gh-pages"
-          fi
 
       - name: Download the build artifact
         id: download
@@ -83,98 +43,160 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      # mode=skip: the build ran (conclusion success) but uploaded nothing, because it found no
+      # codeloom.workspace.json — spec §6 says the PR shows nothing, so this job does nothing either.
+      # mode=failed: the build itself failed before it could upload anything, or it uploaded a
+      # snapshot/failed marker (its own "codeloom snapshot" step failed). mode=data: a normal
+      # snapshot was uploaded.
+      - name: Decide what to do
+        id: mode
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        run: |
+          if [ "$DOWNLOAD_OUTCOME" != "success" ]; then
+            if [ "$CONCLUSION" = "success" ]; then MODE=skip; else MODE=failed; fi
+          elif [ -f artifact/failed ]; then
+            MODE=failed
+          elif [ "$CONCLUSION" = "success" ]; then
+            MODE=data
+          else
+            MODE=failed
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      # Resolves and validates the PR this build ran for, straight from the triggering event — never
+      # from the artifact. A same-repo PR's number comes with the event; a fork PR's does not, so it's
+      # looked up by head commit instead, filtered to exactly one open PR whose head is that commit and
+      # whose head repo matches (never an old, merged PR that happens to share the commit). Either way
+      # the result is re-checked against the PR's live state, since it may have closed or moved on since
+      # the build started. Anything that doesn't resolve to exactly one open, matching PR is logged and
+      # skipped (valid=0) — never a hard failure.
+      - name: Find and validate the pull request
+        id: pr
+        if: steps.mode.outputs.mode != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          PR="$EVENT_PR_NUMBER"
+          case "$PR" in '' | *[!0-9]*) PR="" ;; esac
+
+          if [ -z "$PR" ]; then
+            CANDIDATES=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" | jq --arg sha "$HEAD_SHA" --arg repo "$HEAD_REPO" \
+              '[.[] | select(.state == "open" and .head.sha == $sha and .head.repo.full_name == $repo) | .number]')
+            if [ "$(echo "$CANDIDATES" | jq 'length')" = "1" ]; then PR=$(echo "$CANDIDATES" | jq '.[0]'); else PR=""; fi
+          else
+            READ=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid 2>/dev/null || echo '{}')
+            STATE=$(echo "$READ" | jq -r '.state // empty')
+            SHA=$(echo "$READ" | jq -r '.headRefOid // empty')
+            if [ "$STATE" != "OPEN" ] || [ "$SHA" != "$HEAD_SHA" ]; then PR=""; fi
+          fi
+
+          case "$PR" in
+            '' | *[!0-9]*)
+              echo "no single open pull request matches commit $HEAD_SHA; skipping" >&2
+              echo "valid=0" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "valid=1" >> "$GITHUB_OUTPUT"
+
+      # Only HTTP 404 means "not enabled"; any other error (a transient API problem, a permissions
+      # quirk) assumes Pages IS enabled, so a glitch here never adds a false "enable Pages" note.
+      - name: Check GitHub Pages is enabled
+        id: pages
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if OUT=$(gh api "repos/$REPO/pages" 2>&1); then
+            echo "enabled=1" >> "$GITHUB_OUTPUT"
+          elif echo "$OUT" | grep -q "HTTP 404"; then
+            echo "enabled=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::could not confirm whether GitHub Pages is enabled; assuming it is: $OUT"
+            echo "enabled=1" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Current PR description
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ steps.pr.outputs.number }}
         run: gh pr view "$PR" --repo "$REPO" --json body -q .body > body.txt
 
+      # No "ref:" — checkout then defaults to this (the publish) workflow's own trigger context, which
+      # for workflow_run is the base repo's default branch, never the pull request's head. The clone
+      # (with its origin remote and push credentials, courtesy of actions/checkout) lands in ./gh-pages,
+      # so the rest of this job keeps its own working directory for the artifact and site/; the
+      # gh-pages branch is then checked out (or created, orphaned, the first time) inside that same
+      # already-authenticated clone, so the later push needs no extra credential setup.
+      - name: Checkout the repo (for its gh-pages branch)
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
+        uses: actions/checkout@v4
+        with:
+          path: gh-pages
+          fetch-depth: 0
+
+      - name: Switch to gh-pages, creating it the first time
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
+        working-directory: gh-pages
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch -q origin gh-pages
+            git checkout -q gh-pages
+          else
+            git checkout -q --orphan gh-pages
+            git rm -rqf . >/dev/null 2>&1 || true
+            touch .nojekyll
+            git add .nojekyll
+            git commit -q -m "codeloom: create gh-pages"
+          fi
+
       # Never fails the step itself: a refused artifact (exit 1) still has to update the PR from
-      # whatever codeloom wrote to site/ (never gh-pages) and then fail the job visibly — see the
-      # last step. "--previous" is always passed in the failed-build branch; a missing or invalid
+      # whatever codeloom wrote to site/ (never gh-pages) and then fail the job visibly — see the last
+      # step. "--previous" is always passed in the failed-build branch; a missing or invalid
       # gh-pages/pr-$PR/data/manifest.json (e.g. this PR's very first build failed) is tolerated.
       - name: Build the review site
         id: build_site
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
         env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          PAGES_ENABLED: ${{ steps.pages.outputs.enabled }}
           OWNER: ${{ github.repository_owner }}
           NAME: ${{ github.event.repository.name }}
           REPO: ${{ github.repository }}
           PR: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
         run: |
           LINK="https://$OWNER.github.io/$NAME/pr-$PR/"
+          PAGES_FLAG=""
+          [ "$PAGES_ENABLED" = "0" ] && PAGES_FLAG="--pages-disabled"
           set +e
-          if [ "$CONCLUSION" != "success" ] || [ "$DOWNLOAD_OUTCOME" != "success" ] || [ -f artifact/failed ]; then
-            npx -y codeloom@{{version}} snapshot-site --failed "$RUN_URL" --previous "gh-pages/pr-$PR/data/manifest.json" --link "$LINK" --body body.txt --out site
+          if [ "$MODE" = "failed" ]; then
+            npx -y codeloom@{{version}} snapshot-site --failed "$RUN_URL" --previous "gh-pages/pr-$PR/data/manifest.json" --link "$LINK" $PAGES_FLAG --body body.txt --out site
           else
-            npx -y codeloom@{{version}} snapshot-site --data artifact/data --out site --head "$HEAD_SHA" --pr "$PR" --repo "$REPO" --link "$LINK" --body body.txt
+            npx -y codeloom@{{version}} snapshot-site --data artifact/data --out site --head "$HEAD_SHA" --pr "$PR" --repo "$REPO" --link "$LINK" $PAGES_FLAG --body body.txt
           fi
           CODE=$?
           set -e
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
 
-      - name: Check GitHub Pages is enabled
-        id: pages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          if gh api "repos/$REPO/pages" >/dev/null 2>&1; then
-            echo "enabled=1" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=0" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The visible block is comment.md when the artifact's block was too big for the PR body (body.md
-      # is then the rest of the description, with the old inline block already removed by
-      # snapshot-site); otherwise it's body.md itself. Appended after codeloom wrote its own files, so
-      # this note survives into whichever one is actually shown.
-      - name: Note that Pages is not enabled yet
-        if: steps.pages.outputs.enabled == '0'
-        run: |
-          FILE="site/comment.md"
-          [ -f "$FILE" ] || FILE="site/body.md"
-          if [ -f "$FILE" ]; then
-            {
-              echo ""
-              echo "GitHub Pages is not enabled for this repo yet — enable it under Settings → Pages,"
-              echo "branch \`gh-pages\`, to see the hosted review map."
-            } >> "$FILE"
-          fi
-
-      # Runs whether the build step above succeeded or was refused (exit_code 1): a refusal still
-      # needs the PR updated with the "refused" block codeloom wrote to body.md/comment.md. body.md
-      # and comment.md are not mutually exclusive: over GitHub's body limit, codeloom writes both
-      # (body.md: the description with the block removed; comment.md: the block itself), so both are
-      # applied when present.
-      - name: Update the pull request
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ steps.pr.outputs.number }}
-        run: |
-          if [ -f site/body.md ]; then
-            gh pr edit "$PR" --repo "$REPO" --body-file site/body.md
-          fi
-          if [ -f site/comment.md ]; then
-            ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-              --jq 'map(select(.body != null and (.body | startswith("<!-- codeloom:review:start -->")))) | .[0].id // empty')
-            if [ -n "$ID" ]; then
-              gh api --method PATCH "repos/$REPO/issues/comments/$ID" -f body=@site/comment.md
-            else
-              gh api --method POST "repos/$REPO/issues/$PR/comments" -f body=@site/comment.md
-            fi
-          fi
-
       # Only ever copies what codeloom itself wrote to site/ (this codeloom version's own dashboard
-      # assets plus data/, never anything read directly from the untrusted artifact/), and only when
-      # the build step actually produced a hosted site — a refused artifact never reaches gh-pages.
+      # assets plus data/, never anything read directly from the untrusted artifact/), and only for a
+      # normal snapshot that was actually hosted — never for a failed-build block (mode=failed, which
+      # has no site/data to publish) and never for a refused artifact (exit_code != 0).
       - name: Publish the site to gh-pages
-        if: steps.build_site.outputs.exit_code == '0'
+        if: steps.mode.outputs.mode == 'data' && steps.pr.outputs.valid == '1' && steps.build_site.outputs.exit_code == '0'
         env:
           PR: ${{ steps.pr.outputs.number }}
         run: |
@@ -189,35 +211,74 @@ jobs:
           done
 
       - name: Commit and push gh-pages
-        if: steps.build_site.outputs.exit_code == '0'
+        if: steps.mode.outputs.mode == 'data' && steps.pr.outputs.valid == '1' && steps.build_site.outputs.exit_code == '0'
         working-directory: gh-pages
         env:
           PR: ${{ steps.pr.outputs.number }}
         run: |
           git config user.name "codeloom[bot]"
           git config user.email "codeloom[bot]@users.noreply.github.com"
-          git add "pr-$PR"
+          touch .nojekyll
+          git add .nojekyll "pr-$PR"
           if git diff --cached --quiet; then
             echo "nothing changed for pr-$PR"
           else
             git commit -q -m "codeloom: PR #$PR review map"
-            if ! git push origin gh-pages; then
+            PUSHED=0
+            for attempt in 1 2 3; do
+              if git push origin gh-pages; then
+                PUSHED=1
+                break
+              fi
               git pull --rebase origin gh-pages
-              git push origin gh-pages
+            done
+            if [ "$PUSHED" != "1" ]; then
+              echo "failed to push gh-pages after 3 tries" >&2
+              exit 1
+            fi
+          fi
+
+      # Runs for mode=failed or mode=data (never mode=skip: nothing was built, so there is nothing to
+      # say). Pushed to gh-pages first (above), so by the time the PR points at the hosted link, that
+      # link already works. body.md and comment.md are not mutually exclusive: over GitHub's body
+      # limit, codeloom writes both (body.md: the description with the block removed; comment.md: the
+      # block itself, upserted by finding codeloom's own earlier comment by its start marker).
+      - name: Update the pull request
+        if: steps.mode.outputs.mode != 'skip' && steps.pr.outputs.valid == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          if [ -f site/body.md ]; then
+            gh pr edit "$PR" --repo "$REPO" --body-file site/body.md
+          fi
+          if [ -f site/comment.md ]; then
+            ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp \
+              --jq 'add | map(select(.user.login == "github-actions[bot]" and .body != null and (.body | startswith("<!-- codeloom:review:start -->")))) | .[0].id // empty' \
+              | head -1)
+            if [ -n "$ID" ]; then
+              gh api --method PATCH "repos/$REPO/issues/comments/$ID" -F body=@site/comment.md
+            else
+              gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@site/comment.md
             fi
           fi
 
       # The PR already got its "refused" block above; this just makes the run itself show red, so a
       # refusal is not silently green.
       - name: Fail the run if codeloom refused the artifact
-        if: steps.build_site.outputs.exit_code != '0'
+        if: steps.mode.outputs.mode == 'data' && steps.pr.outputs.valid == '1' && steps.build_site.outputs.exit_code != '0'
+        env:
+          EXIT_CODE: ${{ steps.build_site.outputs.exit_code }}
         run: |
-          echo "codeloom snapshot-site refused the build artifact (exit ${{ steps.build_site.outputs.exit_code }}); see the PR for why." >&2
+          echo "codeloom snapshot-site refused the build artifact (exit $EXIT_CODE); see the PR for why." >&2
           exit 1
 
   cleanup:
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       # A missing gh-pages branch (no PR on this repo ever published a snapshot) is fine — nothing to
       # clean up — so a failed checkout here does not fail the job.
@@ -234,6 +295,12 @@ jobs:
         env:
           PR: ${{ github.event.pull_request.number }}
         run: |
+          case "$PR" in
+            '' | *[!0-9]*)
+              echo "pull_request.number is not a plain integer: $PR" >&2
+              exit 1
+              ;;
+          esac
           git config user.name "codeloom[bot]"
           git config user.email "codeloom[bot]@users.noreply.github.com"
           git rm -rq --ignore-unmatch "pr-$PR"
@@ -241,5 +308,16 @@ jobs:
             echo "nothing to remove for pr-$PR"
           else
             git commit -q -m "codeloom: remove PR #$PR review map"
-            git push origin gh-pages
+            PUSHED=0
+            for attempt in 1 2 3; do
+              if git push origin gh-pages; then
+                PUSHED=1
+                break
+              fi
+              git pull --rebase origin gh-pages
+            done
+            if [ "$PUSHED" != "1" ]; then
+              echo "failed to push gh-pages after 3 tries" >&2
+              exit 1
+            fi
           fi
