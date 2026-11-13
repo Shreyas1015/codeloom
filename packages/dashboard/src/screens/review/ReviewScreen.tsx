@@ -105,12 +105,12 @@ export function ReviewScreen() {
   );
 }
 
-const CELLS: Array<{ key: "files" | "functions" | "journeys" | "tables" | "queues"; caption: string }> = [
-  { key: "files", caption: "files changed" },
-  { key: "functions", caption: "functions" },
-  { key: "journeys", caption: "journeys" },
-  { key: "tables", caption: "tables" },
-  { key: "queues", caption: "queues" },
+const CELLS: Array<{ key: "files" | "functions" | "journeys" | "tables" | "queues"; singular: string; pluralWord: string }> = [
+  { key: "files", singular: "file changed", pluralWord: "files changed" },
+  { key: "functions", singular: "function", pluralWord: "functions" },
+  { key: "journeys", singular: "journey", pluralWord: "journeys" },
+  { key: "tables", singular: "table", pluralWord: "tables" },
+  { key: "queues", singular: "queue", pluralWord: "queues" },
 ];
 
 function CountsRow({ review }: { review: Review }) {
@@ -123,14 +123,17 @@ function CountsRow({ review }: { review: Review }) {
   };
   return (
     <ul aria-label="PR totals" className="flex flex-wrap gap-2">
-      {CELLS.map(({ key, caption }) => (
-        <li key={key} className="flex min-w-[84px] flex-col gap-0.5 rounded-[10px] border border-border bg-card px-3 py-2">
-          <span data-slot="count-value" className="text-xl leading-tight font-bold tracking-[-0.02em] tabular-nums">
-            {fmt.format(counts[key])}
-          </span>
-          <span data-slot="count-caption">{` ${caption}`}</span>
-        </li>
-      ))}
+      {CELLS.map(({ key, singular, pluralWord }) => {
+        const n = counts[key];
+        return (
+          <li key={key} className="flex min-w-[84px] flex-col gap-0.5 rounded-[10px] border border-border bg-card px-3 py-2">
+            <span data-slot="count-value" className="text-xl leading-tight font-bold tracking-[-0.02em] tabular-nums">
+              {fmt.format(n)}
+            </span>
+            <span data-slot="count-caption">{` ${n === 1 ? singular : pluralWord}`}</span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -231,7 +234,7 @@ function ReviewLanes({
                     )}
                   >
                     <StopNum n={s.n} changed={s.changed} size="sm" />
-                    {s.label}
+                    {s.changed ? `✏️ ${s.label}` : s.label}
                   </button>
                 </div>
               ))}

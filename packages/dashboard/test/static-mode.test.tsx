@@ -235,6 +235,28 @@ describe("in static mode", () => {
     expect(within(nav).queryByRole("link", { name: /Progress/ })).not.toBeInTheDocument();
   });
 
+  it('Rail shows "This PR" first, current on /review; Home stays listed but is not current there', async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(url, "http://127.0.0.1");
+        if (u.pathname === "/api/overview") return json(EMPTY_OVERVIEW);
+        if (u.pathname === "/api/journeys") return json({ journeys: [], unnamedChains: [] });
+        return json({ error: "not found" }, 404);
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/review"] }) });
+    render(<App router={router} queryClient={queryClient} />);
+    const rail = await screen.findByRole("complementary", { name: "codeloom" });
+    const nav = within(rail).getByRole("navigation", { name: "Main" });
+    const links = within(nav).getAllByRole("link");
+    expect(links[0]).toHaveAccessibleName(/^This PR/);
+    expect(links[0]).toHaveAttribute("aria-current", "page");
+    const home = within(nav).getByRole("link", { name: /^Home/ });
+    expect(home).not.toHaveAttribute("aria-current");
+  });
+
   it("the search input on the Map screen is hidden", async () => {
     const overview: Overview = {
       ...EMPTY_OVERVIEW,

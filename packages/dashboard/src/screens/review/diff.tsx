@@ -41,7 +41,11 @@ export function diffLines(hunks: ReviewHunk[]): DiffLine[] {
  * `CodeBlock`'s single gutter so Change and Code now/before read as the same code. */
 export function DiffView({ hunks, file }: { hunks: ReviewHunk[]; file?: string }) {
   const lines = diffLines(hunks);
-  const width = Math.max(2, ...lines.map((l) => String(l.oldLine ?? l.newLine ?? "").length));
+  // each gutter sizes to its own column: the old side only ever has old line numbers (never new, since a
+  // pure addition has no old line), so sizing both to whichever number happened to be wider misaligned the
+  // narrower column's digits against the wider one's.
+  const oldWidth = Math.max(2, ...lines.map((l) => String(l.oldLine ?? "").length));
+  const newWidth = Math.max(2, ...lines.map((l) => String(l.newLine ?? "").length));
   return (
     <section aria-label={file ? `${file}, diff` : "Diff"} data-slot="diff-view">
       <pre
@@ -61,10 +65,10 @@ export function DiffView({ hunks, file }: { hunks: ReviewHunk[]; file?: string }
                   l.type === "del" && "bg-diff-delete text-diff-delete-ink",
                 )}
               >
-                <span aria-hidden="true" className="flex-none pr-2 pl-3 text-right tabular-nums text-muted-foreground select-none" style={{ minWidth: `calc(${width}ch + 0.75rem)` }}>
+                <span aria-hidden="true" className="flex-none pr-2 pl-3 text-right tabular-nums text-muted-foreground select-none" style={{ minWidth: `calc(${oldWidth}ch + 0.75rem)` }}>
                   {l.oldLine ?? ""}
                 </span>
-                <span aria-hidden="true" className="flex-none pr-3 text-right tabular-nums text-muted-foreground select-none" style={{ minWidth: `calc(${width}ch + 0.75rem)` }}>
+                <span aria-hidden="true" className="flex-none pr-3 text-right tabular-nums text-muted-foreground select-none" style={{ minWidth: `calc(${newWidth}ch + 0.75rem)` }}>
                   {l.newLine ?? ""}
                 </span>
                 <span aria-hidden="true" className="w-4 flex-none text-center select-none">

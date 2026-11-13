@@ -62,11 +62,11 @@ function useGithubHref(snapshot: SnapshotInfo | null, repoPath: string | undefin
   return href;
 }
 
-/** "+4 −1 lines inside this function.", plus "Also on journey X, Y." for this node's other journeys. */
-function changeSummary(node: ReviewNodeChange, currentJourneyId: string, journeyNameById: Map<string, string>): { counts: string; rest: string } {
-  const others = node.journeys.filter((id) => id !== currentJourneyId).map((id) => journeyNameById.get(id)).filter((n): n is string => !!n);
-  const rest = `lines inside this function.${others.length > 0 ? ` Also on journey ${others.join(", ")}.` : ""}`;
-  return { counts: `+${node.added} −${node.removed}`, rest };
+/** "+4 −1 lines inside this function.", plus the other journeys this node is also a stop of (their names,
+ * bolded as a real `<b>` element by the caller — never markdown asterisks rendered as text). */
+function changeSummary(node: ReviewNodeChange, currentJourneyId: string, journeyNameById: Map<string, string>): { counts: string; others: string } {
+  const names = node.journeys.filter((id) => id !== currentJourneyId).map((id) => journeyNameById.get(id)).filter((n): n is string => !!n);
+  return { counts: `+${node.added} −${node.removed}`, others: names.join(", ") };
 }
 
 export interface ReviewCodePanelProps {
@@ -135,7 +135,13 @@ export function ReviewCodePanel({ stop, node, journeyId, journeyNameById, repoPa
 
       {summary && (
         <p className="rounded-lg border border-ring bg-accent-soft px-3 py-2 text-[12.5px] text-accent-foreground">
-          ✏️ Changed in this PR: <b className="font-bold">{summary.counts}</b> {summary.rest}
+          ✏️ Changed in this PR: <b className="font-bold">{summary.counts}</b> lines inside this function.
+          {summary.others && (
+            <>
+              {" "}
+              Also on journey <b className="font-bold">{summary.others}</b>.
+            </>
+          )}
         </p>
       )}
 

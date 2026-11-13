@@ -194,10 +194,14 @@ describe("Review screen", () => {
     const totals = screen.getByRole("list", { name: "PR totals" });
     const cells = within(totals).getAllByRole("listitem");
     expect(cells[0]).toHaveTextContent("3 files changed");
-    expect(cells[1]).toHaveTextContent("1 functions");
+    // singular below 2, so a substring check against the plural word would hide a regression
+    expect(cells[1]).toHaveTextContent("1 function");
+    expect(cells[1]).not.toHaveTextContent("functions");
     expect(cells[2]).toHaveTextContent("2 journeys");
-    expect(cells[3]).toHaveTextContent("1 tables");
-    expect(cells[4]).toHaveTextContent("1 queues");
+    expect(cells[3]).toHaveTextContent("1 table");
+    expect(cells[3]).not.toHaveTextContent("tables");
+    expect(cells[4]).toHaveTextContent("1 queue");
+    expect(cells[4]).not.toHaveTextContent("queues");
   });
 
   it("lists each affected journey with its changed-stop count and spec pill", async () => {
