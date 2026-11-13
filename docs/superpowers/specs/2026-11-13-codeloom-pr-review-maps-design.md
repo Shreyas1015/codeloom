@@ -47,7 +47,7 @@ A workspace of several separate git repos is out of scope (CI has only the PR's 
 
 `data/` holds the dashboard's API answers, computed once at the PR head by the same handlers the server uses:
 
-- `manifest.json`: `{ version: 1, codeloom, repo, pr?, head, base, builtAt, files: [...] }`. `pr` is filled in by the
+- `manifest.json`: `{ version: 1, codeloom, repo, pr?, head, base, baseRef, builtAt, files: [...] }` (`baseRef` = the `--base` given, for the banner). `pr` is filled in by the
   publish step.
 - Always: `overview`, `journeys`, every `journeys/<id>`, `chains` (default listing), `layers` per repo, every
   `tours/<id>`, `specs`, every `specs/<id>`, `views`, every `views/<id>`.

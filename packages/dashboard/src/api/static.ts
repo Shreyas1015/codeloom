@@ -12,7 +12,10 @@ export interface SnapshotInfo {
   pr?: number;
   repoSlug?: string;
   head: string;
+  /** The merge-base SHA the diff was taken against. */
   base: string;
+  /** What the user passed as `--base` (e.g. "main"), for display; absent in an older snapshot. */
+  baseRef?: string;
   builtAt: string;
   omitted: { mapFolders: string[]; codeFiles: string[] };
 }
@@ -23,6 +26,7 @@ interface ManifestFile {
   version: number;
   head: string;
   base: string;
+  baseRef?: unknown;
   builtAt: string;
   pr?: number;
   repoSlug?: string;
@@ -67,6 +71,7 @@ export async function detectSnapshot(fetchImpl: typeof fetch = fetch): Promise<S
     base: manifest.base,
     builtAt: manifest.builtAt,
     omitted: manifest.omitted ?? { mapFolders: [], codeFiles: [] },
+    ...(typeof manifest.baseRef === "string" && manifest.baseRef !== "" ? { baseRef: manifest.baseRef } : {}),
     ...(manifest.pr !== undefined ? { pr: manifest.pr } : {}),
     ...(manifest.repoSlug !== undefined ? { repoSlug: manifest.repoSlug } : {}),
   };
@@ -82,6 +87,14 @@ export function isSnapshot(): boolean {
 /** The detected snapshot's info (pr, head, base, …), for the banner. `null` outside a snapshot. */
 export function getSnapshot(): SnapshotInfo | null {
   return snapshot;
+}
+
+/** A snapshot's start page is Review (spec §7), but only for a bare link: called once at boot (main.tsx,
+ * before the router exists), it rewrites an empty hash ("", "#", "#/") to "#/review" in place. Any other
+ * hash — and every later visit to "/" (the rail's Home) — is left alone, so Home stays reachable. */
+export function startOnReview(win: { location: { hash: string }; history: { replaceState(data: unknown, unused: string, url: string): void } } = window): void {
+  const hash = win.location.hash;
+  if (hash === "" || hash === "#" || hash === "#/") win.history.replaceState(null, "", "#/review");
 }
 
 // ---- snapshotKey: identical to the writer's packages/cli/src/snapshot/key.ts (fixtures/snapshot-keys.json

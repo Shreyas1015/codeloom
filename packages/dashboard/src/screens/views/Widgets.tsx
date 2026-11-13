@@ -6,6 +6,7 @@ import { FileWarning, TriangleAlert } from "lucide-react";
 import { Component, type ErrorInfo, lazy, type ReactNode, Suspense, useId, useMemo } from "react";
 import { MapStateError } from "@/api/client";
 import { useJourneys, useOverview, useProgress, useSpecs } from "@/api/queries";
+import { isSnapshot } from "@/api/static";
 import type { JourneyProgressView, JourneyRow, JourneySpecRow, Widget } from "@/api/types";
 import { Command } from "@/components/gallery/CopyCommand";
 import { coverageSentence, SpecCoverageTable } from "@/components/gallery/SpecCoverage";
@@ -231,9 +232,16 @@ function JourneyItem({ r, spec, level, specsTab }: { r: JourneyRow; spec?: Journ
 
 // ---- progress -----------------------------------------------------------------------------------
 
+/** A hosted PR snapshot never carries anyone's progress (useProgress is disabled there), so a progress
+ * widget says so instead of loading forever. */
+function NotInSnapshot() {
+  return <EmptyCard>Not in this snapshot: a snapshot never includes your own progress.</EmptyCard>;
+}
+
 function ProgressWidget({ by }: { by: "repo" | "area" }) {
   const { data, error } = useProgress();
   const title = by === "repo" ? "Progress by repo" : "Progress by area";
+  if (isSnapshot()) return <Frame title={title}><NotInSnapshot /></Frame>;
   if (error) return <Frame title={title}><WidgetError error={error} what="Your progress" file="your progress file" /></Frame>;
   if (!data) return <Frame title={title}><Loading label="Loading your progress" /></Frame>;
   const all = stripCounts(data.totals.all);
@@ -307,6 +315,7 @@ function ProgressWidget({ by }: { by: "repo" | "area" }) {
 function ChecksWidget({ limit }: { limit: number }) {
   const { data, error } = useProgress();
   const title = "Recent checks";
+  if (isSnapshot()) return <Frame title={title}><NotInSnapshot /></Frame>;
   if (error) return <Frame title={title}><WidgetError error={error} what="Your progress" file="your progress file" /></Frame>;
   if (!data) return <Frame title={title}><Loading label="Loading your checks" /></Frame>;
   const rows = recentChecks(data, limit);

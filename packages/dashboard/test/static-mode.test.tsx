@@ -6,11 +6,12 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { apiGet, ApiError, apiPost } from "@/api/client";
 import { useMapEvents } from "@/api/events";
-import { detectSnapshot, getSnapshot, isSnapshot, NotInSnapshotError, snapshotKey } from "@/api/static";
+import { detectSnapshot, getSnapshot, isSnapshot, NotInSnapshotError, snapshotKey, startOnReview } from "@/api/static";
 import type { CodeResponse, Overview } from "@/api/types";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { SnapshotBanner } from "@/components/shell/SnapshotBanner";
 import { createAppRouter } from "@/router";
+import { WidgetView } from "@/screens/views/Widgets";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -20,7 +21,8 @@ const MANIFEST = {
   version: 1,
   codeloom: "0.4.0",
   head: "a41c9e2abcdef0123456789abcdef0123456789",
-  base: "main",
+  base: "b52d0f1abcdef0123456789abcdef0123456789",
+  baseRef: "main",
   builtAt: "2026-11-13T00:00:00.000Z",
   pr: 12,
   repoSlug: "acme/widgets",
@@ -97,7 +99,8 @@ describe("detectSnapshot / isSnapshot", () => {
       pr: 12,
       repoSlug: "acme/widgets",
       head: MANIFEST.head,
-      base: "main",
+      base: MANIFEST.base,
+      baseRef: "main",
       builtAt: MANIFEST.builtAt,
       omitted: { mapFolders: [], codeFiles: [] },
     });
@@ -109,6 +112,12 @@ describe("detectSnapshot / isSnapshot", () => {
     const fetch = vi.fn(async () => json({ error: "not found" }, 404));
     expect(await detectSnapshot(fetch)).toBeNull();
     expect(isSnapshot()).toBe(false);
+  });
+
+  it("final review m1: a manifest with no baseRef (or a non-string one) leaves baseRef out", async () => {
+    const { baseRef: _drop, ...noRef } = MANIFEST;
+    expect(await detectSnapshot(vi.fn(async () => json(noRef)))).not.toHaveProperty("baseRef");
+    expect(await detectSnapshot(vi.fn(async () => json({ ...MANIFEST, baseRef: 7 })))).not.toHaveProperty("baseRef");
   });
 
   it("a manifest with an unknown version → null", async () => {
@@ -318,19 +327,46 @@ describe("in static mode", () => {
     expect(screen.queryByPlaceholderText("Find a file or function")).not.toBeInTheDocument();
   });
 
-  it("the default route (\"/\") redirects to /review", async () => {
+  it("final review I5: \"/\" is Home in a snapshot too (the rail's Home works), rendered without progress", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        const u = new URL(url, "http://127.0.0.1");
-        if (u.pathname === "/api/overview") return json(EMPTY_OVERVIEW);
+        if (url === "./data/overview.json") return json(EMPTY_OVERVIEW);
+        if (url === "./data/journeys.json") return json({ journeys: [], unnamedChains: [] });
         return json({ error: "not found" }, 404);
       }),
     );
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const router = createAppRouter({ queryClient, history: createMemoryHistory({ initialEntries: ["/"] }) });
     render(<App router={router} queryClient={queryClient} />);
-    expect(await screen.findByTestId("screen-review")).toBeInTheDocument();
+    expect(await screen.findByTestId("screen-home")).toBeInTheDocument();
+    expect(screen.queryByTestId("screen-review")).not.toBeInTheDocument();
+  });
+
+  it("final review I5: startOnReview sends an empty hash (\"\", \"#\", \"#/\") to #/review and leaves any other hash alone", () => {
+    for (const hash of ["", "#", "#/"]) {
+      const replaceState = vi.fn();
+      startOnReview({ location: { hash }, history: { replaceState } });
+      expect(replaceState, JSON.stringify(hash)).toHaveBeenCalledWith(null, "", "#/review");
+    }
+    for (const hash of ["#/journeys/j_1", "#/map?repo=api", "#/review"]) {
+      const replaceState = vi.fn();
+      startOnReview({ location: { hash }, history: { replaceState } });
+      expect(replaceState, hash).not.toHaveBeenCalled();
+    }
+  });
+
+  it("final review m2: progress and checks widgets say \"Not in this snapshot\" instead of loading forever", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <WidgetView widget={{ type: "progress", by: "repo" }} />
+        <WidgetView widget={{ type: "progress", by: "area" }} />
+        <WidgetView widget={{ type: "checks" }} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getAllByText("Not in this snapshot: a snapshot never includes your own progress.")).toHaveLength(3);
+    expect(screen.queryByLabelText(/Loading your/)).not.toBeInTheDocument();
   });
 
   it("/progress also redirects to /review (a snapshot never has progress, so the screen would load forever)", async () => {
@@ -351,13 +387,29 @@ describe("in static mode", () => {
 });
 
 describe("SnapshotBanner", () => {
-  it('reads "Snapshot of PR #12 · commit a41c9e2 vs main · read-only"', () => {
+  it('reads "Snapshot of PR #12 · commit a41c9e2 vs main · read-only" — the --base the user passed, not the merge-base SHA', () => {
     render(
       <SnapshotBanner
-        snapshot={{ pr: 12, head: "a41c9e2abcdef", base: "main", builtAt: "2026-11-13T00:00:00.000Z", omitted: { mapFolders: [], codeFiles: [] } }}
+        snapshot={{
+          pr: 12,
+          head: "a41c9e2abcdef",
+          base: "b52d0f1abcdef0123456789abcdef0123456789",
+          baseRef: "main",
+          builtAt: "2026-11-13T00:00:00.000Z",
+          omitted: { mapFolders: [], codeFiles: [] },
+        }}
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("Snapshot of PR #12 · commit a41c9e2 vs main · read-only");
+  });
+
+  it("final review m1: with no baseRef, falls back to the base's 7-character SHA", () => {
+    render(
+      <SnapshotBanner
+        snapshot={{ head: "a41c9e2abcdef", base: "b52d0f1abcdef0123456789abcdef0123456789", builtAt: "2026-11-13T00:00:00.000Z", omitted: { mapFolders: [], codeFiles: [] } }}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Snapshot · commit a41c9e2 vs b52d0f1 · read-only");
   });
 });
 

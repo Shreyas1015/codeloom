@@ -319,6 +319,16 @@ describe("validateSnapshotData", () => {
     expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
   });
 
+  it("final review m1: a string manifest.baseRef is kept in the trusted manifest", () => {
+    const dir = validDataDir({ manifestOverrides: { baseRef: "main" } });
+    expect(validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD }).baseRef).toBe("main");
+  });
+
+  it("final review m1: a non-string manifest.baseRef is refused", () => {
+    const dir = validDataDir({ manifestOverrides: { baseRef: { evil: true } } });
+    expect(() => validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD })).toThrow(CodeloomError);
+  });
+
   it("I1'b: a well-formed manifest.tooLarge still passes", () => {
     const dir = validDataDir({ manifestOverrides: { tooLarge: { bytes: 100, max: 50 } } });
     const manifest = validateSnapshotData(dir, { maxBytes: MAX, expectedHead: HEAD });

@@ -150,6 +150,7 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
     codeloom: manifest.codeloom,
     head: manifest.head,
     base: manifest.base,
+    ...(manifest.baseRef !== undefined ? { baseRef: manifest.baseRef } : {}),
     builtAt: manifest.builtAt,
     files: manifest.files,
     omitted: manifest.omitted,

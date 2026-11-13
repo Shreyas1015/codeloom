@@ -137,6 +137,7 @@ export function validateSnapshotData(dataDir: string, opts: ValidateOptions): Sn
     codeloom: extra.data.codeloom,
     head: manifest.head,
     base: extra.data.base,
+    ...(extra.data.baseRef !== undefined ? { baseRef: extra.data.baseRef } : {}),
     builtAt: extra.data.builtAt,
     files: listedFiles,
     omitted: extra.data.omitted,

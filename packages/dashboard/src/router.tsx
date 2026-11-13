@@ -100,10 +100,8 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({ component: Shell
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  // A hosted snapshot's start page is Review, not Home (spec §7): redirect before Home ever renders.
-  beforeLoad: () => {
-    if (isSnapshot()) throw redirect({ to: "/review" });
-  },
+  // A hosted snapshot's start page is Review (spec §7), but that is main.tsx's job (startOnReview, for a
+  // bare link only): "/" itself stays Home, so the rail's Home is reachable in a snapshot too.
   component: HomeRoute,
 });
 
@@ -111,8 +109,8 @@ const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review",
   // Review is the hosted snapshot's start page (spec §7): there is no review data outside a snapshot
-  // (useReview() would 404 forever), so a direct visit there redirects Home — the same pairing as "/" and
-  // "/progress" redirecting to Review once a snapshot is detected.
+  // (useReview() would 404 forever), so a direct visit there redirects Home — the mirror of "/progress"
+  // redirecting to Review once a snapshot is detected.
   beforeLoad: () => {
     if (!isSnapshot()) throw redirect({ to: "/" });
   },
@@ -162,7 +160,7 @@ const progressRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/progress",
   // A snapshot never has progress (review-maps-constraints.md) and useProgress() is disabled there, so
-  // this screen would otherwise load forever: redirect to Review, same as "/" (spec §7).
+  // this screen would otherwise load forever: redirect to Review (spec §7).
   beforeLoad: () => {
     if (isSnapshot()) throw redirect({ to: "/review" });
   },

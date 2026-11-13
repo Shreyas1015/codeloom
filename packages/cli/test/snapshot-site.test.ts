@@ -65,6 +65,7 @@ describe("buildSnapshotSite", () => {
     expect(outManifest.pr).toBe(42);
     expect(outManifest.repoSlug).toBe("acme/widgets");
     expect(outManifest.head).toBe(manifest.head);
+    expect(outManifest.baseRef).toBe("main"); // final review m1: carried through for the banner
   });
 
   it("splices the review block into a PR body file when --body is given", async () => {

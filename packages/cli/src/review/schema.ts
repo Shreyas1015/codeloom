@@ -106,6 +106,8 @@ const nonNegativeFinite = z.number().finite().nonnegative();
 export const manifestFieldsSchema = z.object({
   codeloom: z.string(),
   base: z.string(),
+  // Final review m1: display-only (the banner's "vs main"), rendered as plain text by the dashboard.
+  baseRef: z.string().max(256).optional(),
   builtAt: z.string(),
   omitted: z.object({ mapFolders: z.array(z.string()), codeFiles: z.array(z.string()) }),
   bytes: nonNegativeFinite,

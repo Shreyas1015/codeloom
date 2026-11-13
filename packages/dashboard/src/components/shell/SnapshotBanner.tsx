@@ -6,6 +6,9 @@ import type { SnapshotInfo } from "@/api/static";
  * never dismissed: it is not a transient notice about this page, it is what this page *is*. */
 export function SnapshotBanner({ snapshot }: { snapshot: SnapshotInfo }) {
   const sha = snapshot.head.slice(0, 7);
+  // "vs main" (the --base the user passed), never the 40-character merge-base SHA; an older snapshot with
+  // no baseRef falls back to that SHA's short form.
+  const base = snapshot.baseRef ?? snapshot.base.slice(0, 7);
   return (
     <div
       role="status"
@@ -15,7 +18,7 @@ export function SnapshotBanner({ snapshot }: { snapshot: SnapshotInfo }) {
       <Camera aria-hidden className="size-4 shrink-0" />
       <p>
         {snapshot.pr !== undefined ? `Snapshot of PR #${snapshot.pr}` : "Snapshot"} · commit <code className="font-mono text-[12.5px]">{sha}</code> vs{" "}
-        {snapshot.base} · read-only
+        {base} · read-only
       </p>
     </div>
   );
