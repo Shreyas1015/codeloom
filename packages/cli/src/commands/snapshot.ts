@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodeloomError, dataError } from "../errors.js";
 import { renderReviewMarkdown } from "../review/markdown.js";
-import { buildFailedBlock, buildSnapshotSite, type SiteResult } from "../snapshot/site.js";
+import { buildFailedBlock, buildSnapshotSite, spliceIntoBody, type SiteResult } from "../snapshot/site.js";
 import { writeSnapshotData } from "../snapshot/write.js";
 
 /** `--max-size`: a bare number of bytes, or a number with a b/kb/mb/gb suffix (case-insensitive), e.g.
@@ -70,6 +70,9 @@ export interface SnapshotSiteOptions {
   failed?: string;
   /** Failed-build mode only: the last good snapshot's own data/manifest.json. */
   previousManifest?: string;
+  /** GitHub Pages isn't enabled for this repo (workflow coordination): valid in both modes — the
+   * rendered block gets a one-line note instead of any "Open the full review map" / last-good-map link. */
+  pagesDisabled?: boolean;
 }
 
 function writeSiteOutputs(out: string, result: { reviewMd: string; body?: string; comment?: string }): void {
@@ -93,6 +96,7 @@ export function runSnapshotSite(opts: SnapshotSiteOptions): { exitCode: number }
       previousManifest: opts.previousManifest,
       link: opts.link,
       bodyFile: opts.bodyFile,
+      pagesDisabled: opts.pagesDisabled,
     });
     writeSiteOutputs(opts.out, result);
     return { exitCode: 0 };
@@ -113,11 +117,15 @@ export function runSnapshotSite(opts: SnapshotSiteOptions): { exitCode: number }
       repoSlug: opts.repoSlug,
       link: opts.link,
       bodyFile: opts.bodyFile,
+      pagesDisabled: opts.pagesDisabled,
     });
   } catch (err) {
     if (!(err instanceof CodeloomError)) throw err;
-    mkdirSync(opts.out, { recursive: true });
-    writeFileSync(join(opts.out, "review.md"), renderReviewMarkdown(null, { error: `codeloom review map refused: ${err.message}` }));
+    // The refusal itself has no trusted site to publish — but it must still reach the PR the same way a
+    // successful run would (security review I2): body.md/comment.md when --body was given, not just
+    // review.md, which a workflow that only looks at body.md/comment.md would otherwise silently drop.
+    const reviewMd = renderReviewMarkdown(null, { error: `codeloom review map refused: ${err.message}`, pagesDisabled: opts.pagesDisabled });
+    writeSiteOutputs(opts.out, { reviewMd, ...spliceIntoBody(opts.bodyFile, reviewMd) });
     return { exitCode: 1 };
   }
   writeSiteOutputs(opts.out, result);

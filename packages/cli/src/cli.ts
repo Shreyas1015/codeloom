@@ -90,7 +90,8 @@ export function buildProgram(): Command {
     .option("--link <url>", "the hosted snapshot's URL (or, with --failed, the last good one's)")
     .option("--body <file>", "a file holding the PR's current description, to splice the block into (out/body.md, or out/comment.md over GitHub's body limit)")
     .option("--max-size <size>", 'size cap, e.g. "25MB" (default 25MB)')
-    .action((opts: { out: string; data?: string; head?: string; failed?: string; previous?: string; pr?: string; repo?: string; link?: string; body?: string; maxSize?: string }) => {
+    .option("--pages-disabled", 'GitHub Pages is not enabled for this repo: the block gets a one-line note instead of any "Open the full review map" link (valid with --data or --failed)')
+    .action((opts: { out: string; data?: string; head?: string; failed?: string; previous?: string; pr?: string; repo?: string; link?: string; body?: string; maxSize?: string; pagesDisabled?: boolean }) => {
       const result = runSnapshotSite({
         out: opts.out,
         data: opts.data,
@@ -102,6 +103,7 @@ export function buildProgram(): Command {
         link: opts.link,
         bodyFile: opts.body,
         maxBytes: parseMaxSize(opts.maxSize),
+        pagesDisabled: opts.pagesDisabled,
       });
       process.exitCode = result.exitCode;
     });

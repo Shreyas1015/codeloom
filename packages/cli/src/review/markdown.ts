@@ -20,9 +20,28 @@ export interface ReviewMarkdownOptions {
   tooLarge?: { bytes: number; max: number };
   /** The last snapshot that did build, shown next to `error` so reviewers still have a working link. */
   previous?: { link: string; builtFor: string };
+  /** GitHub Pages isn't enabled for this repo (design spec §6): nothing is hosted, so a one-line note on
+   * enabling it replaces the "Open the full review map" line / the last-good-map link, wherever either
+   * would otherwise appear — even when `link` or `previous` is also given, since there is nothing to
+   * open either way. */
+  pagesDisabled?: boolean;
 }
 
-const mb = (bytes: number): number => Math.round(bytes / 1_000_000);
+const PAGES_DISABLED_LINE = "GitHub Pages is not enabled for this repo: Settings → Pages → Deploy from a branch → `gh-pages`.";
+
+// m3 (security review): binary MB (1024*1024), matching commands/snapshot.ts's own --max-size parser
+// ("25MB" = 25 * 1024 * 1024 bytes) — a decimal 1_000_000 divisor would show that same value back as a
+// different, confusing number ("26 MB" for a 25 MB cap).
+const mb = (bytes: number): number => Math.round(bytes / (1024 * 1024));
+
+/** A finite, non-negative whole number for display — never a raw field straight off a parsed JSON value
+ * (security review I1b, defense in depth: review.json is schema-checked upstream, in snapshot/validate.ts,
+ * but the renderer itself never assumes that already happened, e.g. the local `codeloom review` command
+ * renders a freshly-built Review with no validation step at all). Anything else (not a number, NaN,
+ * Infinity, negative) renders as 0 rather than being interpolated as-is. */
+function safeCount(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;
+}
 
 /** Escapes markdown control characters (spec §5: "every label escaped" — journey/chain names, symbols and
  * file paths all come from the PR branch, so an attacker can put anything in them) and flattens newlines,
@@ -56,7 +75,7 @@ export function codeSpan(text: string): string {
 }
 
 function fileLine(f: ReviewFile): string {
-  return `- ${codeSpan(`${f.repo}/${f.file}`)} (+${f.added}/-${f.removed})`;
+  return `- ${codeSpan(`${f.repo}/${f.file}`)} (+${safeCount(f.added)}/-${safeCount(f.removed)})`;
 }
 
 function listFiles(files: ReviewFile[]): string[] {
@@ -92,10 +111,20 @@ function symbolsFor(review: Review, refs: readonly string[]): string {
     .join(", ");
 }
 
+/** review/types.ts's ReviewJourney.spec union, as a runtime set. Security review I1b (defense in
+ * depth): `j.spec` is checked against this before it's shown, rather than interpolated as-is — again,
+ * belt and suspenders on top of snapshot/validate.ts's upstream schema check, since this same renderer
+ * also runs on a freshly-built, never-validated Review for the local `codeloom review` command. */
+const SPEC_STATES = new Set<Review["journeys"][number]["spec"]>(["linked", "candidates", "none", "unchecked"]);
+
+function specCell(spec: unknown): string {
+  return escapeMarkdownCell(typeof spec === "string" && SPEC_STATES.has(spec as never) ? spec : "unknown");
+}
+
 function journeyTable(review: Review): string[] {
   const rows = [...review.journeys].sort((a, b) => compare(a.name, b.name));
   const lines = ["| Journey | Changed stops | Spec |", "|---|---|---|"];
-  for (const j of rows) lines.push(`| ${escapeMarkdownCell(j.name)} | ${symbolsFor(review, j.changedStops)} | ${j.spec} |`);
+  for (const j of rows) lines.push(`| ${escapeMarkdownCell(j.name)} | ${symbolsFor(review, j.changedStops)} | ${specCell(j.spec)} |`);
   return lines;
 }
 
@@ -128,7 +157,8 @@ function chainsTable(review: Review): string[] {
 export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdownOptions = {}): string {
   if (review === null) {
     const lines = [HEADING, "", opts.error ?? "codeloom review map refused."];
-    if (opts.previous) lines.push("", `Last good map (${opts.previous.builtFor}): ${opts.previous.link}`);
+    if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
+    else if (opts.previous) lines.push("", `Last good map (${opts.previous.builtFor}): ${opts.previous.link}`);
     return lines.join("\n");
   }
 
@@ -147,6 +177,7 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
 
   if (opts.tooLarge) {
     lines.push("", `Full map too large to host (${mb(opts.tooLarge.bytes)} MB > ${mb(opts.tooLarge.max)} MB).`);
+    if (opts.pagesDisabled) lines.push("", PAGES_DISABLED_LINE);
     if (caveat) lines.push("", caveat);
     return lines.join("\n");
   }
@@ -158,7 +189,11 @@ export function renderReviewMarkdown(review: Review | null, opts: ReviewMarkdown
 
   if (caveat) lines.push("", caveat);
 
-  if (opts.link) lines.push("", `→ Open the full review map: ${opts.link}${opts.builtFor ? ` (built for ${opts.builtFor})` : ""}`);
+  if (opts.pagesDisabled) {
+    lines.push("", PAGES_DISABLED_LINE);
+  } else if (opts.link) {
+    lines.push("", `→ Open the full review map: ${opts.link}${opts.builtFor ? ` (built for ${opts.builtFor})` : ""}`);
+  }
 
   return lines.join("\n");
 }

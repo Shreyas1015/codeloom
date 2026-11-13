@@ -122,6 +122,75 @@ describe("buildSnapshotSite", () => {
     expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
     expect(existsSync(outDir)).toBe(false);
   });
+
+  it("C1 (security review, reproduced end to end): a listed \"..\" entry never publishes the artifact root's evil.html/assets/evil.js", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+
+    // The artifact root (a sibling of data/, exactly like a real build artifact's extracted contents)
+    // carries attacker HTML/JS; manifest.files lists ".." alongside the real entries so `join(dataDir,
+    // "..")` would resolve to that root.
+    writeFileSync(join(dataOut, "evil.html"), "<html>pwned</html>");
+    mkdirSync(join(dataOut, "assets"));
+    writeFileSync(join(dataOut, "assets", "evil.js"), "alert(document.cookie)");
+    const manifestPath = join(dataOut, "data", "manifest.json");
+    const onDiskManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    onDiskManifest.files.push("..");
+    writeFileSync(manifestPath, JSON.stringify(onDiskManifest));
+
+    const outDir = tmpOutDir();
+    expect(() => buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head })).toThrow();
+    // Nothing published at all — never mind evil.html/assets/evil.js specifically.
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  it("m4: clears a stale file left over from an earlier run in outDir before writing the fresh site", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const outDir = tmpOutDir();
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "stale-old-asset.js"), "// leftover from a previous codeloom version");
+    mkdirSync(join(outDir, "data"), { recursive: true });
+    writeFileSync(join(outDir, "data", "journeys~stale.json"), "{}"); // a key a newer snapshot no longer has
+
+    buildSnapshotSite({ dataDir: join(dataOut, "data"), outDir, expectedHead: manifest.head });
+
+    expect(existsSync(join(outDir, "stale-old-asset.js"))).toBe(false);
+    expect(existsSync(join(outDir, "data", "journeys~stale.json"))).toBe(false);
+    expect(existsSync(join(outDir, "data", "review.json"))).toBe(true);
+  });
+
+  it("--pages-disabled: the Pages note replaces the link, even when link is also given", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const outDir = tmpOutDir();
+
+    const result = buildSnapshotSite({
+      dataDir: join(dataOut, "data"),
+      outDir,
+      expectedHead: manifest.head,
+      link: "https://acme.github.io/widgets/pr-42/",
+      pagesDisabled: true,
+    });
+
+    expect(result.reviewMd).toContain("GitHub Pages is not enabled for this repo");
+    expect(result.reviewMd).not.toContain("Open the full review map");
+    expect(result.reviewMd).not.toContain("https://acme.github.io/widgets/pr-42/");
+  });
+
+  it("m4: the same-dir case (codeloom snapshot: dataDir === outDir/data) never clears the data it is about to read", async () => {
+    const root = await setUp();
+    const out = tmpOutDir();
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: out });
+
+    const result = buildSnapshotSite({ dataDir: join(out, "data"), outDir: out, expectedHead: manifest.head });
+
+    expect(result.hosted).toBe(true);
+    expect(existsSync(join(out, "data", "review.json"))).toBe(true);
+  });
 });
 
 describe("buildFailedBlock", () => {
@@ -158,6 +227,39 @@ describe("buildFailedBlock", () => {
     const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123", bodyFile });
     expect(result.body).toContain("## My PR");
     expect(result.body).toContain("<!-- codeloom:review:start -->");
+  });
+
+  it("--pages-disabled: valid in --failed mode too, adds the Pages note", () => {
+    const outDir = tmpOutDir();
+    const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/123", pagesDisabled: true });
+    expect(result.reviewMd).toContain("GitHub Pages is not enabled for this repo");
+  });
+
+  it("I4: a missing previous manifest file never crashes — treated as no previous", () => {
+    const outDir = tmpOutDir();
+    const result = buildFailedBlock({
+      outDir,
+      runUrl: "https://github.com/acme/widgets/actions/runs/1",
+      previousManifest: join(tmpdir(), "codeloom-does-not-exist", "manifest.json"),
+      link: "https://acme.github.io/widgets/pr-42/",
+    });
+    expect(result.reviewMd).not.toContain("Last good map");
+  });
+
+  it("I4: unparsable JSON in the previous manifest never crashes — treated as no previous", () => {
+    const outDir = tmpOutDir();
+    const prevManifest = join(mkdtempSync(join(tmpdir(), "codeloom-prev-")), "manifest.json");
+    writeFileSync(prevManifest, "{not json");
+    const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/1", previousManifest: prevManifest, link: "https://x/" });
+    expect(result.reviewMd).not.toContain("Last good map");
+  });
+
+  it("I4: a non-hex / wrong-length head in the previous manifest never crashes — treated as no previous", () => {
+    const outDir = tmpOutDir();
+    const prevManifest = join(mkdtempSync(join(tmpdir(), "codeloom-prev-")), "manifest.json");
+    writeFileSync(prevManifest, JSON.stringify({ head: "not-a-sha" }));
+    const result = buildFailedBlock({ outDir, runUrl: "https://github.com/acme/widgets/actions/runs/1", previousManifest: prevManifest, link: "https://x/" });
+    expect(result.reviewMd).not.toContain("Last good map");
   });
 });
 
@@ -224,11 +326,49 @@ describe("runSnapshotSite (the codeloom snapshot-site command)", () => {
     expect(() => runSnapshotSite({ out: tmpOutDir() })).toThrow();
   });
 
+  it("I2: a validation failure with --body still writes body.md (the refusal spliced in), exit 1", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const out = tmpOutDir();
+    const bodyFile = join(mkdtempSync(join(tmpdir(), "codeloom-body-")), "body.md");
+    writeFileSync(bodyFile, "## Existing PR description");
+
+    const result = runSnapshotSite({ out, data: join(dataOut, "data"), head: "0".repeat(40), bodyFile });
+
+    expect(result.exitCode).toBe(1);
+    expect(existsSync(join(out, "review.md"))).toBe(true);
+    const body = readFileSync(join(out, "body.md"), "utf8");
+    expect(body).toContain("## Existing PR description");
+    expect(body).toContain("codeloom review map refused:");
+  });
+
   it("--failed writes the error block to review.md", () => {
     const out = tmpOutDir();
     const result = runSnapshotSite({ out, failed: "https://github.com/acme/widgets/actions/runs/1" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(join(out, "review.md"), "utf8")).toContain("https://github.com/acme/widgets/actions/runs/1");
+  });
+
+  it("--pages-disabled in data mode: review.md carries the Pages note, no link", async () => {
+    const root = await setUp();
+    const dataOut = mkdtempSync(join(tmpdir(), "codeloom-data-"));
+    const manifest = await writeSnapshotData(root, { baseRef: "main", outDir: dataOut });
+    const out = tmpOutDir();
+
+    const result = runSnapshotSite({ out, data: join(dataOut, "data"), head: manifest.head, link: "https://acme.github.io/widgets/pr-7/", pagesDisabled: true });
+
+    expect(result.exitCode).toBe(0);
+    const reviewMd = readFileSync(join(out, "review.md"), "utf8");
+    expect(reviewMd).toContain("GitHub Pages is not enabled for this repo");
+    expect(reviewMd).not.toContain("acme.github.io");
+  });
+
+  it("--pages-disabled in --failed mode: review.md carries the Pages note", () => {
+    const out = tmpOutDir();
+    const result = runSnapshotSite({ out, failed: "https://github.com/acme/widgets/actions/runs/1", pagesDisabled: true });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(out, "review.md"), "utf8")).toContain("GitHub Pages is not enabled for this repo");
   });
 });
 
@@ -242,7 +382,7 @@ describe("codeloom snapshot / snapshot-site (cli wiring)", () => {
     expect(snapshot.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--base", "--out", "--max-size", "--data-only"]));
     expect(snapshotSite).toBeDefined();
     expect(snapshotSite.options.map((o) => o.long)).toEqual(
-      expect.arrayContaining(["--out", "--data", "--head", "--failed", "--previous", "--pr", "--repo", "--link", "--body", "--max-size"]),
+      expect.arrayContaining(["--out", "--data", "--head", "--failed", "--previous", "--pr", "--repo", "--link", "--body", "--max-size", "--pages-disabled"]),
     );
   });
 

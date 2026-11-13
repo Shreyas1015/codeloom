@@ -209,12 +209,69 @@ describe("renderReviewMarkdown", () => {
     expect(out).toContain("Last good map (a41c9e2): https://x.github.io/demo/pr-1/");
   });
 
+  // --- pagesDisabled (workflow coordination): nothing is hosted, so no link anywhere ------------------
+
+  it("pagesDisabled + a failed build: the Pages note replaces any last-good-map link", () => {
+    const out = renderReviewMarkdown(null, {
+      error: "codeloom index failed: see the run log.",
+      previous: { link: "https://x.github.io/demo/pr-1/", builtFor: "a41c9e2" },
+      pagesDisabled: true,
+    });
+    expect(out).toContain("GitHub Pages is not enabled for this repo: Settings → Pages → Deploy from a branch → `gh-pages`.");
+    expect(out).not.toContain("Last good map");
+    expect(out).not.toContain("https://x.github.io/demo/pr-1/");
+  });
+
+  it("pagesDisabled on a normal build: the Pages note replaces the Open-the-full-map link, even when a link is given", () => {
+    const out = renderReviewMarkdown(baseReview(), { link: "https://x.github.io/demo/pr-1/", builtFor: "a41c9e2", pagesDisabled: true });
+    expect(out).toContain("```mermaid"); // summary + diagram still shown
+    expect(out).toContain("| Journey | Changed stops | Spec |"); // and the table
+    expect(out).toContain("GitHub Pages is not enabled for this repo: Settings → Pages → Deploy from a branch → `gh-pages`.");
+    expect(out).not.toContain("Open the full review map");
+    expect(out).not.toContain("https://x.github.io/demo/pr-1/");
+  });
+
+  it("pagesDisabled + tooLarge: the Pages note is shown alongside the too-large message", () => {
+    const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 38 * 1024 * 1024, max: 25 * 1024 * 1024 }, pagesDisabled: true });
+    expect(out).toContain("Full map too large to host (38 MB > 25 MB).");
+    expect(out).toContain("GitHub Pages is not enabled for this repo: Settings → Pages → Deploy from a branch → `gh-pages`.");
+  });
+
   it("reports a too-large snapshot after the summary and diagram, with no link", () => {
-    const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 38_000_000, max: 25_000_000 }, link: "https://should-not-appear" });
+    // m3 (security review): binary MB (1024*1024), matching commands/snapshot.ts's own --max-size
+    // parser ("25MB" = 26,214,400 bytes) — not the decimal 1_000_000 convention, which would show this
+    // exact --max-size value back as "26 MB" instead of "25 MB".
+    const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 38 * 1024 * 1024, max: 25 * 1024 * 1024 }, link: "https://should-not-appear" });
     expect(out).toContain("```mermaid");
     expect(out).toContain("Full map too large to host (38 MB > 25 MB).");
     expect(out).not.toContain("should-not-appear");
     expect(out).not.toContain("Open the full review map");
+  });
+
+  it("m3: --max-size's own default (25 * 1024 * 1024 bytes) reads back as exactly 25 MB", () => {
+    const out = renderReviewMarkdown(baseReview(), { tooLarge: { bytes: 26 * 1024 * 1024, max: 25 * 1024 * 1024 } });
+    expect(out).toContain("26 MB > 25 MB");
+  });
+
+  // --- I1b defense in depth: the renderer itself never trusts a field's type, even post-schema -------
+
+  it("I1b: a spec value outside the known enum never reaches the PR verbatim (defense in depth)", () => {
+    const review = baseReview({
+      journeys: [{ id: "j_1", name: "Create a customer", changedStops: [CHANGED_REF], spec: "pwned" as Review["journeys"][number]["spec"], chains: ["ch_1"] }],
+    });
+    const out = renderReviewMarkdown(review, {});
+    expect(out).not.toContain("pwned");
+  });
+
+  it("I1b: a non-numeric added/removed count renders as 0, never crashing or leaking raw content (defense in depth)", () => {
+    const review = baseReview({
+      files: [
+        { repo: "api", file: "a.ts", added: "<script>evil</script>" as unknown as number, removed: Number.NaN, onJourney: false },
+      ],
+    });
+    const out = renderReviewMarkdown(review, {});
+    expect(out).not.toContain("<script>");
+    expect(out).toContain("(+0/-0)");
   });
 
   it("renders a caveat line for notes and a truncated result, so an approximate/cut map is visible", () => {
