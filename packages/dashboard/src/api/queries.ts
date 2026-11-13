@@ -14,6 +14,7 @@ import type {
   Overview,
   ProgressResponse,
   ProgressWriteResponse,
+  Review,
   SearchKind,
   SearchResult,
   SpecsResponse,
@@ -44,6 +45,7 @@ export const queryKeys = {
   views: () => ["views"] as const,
   view: (id: string) => ["view", id] as const,
   doc: (repo: string, file: string) => ["doc", repo, file] as const,
+  review: () => ["review"] as const,
 };
 
 const enc = encodeURIComponent;
@@ -170,6 +172,13 @@ export function useDoc(repo: string | undefined, file: string | undefined) {
     queryFn: () => apiGet<DocResponse>("/api/docs", { repo: repo!, file: file! }),
     enabled: !!repo && !!file,
   });
+}
+
+/** The impact of this PR (spec §3, §7): changed files and functions, the journeys and chains they touch.
+ * Only meaningful in a hosted snapshot, where it reads `data/review.json`; the `/review` route (router.tsx)
+ * is reached only there. */
+export function useReview() {
+  return useQuery({ queryKey: queryKeys.review(), queryFn: () => apiGet<Review>("/api/review") });
 }
 
 /** After a progress write:the screens that show levels refetch (the watcher would also say so, later). */

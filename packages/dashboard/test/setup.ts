@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { webcrypto } from "node:crypto";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
@@ -12,6 +13,14 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     unobserve() {}
     disconnect() {}
   };
+}
+
+// jsdom implements no SubtleCrypto; the Review code panel hashes a file path for its GitHub link
+// (crypto.subtle.digest). Node's own webcrypto has it, so borrow that one function in tests.
+// `subtle` is typed read-only on Crypto; jsdom's instance never defines it, so this adds it rather
+// than reassigning an existing property.
+if (typeof globalThis.crypto?.subtle === "undefined") {
+  Object.defineProperty(globalThis.crypto, "subtle", { value: webcrypto.subtle, configurable: true });
 }
 
 afterEach(() => {

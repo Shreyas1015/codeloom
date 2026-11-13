@@ -107,7 +107,17 @@ const indexRoute = createRoute({
   component: HomeRoute,
 });
 
-const reviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/review", component: ReviewRoute });
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/review",
+  // Review is the hosted snapshot's start page (spec §7): there is no review data outside a snapshot
+  // (useReview() would 404 forever), so a direct visit there redirects Home — the same pairing as "/" and
+  // "/progress" redirecting to Review once a snapshot is detected.
+  beforeLoad: () => {
+    if (!isSnapshot()) throw redirect({ to: "/" });
+  },
+  component: ReviewRoute,
+});
 
 const journeyRoute = createRoute({
   getParentRoute: () => rootRoute,
