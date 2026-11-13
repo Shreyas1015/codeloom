@@ -50,7 +50,11 @@ export function renderMermaid(review: Review, maxNodes = DEFAULT_MAX_NODES): str
   };
 
   for (const chainId of review.chains) {
-    const stops = review.chainStops[chainId] ?? [];
+    // Own-key lookup only (security review I1'a): review.chainStops is a plain object, and a chain id
+    // that collides with an inherited Object.prototype property name (e.g. "constructor") would
+    // otherwise resolve to that inherited FUNCTION instead of undefined — `?? []` never catches that,
+    // since a function is never nullish, and stops.forEach would then throw.
+    const stops = Object.hasOwn(review.chainStops, chainId) ? review.chainStops[chainId]! : [];
     const idAt: string[] = [];
     stops.forEach((s, i) => {
       const id = idFor(s.ref);

@@ -7,6 +7,7 @@ import { codeloomBin, formatInit, runInit } from "./commands/init.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
 import { parseReviewFormat, runReview } from "./commands/review.js";
 import { runServeCommand } from "./commands/serve.js";
+import { parseMaxSize, parsePrNumber, runSnapshot, runSnapshotSite } from "./commands/snapshot.js";
 import { formatViewsList, runViewsReset } from "./commands/views.js";
 import { VERSION } from "./version.js";
 
@@ -62,6 +63,49 @@ export function buildProgram(): Command {
     .action((opts: { base: string; format: string; link?: string }) => {
       const { output } = runReview(process.cwd(), { base: opts.base, format: parseReviewFormat(opts.format), link: opts.link });
       console.log(output);
+    });
+
+  program
+    .command("snapshot")
+    .description("Write a hosted PR snapshot's data/*.json for merge-base(<ref>, HEAD)..HEAD, and, unless --data-only, the dashboard site + review.md next to it")
+    .requiredOption("--base <ref>", 'the ref to compare against, e.g. "origin/main"')
+    .requiredOption("--out <dir>", "folder to write the snapshot into")
+    .option("--max-size <size>", 'size cap for the snapshot, e.g. "25MB" (default 25MB)')
+    .option("--data-only", "write only data/*.json: no dashboard assets, no review.md (the untrusted build step)")
+    .action(async (opts: { base: string; out: string; maxSize?: string; dataOnly?: boolean }) => {
+      const result = await runSnapshot(process.cwd(), { base: opts.base, out: opts.out, maxBytes: parseMaxSize(opts.maxSize), dataOnly: opts.dataOnly });
+      process.exitCode = result.exitCode;
+    });
+
+  program
+    .command("snapshot-site")
+    .description("The trusted publish step: validate a build artifact's data/*.json, add this codeloom version's dashboard assets, and write the PR block")
+    .requiredOption("--out <dir>", "folder to write the site, review.md and body.md/comment.md into")
+    .option("--data <dir>", "the build artifact's data/ folder to validate and publish")
+    .option("--head <sha>", "the event's own head SHA; must match data/manifest.json's head")
+    .option("--failed <run-url>", "the build itself failed: write only the error block, linking to this run")
+    .option("--previous <manifest>", 'with --failed: the last good snapshot\'s own data/manifest.json, for the "last good map" link')
+    .option("--pr <n>", "pull request number, filled into the manifest")
+    .option("--repo <owner/name>", "repo slug, filled into the manifest")
+    .option("--link <url>", "the hosted snapshot's URL (or, with --failed, the last good one's)")
+    .option("--body <file>", "a file holding the PR's current description, to splice the block into (out/body.md, or out/comment.md over GitHub's body limit)")
+    .option("--max-size <size>", 'size cap, e.g. "25MB" (default 25MB)')
+    .option("--pages-disabled", 'GitHub Pages is not enabled for this repo: the block gets a one-line note instead of any "Open the full review map" link (valid with --data or --failed)')
+    .action((opts: { out: string; data?: string; head?: string; failed?: string; previous?: string; pr?: string; repo?: string; link?: string; body?: string; maxSize?: string; pagesDisabled?: boolean }) => {
+      const result = runSnapshotSite({
+        out: opts.out,
+        data: opts.data,
+        head: opts.head,
+        failed: opts.failed,
+        previousManifest: opts.previous,
+        pr: parsePrNumber(opts.pr),
+        repoSlug: opts.repo,
+        link: opts.link,
+        bodyFile: opts.body,
+        maxBytes: parseMaxSize(opts.maxSize),
+        pagesDisabled: opts.pagesDisabled,
+      });
+      process.exitCode = result.exitCode;
     });
 
   program
