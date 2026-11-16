@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-11-16 (GitHub release and npm)
+
+- Fix: a function or class named like a built-in object member (`valueOf`, `toString`, `constructor`, …)
+  made `codeloom index` write a `graph.json` that codeloom's own checks then refused, so `check`, the
+  dashboard and the MCP tools failed for that repo. Such names now get an empty summary like any other.
+
 ## 0.4.0 — 2026-11-13 (GitHub release and npm)
 
 PR review maps, for public GitHub repos:

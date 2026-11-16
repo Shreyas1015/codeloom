@@ -57,6 +57,12 @@ const KIND_TO_NODE_TYPE: Record<string, GraphNode["type"]> = {
   output: "config",
 };
 
+/** A summary for `name` only if `summaries` really has one: a plain-object lookup of `valueOf`,
+ * `toString` or `constructor` would otherwise return Object.prototype's function, which JSON drops. */
+function ownSummary(summaries: Record<string, string>, name: string): string {
+  return Object.hasOwn(summaries, name) && typeof summaries[name] === "string" ? summaries[name]! : "";
+}
+
 export class GraphBuilder {
   private readonly nodes: GraphNode[] = [];
   private readonly edges: GraphEdge[] = [];
@@ -137,7 +143,7 @@ export class GraphBuilder {
         name: fn.name,
         filePath,
         lineRange: fn.lineRange,
-        summary: meta.summaries[fn.name] ?? "",
+        summary: ownSummary(meta.summaries, fn.name),
         tags: [],
         complexity: meta.complexity,
       });
@@ -161,7 +167,7 @@ export class GraphBuilder {
         name: cls.name,
         filePath,
         lineRange: cls.lineRange,
-        summary: meta.summaries[cls.name] ?? "",
+        summary: ownSummary(meta.summaries, cls.name),
         tags: [],
         complexity: meta.complexity,
       });
