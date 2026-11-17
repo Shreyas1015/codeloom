@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-11-17 (GitHub release and npm)
 
 PR reviews you can read, set up in one step:
 
