@@ -5,6 +5,8 @@ import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import { chainId } from "../src/linker/chains.js";
 import { saveJourneysTool } from "../src/mcp/tools/journeys.js";
+import { renderReviewDraft } from "../src/review/markdown.js";
+import { packetForReview } from "../src/review/packet.js";
 import { buildReview } from "../src/review/build.js";
 import type { Review } from "../src/review/types.js";
 import { git } from "../src/workspace/git.js";
@@ -148,7 +150,9 @@ describe("buildReview", () => {
     }
     expect(threw).toBeInstanceOf(CodeloomError);
     expect((threw as CodeloomError).exitCode).toBe(2);
-    expect((threw as CodeloomError).message).toBe(`${root} is not a git repository. "codeloom review" needs the workspace's own git history.`);
+    // 0.5 (spec §2): the 0.4 "root must be a git repo" error is replaced — a folder of repos works with
+    // --repo; with no git history anywhere, it says so.
+    expect((threw as CodeloomError).message).toBe(`${root} is not a git repository, and neither is any repo in it. "codeloom review" needs git history.`);
   });
 });
 
@@ -399,5 +403,117 @@ describe("buildReview — real two-chain review (I1: distinct stop refs, real br
     const fromRefs = new Set(dbStops.map((s) => createChainStops[s.from!]!.ref));
     expect(fromRefs.size).toBe(1);
     expect([...fromRefs][0]).toContain("CustomerService.create");
+  });
+});
+
+describe("buildReview — v0.5 acceptance: a new upsert service on a changed chain", () => {
+  const UPSERT_SERVICE = [
+    'import db from "@adonisjs/lucid/services/db";',
+    'import Customer from "#models/customer";',
+    "",
+    "export class CustomerUpsertService {",
+    "  public static buildUpsert(client: any, values: { email: string }) {",
+    "    const row = { ...values };",
+    '    return client.knexQuery().table(Customer.table).insert({ ...row }).onConflict(["email"]).merge({ ...row }).returning("*");',
+    "  }",
+    "",
+    "  public static async upsert(values: { email: string }, trx?: any) {",
+    "    const client = trx ?? db.connection();",
+    "    const [row] = await this.buildUpsert(client, values);",
+    "    return Customer.$createFromAdapterResult(row);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  it("lists the new file's functions in Code to check and follows the changed method into the upsert's write", async () => {
+    const root = await setUp();
+    git(root, ["checkout", "-q", "-b", "feature"]);
+    writeFileSync(join(root, "api/app/services/CustomerUpsertService.ts"), UPSERT_SERVICE);
+    commitChange(
+      root,
+      "api/app/services/customer_service.ts",
+      (t) =>
+        t
+          .replace('import Customer from "#models/customer";\n', 'import Customer from "#models/customer";\nimport { CustomerUpsertService } from "#services/CustomerUpsertService";\n')
+          .replace("await Customer.create(payload)", "await CustomerUpsertService.upsert(payload)"),
+      "save customers with an upsert",
+    );
+    await runIndex(root); // the real CI flow: indexed at the PR head
+
+    const review = buildReview(root, "main");
+    const symbols = review.nodes.map((n) => n.symbol);
+    expect(symbols).toEqual(expect.arrayContaining([
+      "CustomerService.create",
+      "CustomerUpsertService.upsert",
+      "CustomerUpsertService.buildUpsert",
+    ]));
+    for (const s of ["CustomerUpsertService.upsert", "CustomerUpsertService.buildUpsert"]) {
+      const n = review.nodes.find((x) => x.symbol === s)!;
+      expect(n.before).toBeNull();
+      expect(n.after).not.toBeNull();
+      expect(n.added).toBeGreaterThan(0);
+    }
+    expect(review.nodes.find((n) => n.symbol === "CustomerService.create")!.before).not.toBeNull();
+
+    expect(review.writes).toContain("customers");
+    expect(review.readsOnly).not.toContain("customers");
+
+    const chain = review.chainStops[CREATE_CUSTOMER_CHAIN]!;
+    expect(chain).toBeDefined();
+    const at = (pred: (s: (typeof chain)[number]) => boolean) => chain.findIndex(pred);
+    const route = at((s) => s.lane === "api" && s.label.includes("POST /api/customers"));
+    const controller = at((s) => s.label.includes("CustomersController.store"));
+    const service = at((s) => s.label.includes("CustomerService.create"));
+    const upsert = at((s) => s.label.includes("CustomerUpsertService.upsert"));
+    const write = at((s) => s.lane === "db" && /^customers \((insert|update)\)$/.test(s.label));
+    for (const i of [route, controller, service, upsert, write]) expect(i).toBeGreaterThanOrEqual(0);
+    expect(route).toBeLessThan(controller);
+    expect(controller).toBeLessThan(service);
+    expect(service).toBeLessThan(upsert);
+    expect(upsert).toBeLessThan(write);
+  });
+});
+
+describe("buildReview — v0.5 acceptance fix: test files are not Code to check", () => {
+  const TEST_HELPER = [
+    'import { describe, it, expect } from "vitest";',
+    "",
+    "export function rowsOf(result: { rows: unknown[] }) {",
+    "  return result.rows;",
+    "}",
+    "",
+    'describe("CustomerService", () => {',
+    '  it("works", () => {',
+    "    expect(rowsOf({ rows: [] })).toEqual([]);",
+    "  });",
+    "});",
+    "",
+  ].join("\n");
+
+  it("keeps a new test file's functions out of Code to check, the diagram and uncited facts, but counts the file in Also changed", async () => {
+    const root = await setUp();
+    git(root, ["checkout", "-q", "-b", "feature"]);
+    mkdirSync(join(root, "api/tests/unit"), { recursive: true });
+    writeFileSync(join(root, "api/tests/unit/customer_service.spec.ts"), TEST_HELPER);
+    commitChange(
+      root,
+      "api/app/services/customer_service.ts",
+      (t) => t.replace(AUDIT_LOG_LINE, VALIDATE_LINES),
+      "add a test helper alongside a real change",
+    );
+    await runIndex(root);
+
+    const review = buildReview(root, "main");
+    const symbols = review.nodes.map((n) => n.symbol);
+    expect(symbols).toContain("CustomerService.create");
+    expect(symbols).not.toContain("rowsOf");
+
+    const draft = renderReviewDraft(review);
+    expect(draft).not.toMatch(/rowsOf/);
+    expect(draft).toMatch(/Also changed: 1 file — tests/);
+
+    const packet = packetForReview(root, review);
+    expect(packet.facts.functions).not.toContain("rowsOf");
   });
 });

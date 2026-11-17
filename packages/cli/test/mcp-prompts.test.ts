@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
+import { nameJourneysPromptText } from "../src/mcp/prompts.js";
 import { createServer } from "../src/mcp/server.js";
 
 async function connect(): Promise<Client> {
@@ -43,6 +44,9 @@ describe("mcp prompts", () => {
     expect(t).toContain("unnamed");
     expect(t).toContain("offset");
     expect(t).toContain("save_journeys");
+    // The headless Claude runner (codeloom init's "name journeys now?" step) uses this exported function
+    // instead of its own copy of the text; the MCP prompt and the headless run must agree verbatim.
+    expect(t).toBe(nameJourneysPromptText());
     expect(t).toContain("create");
     expect(t).toContain("area");
     expect(t).toContain("chainIds");

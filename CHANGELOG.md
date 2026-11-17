@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0 — unreleased
+
+PR reviews you can read, set up in one step:
+
+- `codeloom init` is a guided setup: it picks one checkout per repo (duplicates of the same remote are
+  unticked), asks whether to commit codeloom's files or keep them local (`.git/info/exclude`, no hooks),
+  builds the map, connects Claude Code when it is installed and offers to open the dashboard. `--yes` takes
+  the defaults and never starts Claude or the dashboard. Run again, it offers only what is missing (and to
+  update an older pinned Claude Code entry, which `codeloom doctor` now recognises as codeloom's own).
+- `codeloom review` writes a plain draft from facts, with no AI: where the change matters (entry points,
+  named by journey), what the changed code writes (and what it only reads), ⚠ before deploying (migration,
+  schema, env, Docker and CI files), the changed functions to check and a small diagram of the changed path.
+  `--repo <id>` reviews one repo in a folder of repos; the 0.4 layout is `--format full`.
+- Claude checks the draft: `codeloom review --check` (or the `check-pr` prompt) sends Claude a small packet
+  (at most 24,000 characters: the draft, the changed lines, the commit messages). Claude writes "What it
+  does", may replace "Where it matters" and may add items or notes; the facts codeloom detected (writes,
+  risks, changed functions) always stay. `save_pr_review` refuses names that
+  are not in the packet. The run is isolated: no built-in tools, only codeloom's save tool. codeloom asks
+  before starting Claude.
+- Workspace `proxies`: a UI repo whose calls go through its own proxy route (`/api/core/*`) is linked to the
+  backend repo's real routes. Generated API clients built by a local factory (`backendClient('core')`) are
+  followed too.
+- Reading code: knex queries through Lucid (`knexQuery().table(Model.table)…`) are database reads and writes.
+
 ## 0.4.1 — 2026-11-16 (GitHub release and npm)
 
 - Fix: a function or class named like a built-in object member (`valueOf`, `toString`, `constructor`, …)

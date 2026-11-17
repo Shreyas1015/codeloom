@@ -191,6 +191,18 @@ export function defaultRepoConfig(): RepoConfig {
 export const RepoRoleSchema = z.enum(["ui", "api", "worker", "lib"]);
 export type RepoRole = z.infer<typeof RepoRoleSchema>;
 
+/** A backend-for-frontend proxy rule (spec §4): a UI call whose URL starts with `from` is also matched,
+ * with the prefix stripped (default) or kept (`stripPrefix: false`), against `to`'s routes — a repo id
+ * that must be another repo in this workspace (validated when the workspace file is loaded). The repo's
+ * own route (e.g. a catch-all proxy route) keeps its usual chain; a proxy match adds a further one,
+ * continuing into `to`'s handler and tables. */
+export const ProxyRuleSchema = z.object({
+  from: z.string().regex(/^\//, 'proxies[].from must start with "/"'),
+  to: z.string().min(1),
+  stripPrefix: z.boolean().optional(),
+});
+export type ProxyRule = z.infer<typeof ProxyRuleSchema>;
+
 export const RepoRefSchema = z.object({
   id: z.string(),
   path: z.string(),
@@ -198,6 +210,8 @@ export const RepoRefSchema = z.object({
   role: RepoRoleSchema.optional(),
   /** Env var names (e.g. "NEXT_PUBLIC_API_URL") or hosts ("api.example.com") whose calls go to this repo. */
   apiBase: z.array(z.string()).optional(),
+  /** Backend-for-frontend proxy rules (spec §4): see ProxyRuleSchema. */
+  proxies: z.array(ProxyRuleSchema).optional(),
 });
 export type RepoRef = z.infer<typeof RepoRefSchema>;
 

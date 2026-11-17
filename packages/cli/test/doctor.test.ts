@@ -14,6 +14,7 @@ import { RepoConfigSchema } from "../src/store/schemas.js";
 import { progressPath } from "../src/store/progress.js";
 import { stopKey } from "../src/store/stop-key.js";
 import { writeTour } from "../src/store/tours.js";
+import { VERSION } from "../src/version.js";
 import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
 
 const REPOS = ["api", "billing", "web"];
@@ -439,6 +440,36 @@ describe("codeloom doctor", { timeout: 90_000 }, () => {
     const w = runDoctor(root, { fix: true });
     expect(statusOf(w, "workspace")).toBe("error");
     expect(readFileSync(join(root, "codeloom.workspace.json"), "utf8")).toBe("{ nope");
+  });
+
+  // Review fix 5: doctor reports `proxies` problems (via the same `proxyProblems` loadWorkspace uses)
+  // under the workspace file check, without blocking the other checks the way a load failure would.
+  it("reports a bad `proxies` rule under the workspace check, without skipping the per-repo checks", () => {
+    const root = shop();
+    const wsFile = join(root, "codeloom.workspace.json");
+    const wsJson = JSON.parse(readFileSync(wsFile, "utf8")) as { repos: Array<{ id: string }> };
+    wsJson.repos = wsJson.repos.map((r) => (r.id === "demo-web" ? { ...r, proxies: [{ from: "/api/core", to: "ghost" }] } : r));
+    writeFileSync(wsFile, JSON.stringify(wsJson));
+    const r = runDoctor(root, {});
+    const ws = r.items.filter((i) => i.check === "workspace");
+    expect(ws.some((i) => i.status === "error" && /unknown repo "ghost"/.test(i.message))).toBe(true);
+    // the workspace file still parsed, so per-repo checks still ran
+    expect(statusOf(r, "graph", "demo-web")).toBe("ok");
+  });
+
+  it("recognises the init wizard's pinned .mcp.json entry as codeloom's own, and an older pin as out of date", () => {
+    const root = shop();
+    const mcpItem = () => runDoctor(root, {}).items.find((i) => i.check === "mcp")!;
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { codeloom: { command: "npx", args: ["-y", `codeloom@${VERSION}`, "serve"] } } }));
+    expect(mcpItem().status).toBe("ok");
+    expect(mcpItem().message).toBe(`.mcp.json has the codeloom entry (codeloom@${VERSION})`);
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { codeloom: { command: "npx", args: ["-y", "codeloom@0.3.0", "serve"] } } }));
+    expect(mcpItem().status).toBe("warn");
+    expect(mcpItem().message).not.toContain("custom");
+    expect(mcpItem().message).toContain("codeloom@0.3.0");
+    expect(mcpItem().message).toContain('"codeloom init"');
+    writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { codeloom: { command: "node", args: ["./my-codeloom.js"] } } }));
+    expect(mcpItem().message).toBe("custom codeloom entry");
   });
 
   it("an unusable .mcp.json says which problem it has: not valid JSON vs mcpServers not an object", () => {

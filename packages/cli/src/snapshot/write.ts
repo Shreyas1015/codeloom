@@ -153,7 +153,9 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const builtAt = (opts.now ? opts.now() : new Date()).toISOString();
 
-  const review = buildReview(start, opts.baseRef);
+  // Folders of separate repos (`--repo`) are a `codeloom review` feature only: a snapshot still needs the
+  // workspace root to be the one git repo, wherever inside it this runs.
+  const review = buildReview(start, opts.baseRef, { wholeWorkspaceOnly: true });
   const ws = loadWorkspace(start);
   const repoIds = [...ws.repos.map((r) => r.id)].sort(compare);
 

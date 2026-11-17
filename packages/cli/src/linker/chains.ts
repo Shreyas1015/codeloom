@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
 import { isComplete } from "./completeness.js";
 import { parseLinkRef, stepKey, uiReachKey } from "./link.js";
-import type { BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, StoreHit, UiLink } from "./link.js";
+import type { BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, RouteTarget, StoreHit, UiLink } from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
 import type { EffectiveRoute } from "./mounts.js";
 import { routeKey } from "./mounts.js";
@@ -358,8 +358,6 @@ function dropUnlabeledDb<L extends BackendLink | ConsumerLink>(link: L): L {
   return { ...link, hits: link.hits.filter((h) => !unlabeled(h)), unresolved: [...link.unresolved, ...extra] };
 }
 
-type RouteTarget = Extract<UiLink["target"], { kind: "route" }>;
-
 /** A route's identity: repo + where it is registered + method + effective path. Two routers that both
  * register `GET /:id` share a routeKey but never an identity. */
 function routeIdentity(er: EffectiveRoute): string {
@@ -567,7 +565,10 @@ export function buildChainsAndLinks(
   }
   const consumers = new Map(links.consumers.map((c) => [queueKey(c.repo, c.consume), c]));
   const ctx: Ctx = { ws, symbolLine, pairs, consumers, parents: new WeakMap() };
-  const uiTargets = links.ui.flatMap((l) => (l.target.kind === "route" ? [l.target.route] : []));
+  // Every route a UI link reaches: its own-repo match (target.kind === "route"), plus any found through
+  // the repo's workspace `proxies` (spec §4) — the own match is untouched; proxied ones are extra.
+  const routeTargetsOf = (l: UiLink): RouteTarget[] => (l.target.kind === "route" ? [l.target, ...(l.proxied ?? [])] : (l.proxied ?? []));
+  const uiTargets = links.ui.flatMap((l) => routeTargetsOf(l).map((t) => t.route));
   const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
   const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
   const backendByIdentity = new Map<string, BackendLink>();
@@ -583,24 +584,27 @@ export function buildChainsAndLinks(
     });
   };
   const pageRoutes = new Set<string>();
-  /** UI links whose call stop made it into some page chain (a page chain is one per (page, route), so a second
-   * call to the same route from the same page is dropped there). */
-  const inPageChain = new Set<UiLink>();
+  const callSiteKey = (l: UiLink) => [l.repo, l.call.at.file, String(l.call.at.line), l.call.method, l.call.path].join("\0");
+  /** (call site, matched route) pairs that already have a page-entry chain (a page chain is one per
+   * (page, route), so a second call to the same route from the same page is dropped there). Keyed by pair,
+   * not call alone, so a call's own-repo route and a proxied route are tracked independently. */
+  const inPageChain = new Set<string>();
+  const pairKey = (l: UiLink, t: RouteTarget) => `${callSiteKey(l)}\0${routeIdentity(t.route)}`;
 
   for (const uiLink of links.ui) {
-    if (uiLink.target.kind !== "route") continue;
-    const target: RouteTarget = uiLink.target;
-    const rKey = keyOf(target.route);
-    const backend = backendByIdentity.get(routeIdentity(target.route));
-    for (const page of uiLink.pages) {
-      const entry = `page:${uiLink.repo}:${page.page.route}`;
-      const ui = uiStops(ctx, uiLink, page);
-      const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
-      const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
-      pageRoutes.add(routeIdentity(target.route));
-      const chain = makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u)));
-      if (!byId.has(chain.id)) inPageChain.add(uiLink);
-      add(chain);
+    for (const target of routeTargetsOf(uiLink)) {
+      const rKey = keyOf(target.route);
+      const backend = backendByIdentity.get(routeIdentity(target.route));
+      for (const page of uiLink.pages) {
+        const entry = `page:${uiLink.repo}:${page.page.route}`;
+        const ui = uiStops(ctx, uiLink, page);
+        const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
+        const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
+        pageRoutes.add(routeIdentity(target.route));
+        const chain = makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u)));
+        if (!byId.has(chain.id)) inPageChain.add(pairKey(uiLink, target));
+        add(chain);
+      }
     }
   }
 
@@ -609,23 +613,27 @@ export function buildChainsAndLinks(
   // call keeps a chain of its own.
   const unreached = new Set(links.uiReach.filter((f) => !f.reached).map(uiReachKey));
   for (const uiLink of links.ui) {
-    if (uiLink.target.kind !== "route" || inPageChain.has(uiLink)) continue;
     const at = uiLink.call.at;
-    if (uiLink.pages.length === 0
-      && !unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
-    const target: RouteTarget = uiLink.target;
-    const backend = backendByIdentity.get(routeIdentity(target.route));
-    const ui = uiStops(ctx, uiLink, undefined);
-    const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
-    const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
-    pageRoutes.add(routeIdentity(target.route));
-    add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
-      (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
+    for (const target of routeTargetsOf(uiLink)) {
+      if (inPageChain.has(pairKey(uiLink, target))) continue;
+      if (uiLink.pages.length === 0
+        && !unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
+      const backend = backendByIdentity.get(routeIdentity(target.route));
+      const ui = uiStops(ctx, uiLink, undefined);
+      const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
+      const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
+      pageRoutes.add(routeIdentity(target.route));
+      add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
+        (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
+    }
   }
 
-  // Unmatched UI calls: one partial chain per page, collecting every unmatched call it reaches.
+  // Unmatched UI calls: one partial chain per page, collecting every unmatched call it reaches. A call
+  // whose own-repo target is unresolved (e.g. a Next `rewrites()` proxy with no route file of its own)
+  // but that a workspace `proxies` rule DID match (review fix) is not unmatched at all — skipping it here
+  // avoids a bogus "no matching route" partial chain alongside the real one the proxy loop above built.
   for (const uiLink of links.ui) {
-    if (uiLink.target.kind !== "unresolved" || uiLink.call.kind === "unknown") continue;
+    if (uiLink.target.kind !== "unresolved" || uiLink.call.kind === "unknown" || (uiLink.proxied?.length ?? 0) > 0) continue;
     const u = toUnresolved(uiLink.repo, {
       at: uiLink.call.at, reason: `${uiLink.target.reason} for ${uiLink.call.method} ${uiLink.call.path}`,
     });

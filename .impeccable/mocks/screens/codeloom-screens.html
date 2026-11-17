@@ -308,7 +308,7 @@ pre.json .k{color:var(--wall)}pre.json .s{color:var(--db)}
    <div class="jr"><div class="nm"><b>Customer creates a profile</b><small>customers · validates VAT before insert</small></div><span>Customers</span>
     <div class="stops"><span class="stop ui done">1</span><i class="ln"></i><span class="stop ui done">2</span><i class="ln"></i><span class="stop api done">3</span><i class="ln"></i><span class="stop api done">4</span><i class="ln"></i><span class="stop api done">5</span><i class="ln"></i><span class="stop db done">6</span><i class="ln"></i><span class="stop db done">7</span></div>
     <span class="spec ok">Spec found</span><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><small>Understood</small></div></div>
-   <div class="jr"><div class="nm"><b>Lead syncs to Zoho CRM</b><small>integrations · RabbitMQ consumer, retries</small></div><span>Integrations</span>
+   <div class="jr"><div class="nm"><b>Lead syncs to the CRM</b><small>integrations · RabbitMQ consumer, retries</small></div><span>Integrations</span>
     <div class="stops"><span class="stop api done">1</span><i class="ln"></i><span class="stop api">2</span><i class="ln"></i><span class="stop api">3</span><i class="ln"></i><span class="stop api">4</span><i class="ln"></i><span class="stop db">5</span><i class="ln"></i><span class="stop db">6</span><i class="ln"></i><span class="stop db">7</span></div>
     <span class="spec no">No spec</span><div class="prog"><i class="on"></i><i></i><i></i><small>Seen</small></div></div>
    <div class="jr"><div class="nm"><b>Admin approves a site survey</b><small>surveys · status machine with 4 states</small></div><span>Surveys</span>
@@ -432,7 +432,7 @@ COMMIT;</pre></div>
    <div class="grp api" style="left:40px;top:420px;width:210px"><h5>app/controllers/ <span>38 files</span></h5><div class="fnode"><span class="stop done">4</span>customers.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>quotes.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>surveys.ts</div></div>
    <div class="grp api" style="left:380px;top:290px;width:240px"><h5>app/services/ <span>61 files · service layer</span></h5><div class="fnode sel"><span class="stop cur">5</span>customer.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>quote_pdf.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>survey_state.ts</div></div>
    <div class="grp db" style="left:700px;top:200px;width:160px"><h5>tables <span>52</span></h5><div class="fnode"><span class="stop done">6</span>customers</div><div class="fnode"><span class="stop done">7</span>customer_contacts</div></div>
-   <div class="grp debt" style="left:700px;top:520px;width:160px"><h5>services/Zoho/ <span>tech debt</span></h5><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>lead_sync.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>retry.ts</div></div>
+   <div class="grp debt" style="left:700px;top:520px;width:160px"><h5>services/Crm/ <span>tech debt</span></h5><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>lead_sync.ts</div><div class="fnode"><svg class="i" style="width:14px;height:14px"><use href="#i-file"/></svg>retry.ts</div></div>
    <div class="legend"><span><i style="background:var(--ui)"></i>UI</span><span><i style="background:var(--api)"></i>API / service</span><span><i style="background:var(--db)"></i>Database</span><span><i style="border:1.5px dashed var(--oxblood)"></i>Tech debt</span><span><i style="background:var(--ochre)"></i>Journey path</span></div>
    <div class="zoom"><a><svg class="i"><use href="#i-plus"/></svg></a><a><svg class="i"><path d="M5 12h14"/></svg></a><a><svg class="i"><use href="#i-map"/></svg></a></div>
   </div>
@@ -488,7 +488,7 @@ COMMIT;</pre></div>
      <div class="crow"><b>User signs in with OTP</b><span>3 / 3 · 18 Oct</span></div>
      <div class="crow"><b>Installer uploads site photos</b><span style="color:var(--oxblood)">2 / 3 · retry</span></div>
      <div class="crow"><b>Finance records a payment</b><span>3 / 3 · 21 Oct</span></div></div></div>
-    <a class="btn dark" style="justify-content:center">Next suggested: Lead syncs to Zoho CRM<svg class="i"><use href="#i-arrow"/></svg></a>
+    <a class="btn dark" style="justify-content:center">Next suggested: Lead syncs to the CRM<svg class="i"><use href="#i-arrow"/></svg></a>
    </div>
   </div>
  </main>
@@ -518,10 +518,10 @@ COMMIT;</pre></div>
      <div class="jt">
       <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Sales rep builds a quote</b><small>14 stops · ticket PROJ-1702</small></div><span>Quotes</span><span class="num">14</span><span class="spec tk">Ticket only</span></div>
       <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Installer uploads site photos</b><small>9 stops</small></div><span>Installs</span><span class="num">9</span><span class="spec no">No spec</span></div>
-      <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Lead syncs to Zoho CRM</b><small>7 stops</small></div><span>Integrations</span><span class="num">7</span><span class="spec no">No spec</span></div>
+      <div class="jr" style="grid-template-columns:2fr 1fr 70px 110px"><div class="nm"><b>Lead syncs to the CRM</b><small>7 stops</small></div><span>Integrations</span><span class="num">7</span><span class="spec no">No spec</span></div>
      </div></div>
     <div class="wbox" style="flex:1"><span class="wtag">map · core-service, overlay tech debt</span><div style="height:100%;min-height:120px;border-radius:8px;background-color:#EEF0EC;background-image:radial-gradient(#C9CFCA 1px,transparent 1px);background-size:18px 18px;position:relative">
-     <div class="grp api" style="left:20px;top:20px;width:170px"><h5>app/services/ <span>61</span></h5></div><div class="grp debt" style="left:240px;top:40px;width:170px"><h5>services/Zoho/ <span>debt</span></h5></div><div class="grp db" style="left:460px;top:20px;width:130px"><h5>tables <span>52</span></h5></div></div></div>
+     <div class="grp api" style="left:20px;top:20px;width:170px"><h5>app/services/ <span>61</span></h5></div><div class="grp debt" style="left:240px;top:40px;width:170px"><h5>services/Crm/ <span>debt</span></h5></div><div class="grp db" style="left:460px;top:20px;width:130px"><h5>tables <span>52</span></h5></div></div></div>
    </div>
    <aside class="vside">
     <section><h4>What you asked</h4><div class="ask"><small>You · in Claude Code</small>"Make me a view of journeys with no spec, biggest first, and the core-service map with tech debt."</div><div class="ask"><small>Claude · called save_view</small>Saved "No-spec audit" with 3 widgets. 14 journeys have no spec; the 3 biggest are listed first.</div></section>

@@ -56,7 +56,7 @@
     {
       "id": "challenger-goods", "kind": "challenger", "catalogId": "pop-culture-shelf-character-goods-catalog",
       "label": "Character Catalog", "verdict": "declined", "lineage": "character goods catalogs",
-      "thesis": "Journeys as a ranked roster of characters.", "palette": ["#FCE4EC", "#E3F2FD", "#FFF8E1", "#333333"],
+      "thesis": "Journeys as a ranked roster of characters.", "palette": ["#FCE4EC", "#E3F2FD", "#FFF8E1", "#343434"],
       "materials": ["pastel grid", "name plates"], "viewport": "A roster grid of journey mascots.",
       "case": "Developers don't see their code as mascots; hides files and SQL.", "risk": "Toy-like.",
       "kept": "Fixed nameplate furniture on every journey."
