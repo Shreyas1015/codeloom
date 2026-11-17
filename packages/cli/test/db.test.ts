@@ -397,3 +397,77 @@ describe("hH-2: raw SQL strings, IS DISTINCT FROM and FROM ONLY never yield fals
     expect(tables(`DELETE FROM ONLY invoices WHERE id = 1`)).toEqual(["delete invoices"]);
   });
 });
+
+describe("v0.5 acceptance: knex query builders reached through Lucid", () => {
+  it("reads <expr>.knexQuery().table(<Model>.table) writes as the model's table (upsert = insert)", () => {
+    expect(access("app/services/CustomerUpsertService.ts", `
+      import db from "@adonisjs/lucid/services/db";
+      import { Customer } from "#models/customer";
+      export class CustomerUpsertService {
+        public static buildUpsert(client: any, row: any) {
+          return client.knexQuery().table(Customer.table).insert({ ...row }).onConflict(["email"]).merge({ ...row }).returning("*");
+        }
+        public static skip(row: any) {
+          return db.knexQuery().table(Customer.table).insert(row).onConflict(["email"]).ignore();
+        }
+        public static rename(trx: any) {
+          return trx.knexQuery().table(Customer.table).where("id", 1).update({ name: "x" });
+        }
+        public static purge() {
+          return db.connection("pg").knexQuery().table(Customer.table).where("old", true).del();
+        }
+        public static remove() {
+          return db.connection().knexQuery().from(Customer.table).where("id", 1).delete();
+        }
+        public static one() {
+          return db.knexQuery().table(Customer.table).where("id", 1).first();
+        }
+      }
+    `, "@adonisjs/lucid")).toEqual([
+      "insert model:Customer via query-builder @CustomerUpsertService.buildUpsert",
+      "insert model:Customer via query-builder @CustomerUpsertService.skip",
+      "update model:Customer via query-builder @CustomerUpsertService.rename",
+      "delete model:Customer via query-builder @CustomerUpsertService.purge",
+      "delete model:Customer via query-builder @CustomerUpsertService.remove",
+      "read model:Customer via query-builder @CustomerUpsertService.one",
+    ]);
+  });
+
+  it("keeps a default-imported model's import path so the indexer can resolve its class and table", () => {
+    const res = detectDb(parsed("app/services/x.ts", `
+      import Invoice from "#models/invoice";
+      export const f = (client: any) => client.knexQuery().table(Invoice.table).insert({});
+    `), ctxWith("@adonisjs/lucid"));
+    expect(res.dbAccess).toEqual([
+      expect.objectContaining({ model: "Invoice", op: "insert", via: "query-builder", modelImport: "#models/invoice" }),
+    ]);
+  });
+
+  it("reads string tables through knexQuery() and plain db.table / db.from / db.query().from", () => {
+    expect(access("app/services/k.ts", `
+      import db from "@adonisjs/lucid/services/db";
+      export const a = (client: any) => client.knexQuery().table("customers").insert({});
+      export const b = () => db.table("invoices").where("id", 1).update({ paid: true });
+      export const c = () => db.from("invoices").where("id", 1);
+      export const d = () => db.query().from("customers").where("id", 1).del();
+      export const e = (trx: any) => trx.knexQuery().table("customers as c").select("c.id");
+    `, "@adonisjs/lucid")).toEqual([
+      "insert customers via query-builder @a",
+      "update invoices via query-builder @b",
+      "read invoices via query-builder @c",
+      "delete customers via query-builder @d",
+      "read customers via query-builder @e",
+    ]);
+  });
+
+  it("never guesses a table from an unresolved <T>", () => {
+    expect(access("app/services/u.ts", `
+      import db from "@adonisjs/lucid/services/db";
+      import { Helper } from "../lib/helper";
+      export const a = (client: any, name: string) => client.knexQuery().table(name).insert({});
+      export const b = (client: any) => client.knexQuery().table(Helper.table).insert({});
+      export const c = (client: any, m: any) => client.knexQuery().table(m.table).insert({});
+      export const d = (client: any) => client.knexQuery().table(Customer.table).insert({});
+    `, "@adonisjs/lucid")).toEqual([]);
+  });
+});

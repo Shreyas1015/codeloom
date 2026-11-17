@@ -59,6 +59,18 @@ export function discoverRepos(root: string): RepoRef[] {
   );
 }
 
+/** Every `proxies[]` rule that is wrong (spec §4, hardened after real-workspace review): `to` naming no
+ * repo in `repos`, or naming the rule's own repo (nothing to proxy to itself) — one entry per bad rule,
+ * in repo then declaration order. Exported so `codeloom doctor` can report the same problems. */
+export function proxyProblems(repos: RepoRef[]): string[] {
+  const ids = new Set(repos.map((r) => r.id));
+  return repos.flatMap((r) => (r.proxies ?? []).flatMap((p) => {
+    if (p.to === r.id) return [`${r.id}: proxies "${p.from}" -> "${p.to}" names its own repo`];
+    if (!ids.has(p.to)) return [`${r.id}: proxies "${p.from}" -> unknown repo "${p.to}"`];
+    return [];
+  }));
+}
+
 export function findWorkspaceRoot(start: string): string | null {
   let dir = resolve(start);
   for (;;) {
@@ -87,6 +99,10 @@ export function loadWorkspace(start: string): {
     // Hand-written: a bad file must be fixed by hand, never deleted and re-indexed.
     const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
     if (ws) {
+      const problems = proxyProblems(ws.repos);
+      if (problems.length > 0) {
+        throw dataError(`Bad ${WORKSPACE_FILE}: ${problems.join("; ")}. Repos in this workspace: ${ws.repos.map((r) => r.id).sort(compare).join(", ")}.`);
+      }
       return { root: wsRoot, name: ws.name, repos: ws.repos, links: ws.links, traces: ws.traces, ...(ws.external ? { external: ws.external } : {}),
         ...(ws.specs ? { specs: ws.specs } : {}) };
     }

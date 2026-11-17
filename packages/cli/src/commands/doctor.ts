@@ -8,6 +8,7 @@ import { DOCTOR_HINT, readJson, writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { otherProgressFiles, progressPath, readProgress } from "../store/progress.js";
 import { readEndpoints, readGraph } from "../store/read.js";
+import { VERSION } from "../version.js";
 import {
   ChainsFileSchema,
   defaultRepoConfig,
@@ -24,7 +25,7 @@ import { listTours, readTour, type StoreWorkspace, tourStaleStops } from "../sto
 import { HOME_VIEW_ID, listViews, readView, strayViewFiles } from "../store/views.js";
 import { compare } from "../util.js";
 import { listFiles } from "../workspace/files.js";
-import { findWorkspaceRoot, loadWorkspace } from "../workspace/repos.js";
+import { findWorkspaceRoot, loadWorkspace, proxyProblems } from "../workspace/repos.js";
 import {
   ensureGitignore,
   ensureMcpEntry,
@@ -35,6 +36,7 @@ import {
   mcpEntryState,
   mcpInvalidReason,
   mcpInvalidText,
+  mcpPinnedVersion,
   rewriteHookLine,
 } from "./init.js";
 
@@ -106,6 +108,7 @@ function checkWorkspace(d: Doctor, start: string): WsInfo | null {
       const ws = readJson(join(wsRoot, WORKSPACE_FILE), WorkspaceFileSchema, { handWritten: true });
       if (ws) {
         d.add("workspace", undefined, "ok", `${WORKSPACE_FILE}: ${ws.repos.length} repo${ws.repos.length === 1 ? "" : "s"}`);
+        for (const problem of proxyProblems(ws.repos)) d.add("workspace", undefined, "error", problem);
         return { root: wsRoot, name: ws.name, repos: ws.repos };
       }
     } catch (err) {
@@ -381,8 +384,13 @@ function checkMcp(d: Doctor, root: string): void {
   switch (state) {
     case "present":
       return d.add("mcp", undefined, "ok", ".mcp.json has the codeloom entry");
-    case "kept-custom":
-      return d.add("mcp", undefined, "ok", "custom codeloom entry");
+    case "kept-custom": {
+      // The init wizard's own entry pins a version (`npx -y codeloom@<v> serve`): codeloom's, not custom.
+      const pinned = mcpPinnedVersion(root);
+      if (pinned === undefined) return d.add("mcp", undefined, "ok", "custom codeloom entry");
+      if (pinned === VERSION) return d.add("mcp", undefined, "ok", `.mcp.json has the codeloom entry (codeloom@${pinned})`);
+      return d.add("mcp", undefined, "warn", `.mcp.json pins codeloom@${pinned} (this is codeloom@${VERSION}): run "codeloom init" to update it`);
+    }
     case "invalid":
       return d.add("mcp", undefined, "error", `${mcpInvalidText(mcpInvalidReason(root) ?? "not-json")}: fix it by hand`);
     case "missing-file":

@@ -1,11 +1,17 @@
 import ts from "typescript";
 import type { HttpCall, HttpClient, HttpMethod } from "../store/schemas.js";
 import {
-  absoluteHost, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, rtkBaseUrl, rtkEndpointOf, stringValue, walk,
+  absoluteHost, collect, enclosingSymbol, isRouterName, lastName, lineOf, normalizePath, pathPattern, prop, rtkBaseUrl, rtkEndpointOf, stringValue, walk,
 } from "./ast.js";
+import type { Part } from "./ast.js";
 import type { HttpCallDraft, HttpClientDraft, ParsedFile, ReExportDraft } from "./types.js";
 
 const METHODS: Record<string, HttpMethod> = { get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE" };
+/** `METHODS`/`SUPERAGENT_METHODS` keyed case-insensitively: generated clients (openapi-fetch and
+ * similar) name their methods `client.GET(...)`/`client.POST(...)`, uppercase. */
+function methodNamed(table: Record<string, HttpMethod>, name: string): HttpMethod | undefined {
+  return table[name.toLowerCase()];
+}
 const FETCH_FNS = new Set(["fetch", "$fetch", "ofetch", "useFetch"]);
 const CLIENT_RE = /^(axios|ky|got|superagent)$|(api|client|http|request|instance|fetcher)$/i;
 /** Bindings known to be HTTP client libraries; a bare `<lib>.create(...)` is always a real client. */
@@ -218,7 +224,7 @@ export function httpCallShape(node: ts.CallExpression, superagent: Set<string>, 
     return url ? { method: configMethod(first, "GET"), urlExpr: url, client: receiver, methodStyle: false } : undefined;
   }
   const isSuperagent = ts.isIdentifier(callee.expression) && superagent.has(receiver) && !isRouterName(node, receiver);
-  const method = isSuperagent ? SUPERAGENT_METHODS[name] : METHODS[name];
+  const method = methodNamed(isSuperagent ? SUPERAGENT_METHODS : METHODS, name);
   if (!method) return undefined;
   const localClient = ts.isIdentifier(callee.expression) && !!scope?.clients.has(receiver) && !isRouterName(node, receiver);
   if (!isSuperagent && !localClient && !isClientReceiver(receiver, node)) return undefined;
@@ -420,8 +426,8 @@ export function detectImportedClientCalls(file: ParsedFile): HttpCallDraft[] {
     const callsClient = ts.isIdentifier(callee) || (ts.isPropertyAccessExpression(callee) && local === `${callee.expression.getText()}.${callee.name.text}`);
     if (configLike && (callsClient || (ts.isPropertyAccessExpression(callee) && callee.name.text === "request"))) {
       shape = { ...readConfig(first, node), client: local };
-    } else if (ts.isPropertyAccessExpression(callee) && METHODS[callee.name.text]) {
-      shape = { method: METHODS[callee.name.text], urlExpr: first, client: local, methodStyle: true };
+    } else if (ts.isPropertyAccessExpression(callee) && methodNamed(METHODS, callee.name.text)) {
+      shape = { method: methodNamed(METHODS, callee.name.text), urlExpr: first, client: local, methodStyle: true };
     }
     const call = shape && callOf(file, node, shape, env);
     if (call) out.push({ ...call, clientImport: imp });
@@ -503,9 +509,437 @@ function resolveClientReceiver(
   return undefined;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Client factories (Task 4 follow-up, spec §4): `function backendClient(backend) { const client =
+// createClient({ baseUrl: sameOrigin(`/api/${backend}`) }); return client; }` then `const apiClient =
+// backendClient('api')` — a generated client (openapi-fetch and similar) created behind a one-argument
+// local factory, whose caller's own string literal is the only thing missing to know the client's base.
+// Folding this (rather than teaching `proxies` to name a client export instead of a URL prefix) keeps the
+// fix local to how clients are read, so every existing consumer of `HttpClient.baseLiteral` (route
+// matching, `proxies`, `externalHost`, ...) benefits without its own special case. See docs/reference.md.
+// ---------------------------------------------------------------------------------------------------
+
+/** A local single-parameter factory whose body creates an HTTP client via that parameter: `parts` is the
+ * client's baseUrl template with the parameter's own slot marked (`{ param: true }`), ready to fold once
+ * a call site supplies a literal argument. `factory` names the inner client-creating call, the same text
+ * `detectHttpClients` itself would use (a known library's name, or another call's own callee text). */
+interface ClientFactory {
+  paramName: string;
+  parts: Array<{ text: string } | { param: true }>;
+  factory: string;
+}
+
+/** Packages (beyond the HTTP libraries `KNOWN_HTTP_LIB_PACKAGES` already covers via
+ * `collectKnownLibAliases`, member-call style) whose bare factory export, called directly
+ * (`createClient(...)`), is trusted as HTTP-client creation — review fix: a bare call used to need only a
+ * `baseUrl`/`baseURL`/`prefixUrl` option, which an unrelated helper (`buildLink({ baseUrl })`) could carry
+ * too; now it also needs a real import from one of these. */
+const BARE_FACTORY_PACKAGES = new Set(["openapi-fetch", "@hey-api/client-fetch", "@hey-api/client-axios"]);
+
+/** Is `name` bound to a known HTTP library (any local alias `collectKnownLibAliases` found) or imported
+ * from one of `BARE_FACTORY_PACKAGES`? The only two ways a bare call's own callee earns the "this creates
+ * an HTTP client" signal. */
+function isImportedBareFactory(name: string, aliases: Map<string, string>, imports: Map<string, { from: string; name: string }>): boolean {
+  if (aliases.has(name)) return true;
+  const imp = imports.get(name);
+  return !!imp && BARE_FACTORY_PACKAGES.has(imp.from);
+}
+
+/** Every top-level `function NAME(...) {...}` and `const NAME = (...) => ...`/`function (...) {}` in
+ * `sf`, in source order. Shared by the client-factory fold and its origin-wrapper check below. */
+function topLevelFunctions(sf: ts.SourceFile): Array<{ name: string; fn: ts.FunctionLikeDeclaration }> {
+  const out: Array<{ name: string; fn: ts.FunctionLikeDeclaration }> = [];
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name) out.push({ name: stmt.name.text, fn: stmt });
+    else if (ts.isVariableStatement(stmt)) {
+      for (const d of stmt.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) {
+          out.push({ name: d.name.text, fn: d.initializer });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Every identifier `target` (an assignment's left side) would write to: itself, when it is a plain
+ * identifier; everything named inside it, when it is a destructuring pattern (`[b] = [...]`,
+ * `({ b, x: c, ...rest } = o)`, nested, defaulted, parenthesized) — review fix: `isMutated` must catch a
+ * destructured reassignment of the parameter, not just a bare `name = ...`. A property/element-access
+ * target (`obj.x = ...`) names nothing by itself and is ignored. */
+function assignmentTargets(target: ts.Expression, out: Set<string>): void {
+  if (ts.isParenthesizedExpression(target)) return assignmentTargets(target.expression, out);
+  if (ts.isIdentifier(target)) {
+    out.add(target.text);
+    return;
+  }
+  if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    assignmentTargets(target.left, out); // a default inside a pattern: `b = 1`
+    return;
+  }
+  if (ts.isArrayLiteralExpression(target)) {
+    for (const el of target.elements) {
+      if (ts.isOmittedExpression(el)) continue;
+      assignmentTargets(ts.isSpreadElement(el) ? el.expression : el, out);
+    }
+    return;
+  }
+  if (ts.isObjectLiteralExpression(target)) {
+    for (const p of target.properties) {
+      if (ts.isShorthandPropertyAssignment(p)) out.add(p.name.text);
+      else if (ts.isPropertyAssignment(p)) assignmentTargets(p.initializer, out);
+      else if (ts.isSpreadAssignment(p)) assignmentTargets(p.expression, out);
+    }
+  }
+}
+
+/** True when `name` is the target of an assignment (`name = ...`, `name += ...`, a destructuring
+ * `[name] = ...` / `({ name } = ...)`, ...) or `++`/`--` anywhere in `fn`'s body, including inside a
+ * nested function (a closure over the parameter can still mutate it before the factory call returns) —
+ * review fix: a reassigned/incremented parameter makes the factory's result depend on more than just the
+ * call-site argument, so it must never be folded. */
+function isMutated(fn: ts.FunctionLikeDeclaration, name: string): boolean {
+  const body = fn.body;
+  if (!body) return false;
+  let mutated = false;
+  const isAssignmentOp = (k: ts.SyntaxKind) => k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+  const isIncDec = (k: ts.SyntaxKind) => k === ts.SyntaxKind.PlusPlusToken || k === ts.SyntaxKind.MinusMinusToken;
+  const visit = (n: ts.Node): void => {
+    if (mutated) return;
+    if (ts.isBinaryExpression(n) && isAssignmentOp(n.operatorToken.kind)) {
+      const targets = new Set<string>();
+      assignmentTargets(n.left, targets);
+      if (targets.has(name)) {
+        mutated = true;
+        return;
+      }
+    }
+    if (
+      (ts.isPostfixUnaryExpression(n) || ts.isPrefixUnaryExpression(n)) &&
+      isIncDec(n.operator) && ts.isIdentifier(n.operand) && n.operand.text === name
+    ) {
+      mutated = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+  return mutated;
+}
+
+/** Every `ReturnStatement` anywhere in `fn`'s body — never inside a nested function-like node or class
+ * (that is a different scope's own returns/control-flow) — found by walking the whole body, not just its
+ * top-level statements (review fix, round 4: a guard clause, `if (cond) { return X; } ...more
+ * statements... return Y;`, with no `else`, hid `return X` from every earlier version of this, which only
+ * looked at a block's direct statements or a single top-level if/else). `undefined` — fail safe, never
+ * fold — when the body contains a construct this does not model: `throw`, any loop, `try`, or `switch`,
+ * since those change what "every return" even means (an uncaught throw skips every later return; a loop
+ * can return zero or more times). An arrow's expression body has no `ReturnStatement` node at all;
+ * callers handle that shape themselves. */
+function allReturns(fn: ts.FunctionLikeDeclaration): ts.ReturnStatement[] | undefined {
+  const body = fn.body;
+  if (!body || !ts.isBlock(body)) return undefined;
+  const out: ts.ReturnStatement[] = [];
+  let unmodeled = false;
+  const visit = (n: ts.Node): void => {
+    if (unmodeled) return;
+    if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+    if (
+      ts.isThrowStatement(n) || ts.isForStatement(n) || ts.isForInStatement(n) || ts.isForOfStatement(n) ||
+      ts.isWhileStatement(n) || ts.isDoStatement(n) || ts.isTryStatement(n) || ts.isSwitchStatement(n)
+    ) {
+      unmodeled = true;
+      return;
+    }
+    if (ts.isReturnStatement(n)) out.push(n);
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+  return unmodeled ? undefined : out;
+}
+
+/** The expression a function-like node returns: an arrow's expression body as-is, or — when its body has
+ * exactly one `return` anywhere (`allReturns`; review fix, round 4: a factory with more than one
+ * `return` path, e.g. an early `return otherClient;` guard clause, is never understood at all, not just
+ * the first/last one found) and that return names a `const` declared earlier in the same block — that
+ * const's own initializer (`const client = createClient(...); return client;`, one level only; review
+ * fix, round 2: `const` only — `let client = make(); client = other(); return client;` must never be
+ * chased, since the value `return`ed may not be what the first declaration bound at all). Anything else
+ * (0 or 2+ returns anywhere in the body, an unmodeled construct, a `let`/`var` binding, ...) is not a
+ * factory this understands. */
+function factoryReturnExpr(fn: ts.FunctionLikeDeclaration): ts.Expression | undefined {
+  const body = fn.body;
+  if (!body) return undefined;
+  if (!ts.isBlock(body)) return body;
+  const returns = allReturns(fn);
+  if (!returns || returns.length !== 1) return undefined;
+  const ret = returns[0]!.expression;
+  if (!ret) return undefined;
+  if (!ts.isIdentifier(ret)) return ret;
+  // A bare identifier: the function's own parameter, returned directly (`function sameOrigin(path) {
+  // return path; }`), or a local `const` declared earlier in the block — one level only.
+  if (fn.parameters.some((p) => ts.isIdentifier(p.name) && p.name.text === ret.text)) return ret;
+  const decls = body.statements
+    .filter((s): s is ts.VariableStatement => ts.isVariableStatement(s) && (s.declarationList.flags & ts.NodeFlags.Const) !== 0)
+    .flatMap((s) => s.declarationList.declarations)
+    .filter((d) => ts.isIdentifier(d.name) && d.name.text === ret.text && d.initializer);
+  return decls.length === 1 ? decls[0]!.initializer : undefined;
+}
+
+/** `expr` is exactly `location.origin`, `window.location.origin` or `globalThis.location.origin` — the
+ * one real "same origin" reference an origin wrapper's prefix may be (review fix, round 1→2: *any*
+ * prefix used to be accepted — literal text like `"/gateway"`, a free variable holding an absolute URL,
+ * `+`-concat, … — so a wrapper that actually prepended a different host, or any fixed path segment, was
+ * wrongly trusted as transparent). Checked structurally (not by source text), so whitespace/parens don't
+ * matter. */
+function isLocationOrigin(expr: ts.Expression): boolean {
+  if (!ts.isPropertyAccessExpression(expr) || expr.name.text !== "origin") return false;
+  const owner = expr.expression;
+  if (ts.isIdentifier(owner)) return owner.text === "location";
+  return (
+    ts.isPropertyAccessExpression(owner) && owner.name.text === "location" && ts.isIdentifier(owner.expression) &&
+    (owner.expression.text === "window" || owner.expression.text === "globalThis")
+  );
+}
+
+/** Loopback hosts a "path-free origin" fallback branch may name outright (review fix, round 4: round 3
+ * accepted *any* bare scheme+host literal, so a guard clause returning a real-looking third-party domain
+ * with no path, e.g. `https://pay.example.com`, still folded — only a host that is obviously a local/dev
+ * address, same convention as `linker/link.ts`'s own `LOOPBACK_HOSTS`, is trusted here). */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
+const PATH_FREE_ORIGIN_RE = /^https?:\/\/([^/]+)$/;
+
+/** A "path-free" origin usable as a *non*-primary branch of a conditional origin check: a string literal
+ * that is just a scheme and a known loopback host (a port is fine; a trailing `/`, a path, or any other
+ * host is not), or a bare `process.env.X` / `import.meta.env.X` read with nothing else in the same
+ * prefix (`isEnvAccess`). At least one branch of the conditional must still be the real
+ * `location.origin`-family check (`isLocationOrigin`) — this is only ever the *fallback*. */
+function isPathFreeOrigin(part: Part): boolean {
+  if (!("text" in part)) return isEnvAccess(part.expr);
+  const host = PATH_FREE_ORIGIN_RE.exec(part.text)?.[1];
+  return !!host && LOOPBACK_HOSTS.has(host.replace(/:\d+$/, ""));
+}
+
+/** Like `collect` (`adapters/ast.ts`), but a `ConditionalExpression` anywhere in `expr` — at the top
+ * level, nested inside another conditional, or nested inside a template substitution — expands into
+ * every branch, so the result is one `Part[]` sequence per possible runtime path through `expr`'s
+ * conditionals (review fix, round 3: "nested conditionals follow the same rule"). `undefined` on the
+ * same shapes `collect` itself cannot decompose. */
+function collectBranches(expr: ts.Expression): Part[][] | undefined {
+  if (ts.isParenthesizedExpression(expr)) return collectBranches(expr.expression);
+  if (ts.isConditionalExpression(expr)) {
+    const t = collectBranches(expr.whenTrue);
+    const f = collectBranches(expr.whenFalse);
+    return t && f ? [...t, ...f] : undefined;
+  }
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return [[{ text: expr.text }]];
+  const cross = (a: Part[][], b: Part[][]): Part[][] => a.flatMap((x) => b.map((y) => [...x, ...y]));
+  if (ts.isTemplateExpression(expr)) {
+    let acc: Part[][] = [expr.head.text ? [{ text: expr.head.text }] : []];
+    for (const span of expr.templateSpans) {
+      const branches = collectBranches(span.expression);
+      if (!branches) return undefined;
+      acc = cross(acc, branches);
+      if (span.literal.text) acc = acc.map((p) => [...p, { text: span.literal.text }]);
+    }
+    return acc;
+  }
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const l = collectBranches(expr.left);
+    const r = collectBranches(expr.right);
+    return l && r ? cross(l, r) : undefined;
+  }
+  if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isCallExpression(expr) || ts.isElementAccessExpression(expr)) {
+    return [[{ expr }]];
+  }
+  return undefined;
+}
+
+type OriginLeafKind = "param" | "location-origin" | "path-free-origin" | "other";
+
+/** `seq` (one `collectBranches` sequence) ends in exactly one occurrence of `paramName`, as the very
+ * last part — a suffix, never reshaped or interleaved (review fix: `withVersion(path) =>
+ * \`${path}/v2\`` is NOT an origin wrapper — it appends to the path). Everything before it, if
+ * anything, is either exactly `location.origin`-family (`"location-origin"`) or a path-free origin
+ * (`"path-free-origin"`, round 3) — never two or more prefix parts, a fixed path segment, `+`-concat of
+ * unrelated text, or a free variable (`"other"`, always rejected). */
+function classifyOriginLeaf(seq: Part[], paramName: string): OriginLeafKind {
+  const isParam = (p: Part): boolean => !("text" in p) && ts.isIdentifier(p.expr) && p.expr.text === paramName;
+  if (seq.filter(isParam).length !== 1) return "other";
+  const last = seq.at(-1);
+  if (!last || !isParam(last)) return "other";
+  const prefix = seq.slice(0, -1);
+  if (prefix.length === 0) return "param";
+  if (prefix.length !== 1) return "other";
+  const only = prefix[0]!;
+  if (!("text" in only) && isLocationOrigin(only.expr)) return "location-origin";
+  return isPathFreeOrigin(only) ? "path-free-origin" : "other";
+}
+
+/** `fn` merely returns its own single parameter, optionally with an origin prefixed before it — the
+ * only shape `unwrapOneCall` trusts to see through a one-argument wrapper call around a factory's
+ * baseUrl template:
+ * - a single expression (no conditional, found via `allReturns`: exactly one `return` anywhere in the
+ *   body — review fix, round 4): `(path) => path`, or exactly
+ *   `location.origin`/`window.location.origin`/`globalThis.location.origin` + `path` — nothing else
+ *   (round 2's rule, unchanged);
+ * - 2+ returns anywhere in the body (a conditional expression, an if/else, or — review fix, round 4 — a
+ *   guard clause with no `else` at all, `` if (cond) { return X; } ...; return Y; `` — the real-world
+ *   SSR/test-fallback shape, `` `${typeof window === "undefined" ? "http://localhost" :
+ *   window.location.origin}${path}` ``, as well as its statement-level equivalent): at least one branch
+ *   must be the real origin check (exactly `location.origin`-family + `path`); every *other* branch must
+ *   be `path` alone or a path-free origin (`isPathFreeOrigin`) + `path` — a literal with a path in it, a
+ *   real-looking third-party host even with no path, a different host, or anything else, and the whole
+ *   function is rejected (never folded as if it were transparent). Nested conditionals (anywhere
+ *   `collectBranches` finds one) follow the same rule, since every branch is flattened into its own
+ *   sequence before any of this is checked. `allReturns`' own fail-safe (no fold on a `throw`, loop,
+ *   `try` or `switch` anywhere in the body) applies here too. */
+function isOriginWrapper(fn: ts.FunctionLikeDeclaration): boolean {
+  if (fn.parameters.length !== 1) return false;
+  const param = fn.parameters[0]!.name;
+  if (!ts.isIdentifier(param) || isMutated(fn, param.text)) return false;
+  const body = fn.body;
+  if (!body) return false;
+  let rets: ts.Expression[];
+  if (!ts.isBlock(body)) {
+    rets = [body]; // an arrow's expression body: the one implicit return, no ReturnStatement node at all
+  } else {
+    const returns = allReturns(fn);
+    if (!returns || returns.length === 0 || returns.some((r) => !r.expression)) return false;
+    rets = returns.map((r) => r.expression!);
+  }
+  const sequences: Part[][] = [];
+  for (const ret of rets) {
+    const branches = collectBranches(ret);
+    if (!branches) return false;
+    sequences.push(...branches);
+  }
+  const kinds = sequences.map((seq) => classifyOriginLeaf(seq, param.text));
+  if (kinds.some((k) => k === "other")) return false;
+  if (kinds.length === 1) return kinds[0] !== "path-free-origin";
+  return kinds.includes("location-origin");
+}
+
+/** Names of local origin-wrapper functions/arrows in `sf` (see `isOriginWrapper`) — the only calls
+ * `unwrapOneCall` unwraps. */
+function originWrapperNamesIn(sf: ts.SourceFile): Set<string> {
+  return new Set(topLevelFunctions(sf).filter(({ fn }) => isOriginWrapper(fn)).map(({ name }) => name));
+}
+
+/** `expr` itself when it is already something `collect` can decompose (template/string/`+`-concat), or —
+ * when it is instead a one-argument call to a known local origin wrapper (`originWrappers`, e.g.
+ * `sameOrigin(\`/api/${x}\`)`) — that inner argument. One level only: the same convention `paramName`
+ * (above) already uses for a URL's own leading base expression. Any other one-argument call
+ * (`withVersion(...)`, not a recognised origin wrapper) is left as-is, so it falls through to `collect`'s
+ * own opaque "{expr}" handling and the factory is correctly not folded. */
+function unwrapOneCall(expr: ts.Expression, originWrappers: Set<string>): ts.Expression {
+  if (ts.isCallExpression(expr) && expr.arguments.length === 1 && ts.isIdentifier(expr.expression) && originWrappers.has(expr.expression.text)) {
+    const inner = expr.arguments[0]!;
+    if (
+      ts.isTemplateExpression(inner) || ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner) ||
+      (ts.isBinaryExpression(inner) && inner.operatorToken.kind === ts.SyntaxKind.PlusToken)
+    ) return inner;
+  }
+  return expr;
+}
+
+/** The baseUrl/baseURL/prefixUrl option of a call that creates an HTTP client, and a label for it: the
+ * usual `<receiver>.create(...)`/`.extend(...)` shape `detectHttpClients` itself matches (a known library,
+ * or any receiver whose call has a base option), or a bare call (`createClient(...)`) whose object
+ * argument has one of those options AND whose own callee is a known HTTP client import (review fix: see
+ * `isImportedBareFactory` — a base option alone is no longer enough for a bare call). */
+function clientFactoryCall(
+  expr: ts.Expression, aliases: Map<string, string>, imports: Map<string, { from: string; name: string }>,
+): { baseUrl: ts.Expression; factory: string } | undefined {
+  if (!ts.isCallExpression(expr)) return undefined;
+  const [opts] = expr.arguments;
+  const obj = opts && ts.isObjectLiteralExpression(opts) ? opts : undefined;
+  if (ts.isPropertyAccessExpression(expr.expression)) {
+    const receiver = resolveClientReceiver(expr.expression.expression, aliases);
+    const factory = receiver && clientFactory(receiver.knownLib ?? receiver.name, expr.expression.name.text);
+    if (!factory || (!receiver!.knownLib && !hasBaseOption(obj))) return undefined;
+    const baseUrl = baseOption(obj);
+    return baseUrl ? { baseUrl, factory } : undefined;
+  }
+  if (ts.isIdentifier(expr.expression) && hasBaseOption(obj) && isImportedBareFactory(expr.expression.text, aliases, imports)) {
+    return { baseUrl: baseOption(obj)!, factory: expr.expression.text };
+  }
+  return undefined;
+}
+
+/** Every local single-parameter function/arrow in `sf` whose body creates an HTTP client through that
+ * parameter (and never reassigns it — `isMutated`), keyed by the factory's own name; a factory whose
+ * baseUrl has any dynamic piece other than its own parameter (another free variable, a second parameter,
+ * a non-origin-wrapper call, ...) is left out — not foldable from a call site alone. */
+function clientFactoriesIn(
+  sf: ts.SourceFile, aliases: Map<string, string>, imports: Map<string, { from: string; name: string }>,
+): Map<string, ClientFactory> {
+  const originWrappers = originWrapperNamesIn(sf);
+  const out = new Map<string, ClientFactory>();
+  for (const { name, fn } of topLevelFunctions(sf)) {
+    if (fn.parameters.length !== 1) continue;
+    const param = fn.parameters[0]!.name;
+    if (!ts.isIdentifier(param) || isMutated(fn, param.text)) continue;
+    const ret = factoryReturnExpr(fn);
+    const call = ret && clientFactoryCall(ret, aliases, imports);
+    if (!call) continue;
+    const parts: Part[] = [];
+    if (!collect(unwrapOneCall(call.baseUrl, originWrappers), parts)) continue;
+    const folded: ClientFactory["parts"] = [];
+    let ok = true;
+    for (const p of parts) {
+      if ("text" in p) {
+        folded.push(p);
+        continue;
+      }
+      if (!ts.isIdentifier(p.expr) || p.expr.text !== param.text) {
+        ok = false;
+        break;
+      }
+      folded.push({ param: true });
+    }
+    if (ok) out.set(name, { paramName: param.text, parts: folded, factory: call.factory });
+  }
+  return out;
+}
+
+/** `const apiClient = backendClient('api')` (module scope, `backendClient` a factory found in the same
+ * file, a literal argument): the client that call would create, with the literal folded into the
+ * factory's own baseUrl template — `web/lib/api-client.ts`'s `backendClient('api')` becomes a client named
+ * "apiClient" with `baseLiteral: "/api/api"`. A non-literal argument, or a name that is not a known
+ * factory, yields nothing (unresolved, as before). */
+function detectClientFactoryCalls(
+  sf: ts.SourceFile, rel: string, aliases: Map<string, string>, imports: Map<string, { from: string; name: string }>,
+): HttpClient[] {
+  const factories = clientFactoriesIn(sf, aliases, imports);
+  if (factories.size === 0) return [];
+  const out: HttpClient[] = [];
+  for (const stmt of sf.statements) {
+    // review fix: the module-level binding must be `const` — `export let apiClient = f("api"); apiClient
+    // = other();` would make this name mean something other than the folded factory call's own result.
+    if (!ts.isVariableStatement(stmt) || (stmt.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name) || !d.initializer || !ts.isCallExpression(d.initializer) || !ts.isIdentifier(d.initializer.expression)) continue;
+      const fac = factories.get(d.initializer.expression.text);
+      const [argNode] = d.initializer.arguments;
+      const arg = argNode && stringValue(argNode);
+      if (!fac || arg === undefined) continue;
+      const literal = fac.parts.map((p) => ("text" in p ? p.text : arg)).join("");
+      const baseHost = absoluteHost(literal);
+      out.push({
+        name: d.name.text, file: rel, line: lineOf(stmt), factory: fac.factory,
+        baseLiteral: normalizePath(literal),
+        ...(baseHost !== undefined ? { baseHost } : {}),
+      });
+    }
+  }
+  return out;
+}
+
 export function detectHttpClients(file: ParsedFile): HttpClient[] {
   if (!file.sf) return [];
   const aliases = collectKnownLibAliases(file.sf);
+  const imports = importedBindings(file.sf);
   const env = envConsts(file.sf);
   const out: HttpClient[] = [];
   walk(file.sf, (node) => {
@@ -546,6 +980,7 @@ export function detectHttpClients(file: ParsedFile): HttpClient[] {
       ...(baseHost !== undefined ? { baseHost } : {}),
     });
   });
+  out.push(...detectClientFactoryCalls(file.sf, file.rel, aliases, imports));
   return out;
 }
 

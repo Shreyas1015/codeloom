@@ -136,6 +136,31 @@ export function functionStartBySymbol(repoAbs: string, commit: string, file: str
   return found;
 }
 
+/** Every named function-like node (with a body) in `file` at `commit`, named as the indexer names function
+ * graph nodes (functionLikeName), first one per name, in source order with its line span. Empty for a
+ * non-JS file or one absent at `commit`. review/build.ts lists a new or deleted file's functions from this
+ * when the map was indexed on the other side (so they are not graph nodes there). */
+export function functionsAt(repoAbs: string, commit: string, file: string): Array<{ name: string; start: number; end: number }> {
+  if (!JS_EXT.test(file) || commit === EMPTY_TREE) return [];
+  let text: string;
+  try {
+    text = git(repoAbs, ["show", "--end-of-options", `${commit}:./${file}`], { maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    return [];
+  }
+  const sf = parseSource(file, text);
+  const out: Array<{ name: string; start: number; end: number }> = [];
+  const seen = new Set<string>();
+  walk(sf, (n) => {
+    if (!ts.isFunctionLike(n) || !("body" in n) || !n.body) return;
+    const name = functionLikeName(n);
+    if (name === undefined || seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, start: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, end: sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1 });
+  });
+  return out;
+}
+
 /** The commit a repo's map was indexed at (the git-ignored fingerprints cache), or undefined when unknown.
  * A corrupt or missing cache is the same as unknown. */
 export function indexedCommit(repoAbs: string): string | undefined {
@@ -188,6 +213,9 @@ export interface ImpactOptions {
   lineSpaceAware?: boolean;
   /** A MapState the caller already loaded (review/build.ts), so the workspace isn't read from disk again. */
   state?: MapState;
+  /** Internal only (review/build.ts `--repo`): diff only these repo ids; every other repo is read as it is
+   * checked out, never diffed — even a second checkout of the same repo, where the range would resolve. */
+  repos?: readonly string[];
 }
 
 /** Changed lines → graph nodes, chains, journeys, tables and queues. Lines are normally compared in the
@@ -209,7 +237,8 @@ export function impactOfDiff(start: string, range?: string, opts: ImpactOptions 
   let firstError: CodeloomError | undefined;
   let truncated = false;
 
-  for (const repo of [...state.ws.repos].sort((a, b) => compare(a.ref.id, b.ref.id))) {
+  const considered = state.ws.repos.filter((r) => opts.repos === undefined || opts.repos.includes(r.ref.id));
+  for (const repo of [...considered].sort((a, b) => compare(a.ref.id, b.ref.id))) {
     const indexed = indexedCommit(repo.abs);
     let changed: ChangedFile[];
     let extentCommit: string;
@@ -276,7 +305,7 @@ export function impactOfDiff(start: string, range?: string, opts: ImpactOptions 
       changedNodesTruncated: nodesCut,
     });
   }
-  if (range !== undefined && skippedRepos.length === state.ws.repos.length && firstError) throw firstError;
+  if (range !== undefined && skippedRepos.length === considered.length && firstError) throw firstError;
 
   const extentCache = new Map<string, Map<number, number>>();
   const extentsFor = (repoId: string, file: string) => () => {

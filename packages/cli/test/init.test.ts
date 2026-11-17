@@ -13,8 +13,9 @@ import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { codeloomBin, ensureMcpEntry, formatInit, HOOK_MARK, hookLine, installHook, MCP_ENTRY, runInit, shellQuote } from "../src/commands/init.js";
+import { codeloomBin, ensureMcpEntry, formatInit, HOOK_MARK, hookLine, installHook, MCP_ENTRY, pinnedMcpEntry, runInit, shellQuote } from "../src/commands/init.js";
 import { CodeloomError } from "../src/errors.js";
+import { VERSION } from "../src/version.js";
 import { makeRepo } from "./helpers.js";
 
 function sleepSync(ms: number): void {
@@ -266,6 +267,40 @@ describe("hook placement", () => {
     expect(existsSync(join(outside, "post-commit"))).toBe(false);
     const text = formatInit(res);
     expect(text).toContain("codeloom index --quiet");
+  });
+});
+
+describe("pinnedMcpEntry (the entry codeloom init's wizard writes when it connects Claude Code)", () => {
+  it("runs npx codeloom@<version> serve, pinned to the running codeloom version", () => {
+    expect(pinnedMcpEntry()).toEqual({ command: "npx", args: ["-y", `codeloom@${VERSION}`, "serve"] });
+  });
+
+  it("can be pinned to an explicit version", () => {
+    expect(pinnedMcpEntry("1.2.3")).toEqual({ command: "npx", args: ["-y", "codeloom@1.2.3", "serve"] });
+  });
+});
+
+describe("ensureMcpEntry with a custom entry", () => {
+  it("writes the given entry instead of MCP_ENTRY when one is passed", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-pinned-"));
+    const res = ensureMcpEntry(root, pinnedMcpEntry("9.9.9"));
+    expect(res).toBe("added");
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"))).toEqual({
+      mcpServers: { codeloom: { command: "npx", args: ["-y", "codeloom@9.9.9", "serve"] } },
+    });
+  });
+
+  it("reports present when the file already has that exact custom entry", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-pinned-"));
+    const entry = pinnedMcpEntry("9.9.9");
+    ensureMcpEntry(root, entry);
+    expect(ensureMcpEntry(root, entry)).toBe("present");
+  });
+
+  it("reports kept-custom when the pinned entry differs from an unpinned one already there", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-mcp-pinned-"));
+    ensureMcpEntry(root); // the plain MCP_ENTRY, unpinned
+    expect(ensureMcpEntry(root, pinnedMcpEntry("9.9.9"))).toBe("kept-custom");
   });
 });
 

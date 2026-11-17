@@ -389,9 +389,12 @@ export function lastName(expr: ts.Expression): string {
 }
 
 const BASE_RE = /(url|uri|api|base|host|origin|endpoint|server|domain|env)/i;
-type Part = { text: string } | { expr: ts.Expression };
+/** A URL (or baseUrl) expression broken into literal text and opaque sub-expressions, in source order —
+ * shared by `pathPattern` and (Task 4 follow-up, spec §4) the client-factory constant-fold in
+ * `adapters/http-calls.ts`, which substitutes a literal argument for a matching `{expr}` part. */
+export type Part = { text: string } | { expr: ts.Expression };
 
-function collect(expr: ts.Expression, parts: Part[]): boolean {
+export function collect(expr: ts.Expression, parts: Part[]): boolean {
   if (ts.isParenthesizedExpression(expr)) return collect(expr.expression, parts);
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
     parts.push({ text: expr.text });

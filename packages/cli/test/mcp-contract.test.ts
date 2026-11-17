@@ -282,6 +282,41 @@ const RawSchemas: Record<string, z.ZodObject> = {
     })
     .strict(),
   delete_view: z.object({ id: str, deleted: z.literal(true) }).strict(),
+  pr_check_packet: z
+    .object({
+      version: z.literal(1),
+      repoId: str,
+      base: str.regex(/^[0-9a-f]{40}$/),
+      head: str.regex(/^[0-9a-f]{40}$/),
+      baseRef: str,
+      draft: z
+        .object({
+          whereItMatters: z.array(z.object({ kind: z.enum(["page", "route", "consumer"]), name: str, journey: str.optional(), repo: str }).strict()),
+          writes: z.array(str),
+          readsOnly: z.array(str),
+          beforeDeploying: z.array(z.object({ kind: z.enum(["migration", "schema", "env", "docker", "ci"]), file: str, detail: str.optional() }).strict()),
+          codeToCheck: z
+            .array(z.object({ name: str, change: z.enum(["new", "changed", "deleted"]), file: str, added: int, removed: int, journeys: z.array(str) }).strict()),
+          alsoChanged: z.array(z.object({ file: str, kind: str, added: int, removed: int }).strict()),
+        })
+        .strict(),
+      hunks: z.array(z.object({ name: str, file: str, at: str, lines: z.array(str) }).strict()),
+      commits: z.array(str),
+      facts: z
+        .object({
+          functions: z.array(str),
+          routes: z.array(str),
+          pages: z.array(str),
+          queues: z.array(str),
+          tables: z.array(str),
+          files: z.array(str),
+          journeys: z.array(str),
+        })
+        .strict(),
+      cut: z.array(str),
+    })
+    .strict(),
+  save_pr_review: z.object({ saved: z.literal(true), head: str.regex(/^[0-9a-f]{40}$/), path: str, checkedOn: str.regex(/^\d{4}-\d{2}-\d{2}$/) }).strict(),
   workspace_overview: z
     .object({
       name: str,
@@ -752,6 +787,21 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(c, root, "delete_view", { id: "ghost" });
   });
 
+  it("pr_check_packet and save_pr_review: the packet is kept, a checked review saved; bad heads and names write nothing", async () => {
+    const root = copyShop(shop);
+    const c = await connect(root);
+    const packet = (await valid(c, "pr_check_packet", { base: "HEAD", repo: "demo-api" })) as { head: string; repoId: string };
+    expect(packet.repoId).toBe("demo-api");
+    expect(existsSync(join(root, ".codeloom", "reviews", `${packet.head}.packet.json`))).toBe(true);
+    const saved = await valid(c, "save_pr_review", { head: packet.head, whatItDoes: "Nothing changed." });
+    expect(saved).toMatchObject({ saved: true, head: packet.head, path: `.codeloom/reviews/${packet.head}.json` });
+    await invalid(c, root, "save_pr_review", { head: "0".repeat(40), whatItDoes: "x" });
+    await invalid(c, root, "save_pr_review", { head: packet.head, whatItDoes: "x", writes: [{ name: "ghost_table" }] });
+    await invalid(c, root, "save_pr_review", { head: packet.head, whatItDoes: "" });
+    await invalid(c, root, "pr_check_packet", { base: "no-such-ref", repo: "demo-api" });
+    await invalid(c, root, "pr_check_packet", { base: "HEAD", repo: "nope" });
+  });
+
   it("every tool rejects invalid input with isError and changes no file", async () => {
     // tools with no input: point them at a folder that is not an indexed workspace
     expect(await invalid(emptyClient, empty, "workspace_overview")).toMatch(/codeloom/i);
@@ -785,11 +835,17 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(client, shop, "save_view", { view: { id: "x", title: "x", widgets: [] } });
     await invalid(emptyClient, empty, "list_views");
     await invalid(client, shop, "delete_view", { id: "../x" });
+    await invalid(client, shop, "pr_check_packet", { base: "HEAD" }); // a folder of repos: --repo needed
+    await invalid(client, shop, "save_pr_review", { head: "../x", whatItDoes: "x" });
   });
 
   it("prompts/list and getPrompt", async () => {
     const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "make-view", "match-specs", "name-journeys", "verify-journey", "write-tour"]);
+    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "check-pr", "make-view", "match-specs", "name-journeys", "verify-journey", "write-tour"]);
+    expect(prompts.find((p) => p.name === "check-pr")!.arguments).toEqual([
+      expect.objectContaining({ name: "base", required: true }),
+      expect.objectContaining({ name: "repo", required: false }),
+    ]);
     expect(prompts.find((p) => p.name === "match-specs")!.arguments).toEqual([expect.objectContaining({ name: "journey", required: false })]);
     expect(prompts.find((p) => p.name === "make-view")!.arguments).toEqual([expect.objectContaining({ name: "request", required: true })]);
     for (const name of ["verify-journey", "write-tour", "check-me"]) {
@@ -809,6 +865,8 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     expect(check.messages[0]!.content.text).toMatch(/record_check/);
     await expect(client.getPrompt({ name: "write-tour", arguments: {} })).rejects.toThrow();
     await expect(client.getPrompt({ name: "check-me", arguments: {} })).rejects.toThrow();
+    const pr = PromptResult.parse(await client.getPrompt({ name: "check-pr", arguments: { base: "HEAD", repo: "demo-api" } }));
+    expect(pr.messages[0]!.content.text).toMatch(/save_pr_review[\s\S]*"facts"/);
   });
 });
 

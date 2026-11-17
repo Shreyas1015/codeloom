@@ -28,19 +28,24 @@ web  /customers/new        (page)
 
 ## Quick start
 
-You need Node 20 or newer and git. Run these in a repo, or in a folder that holds several repos:
+You need Node 20 or newer and git. Run this in a repo, or in a folder that holds several repos:
 
 ```sh
-npx codeloom init         # find the repos, write codeloom.workspace.json, add codeloom to .mcp.json
-npx codeloom index        # build the map into .codeloom/
-npx codeloom dashboard    # open the map in your browser (127.0.0.1 only)
+npx codeloom init
 ```
 
-Then open Claude Code in the same folder and run `/mcp__codeloom__name-journeys`. Claude groups the request
-chains into named journeys, and the dashboard updates by itself.
+`init` is a guided, one-step setup: it finds the repos (pre-unselecting duplicate checkouts of the same
+remote, so a folder with several copies of the same repo only maps one), asks whether to commit codeloom's
+files with your code or keep them local, builds the map, connects Claude Code when it is on PATH, and
+offers to open the dashboard. `--yes` takes every default instead of asking (for CI or scripts); re-running
+`init` only asks about whatever is still missing.
 
-`init` also adds a git hook that re-indexes after each commit. Install codeloom globally
-(`npm i -g codeloom`) so the hook keeps working after the npx cache is cleared.
+When Claude Code is connected, `init` can also ask it to name your journeys right there — or run
+`/mcp__codeloom__name-journeys` yourself any time. Claude groups the request chains into named journeys,
+and the dashboard updates by itself. codeloom never starts Claude without asking first.
+
+`init` also adds a git hook that re-indexes after each commit (when you chose to commit its files). Install
+codeloom globally (`npm i -g codeloom`) so the hook keeps working after the npx cache is cleared.
 
 ## What you get
 
@@ -57,6 +62,10 @@ chains into named journeys, and the dashboard updates by itself.
 - **Views on request.** Ask Claude for a page ("customer journeys with no spec") and it builds one from
   codeloom's widgets.
 - **A CI check.** `codeloom check --fail-under 80` fails the build when too few UI journeys reach the database.
+- **PR drafts Claude can check.** `codeloom review --base main` writes a plain draft of a pull request from
+  the map alone (no AI): where it matters, what it writes, what to do before deploying, the functions to check
+  and a small diagram. `codeloom review --check` lets Claude check it and say what the PR does — codeloom
+  asks before starting Claude.
 - **PR review maps.** `codeloom init --github` adds two workflows that post a summary and a Mermaid diagram of
   what each pull request touches, with a link to a hosted, read-only dashboard snapshot on GitHub Pages. See
   [docs/pr-review-maps.md](https://github.com/Shreyas1015/codeloom/blob/main/docs/pr-review-maps.md).

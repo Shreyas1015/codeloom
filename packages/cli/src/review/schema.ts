@@ -47,6 +47,8 @@ const stopSchema = z.object({
   repo: z.string(),
   lane: z.string(),
   label: z.string(),
+  kind: z.string().optional(),
+  op: z.string().optional(),
   file: z.string().optional(),
   changed: z.boolean(),
   from: count.optional(),
@@ -60,9 +62,24 @@ const journeySchema = z.object({
   chains: z.array(z.string()),
 });
 
-/** Matches review/types.ts's `Review` field for field. `z.record` here always takes a key schema (zod
- * v4): chain ids and names are plain strings, not the snapshotKey charset (they never become file
- * names). */
+const entrySchema = z.object({
+  kind: z.enum(["route", "page", "consumer"]),
+  label: z.string(),
+  journey: z.string().optional(),
+  repo: z.string(),
+});
+
+const riskSchema = z.object({
+  kind: z.enum(["migration", "schema", "env", "docker", "ci"]),
+  file: z.string(),
+  detail: z.string().optional(),
+});
+
+/** Matches review/types.ts's `Review`: every 0.4 field required as there, the 0.5 fields (repoId, entries,
+ * writes, readsOnly, risks — required in the type) optional here, so a review.json written by 0.4 still
+ * validates (the hosted block renders the 0.4 layout, which needs none of them). `z.record` here always
+ * takes a key schema (zod v4): chain ids and names are plain strings, not the snapshotKey charset (they
+ * never become file names). */
 export const reviewSchema = z
   .object({
     version: z.literal(1),
@@ -79,6 +96,11 @@ export const reviewSchema = z
     queues: z.array(z.string()),
     truncated: z.boolean(),
     notes: z.array(z.string()),
+    repoId: z.string().optional(),
+    entries: z.array(entrySchema).optional(),
+    writes: z.array(z.string()).optional(),
+    readsOnly: z.array(z.string()).optional(),
+    risks: z.array(riskSchema).optional(),
   })
   // Security review I1'a: every `chains` id must be a genuine OWN key of chainStops. Without this, a
   // chain id that collides with an inherited Object.prototype property name (e.g. "constructor",

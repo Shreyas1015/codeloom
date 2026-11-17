@@ -681,6 +681,17 @@ export function detectDb(file: ParsedFile, ctx: AdapterContext): DbPart {
       return;
     }
     if (ts.isPropertyAccessExpression(e) && ["from", "table", "into"].includes(e.name.text) && arg0) {
+      // `client.knexQuery().table(Customer.table)` / `db.from(Customer.table)`: a Lucid model's own table, read
+      // later from the model's definition (its static `table`, else Lucid's naming) — never guessed here.
+      const modelTable = ts.isPropertyAccessExpression(arg0) && arg0.name.text === "table" && ts.isIdentifier(arg0.expression)
+        ? modelImports.get(arg0.expression.text) : undefined;
+      if (modelTable && (QB_ROOTS.test(rootName(e.expression)) || ts.isCallExpression(e.expression))) {
+        push({
+          model: modelTable.model, op: opFromChain(node), via: "query-builder", at: at(node),
+          ...(modelTable.defaultFrom ? { modelImport: modelTable.defaultFrom } : {}),
+        });
+        return;
+      }
       const raw = stringValue(arg0);
       const table = raw === undefined ? undefined : qbTable(raw);
       if (raw !== undefined && !table) return;

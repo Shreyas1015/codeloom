@@ -133,7 +133,7 @@ npx codemap review <PR> → review map + automations → comment on Bitbucket / 
 | Notes, labels, ownership | new: `.codemap/notes.json` committed | medium |
 | Hand-written + generated tours | extend UA tours | medium |
 | Review Maps on PRs | new: CLI + CI step posting a diagram | medium–high |
-| Code Automations | new: rules file (`when: app/services/Zoho/** → checklist: […]`) | medium |
+| Code Automations | new: rules file (`when: app/services/Crm/** → checklist: […]`) | medium |
 | Service Map across repos | new: link per-repo graphs via HTTP calls, queues, shared tables | high |
 | Live collaboration / hosted sharing | needs a server | later |
 

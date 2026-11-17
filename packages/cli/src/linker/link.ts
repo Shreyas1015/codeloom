@@ -7,7 +7,7 @@ import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
 import type { EffectiveRoute } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Confidence, DbAccess, ExternalService, HttpCall, HttpClient, HttpMethod, Loc, QueueOp, UiPage, UiReachFact } from "../store/schemas.js";
+import type { Confidence, DbAccess, ExternalService, HttpCall, HttpClient, HttpMethod, Loc, ProxyRule, QueueOp, RepoRef, UiPage, UiReachFact } from "../store/schemas.js";
 import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
@@ -36,17 +36,33 @@ export interface PageReach {
   confidence: Confidence;
 }
 
+/** A call matched to a route (same shape whether the match is the call's own-repo target or one found
+ * through a workspace `proxies` rule — see `UiLink.proxied`). */
+export interface RouteTarget {
+  kind: "route";
+  route: EffectiveRoute;
+  confidence: Confidence;
+  reason?: string;
+}
+
 export interface UiLink {
   repo: string;
   /** An adapter HttpCall, or one derived from a call to an HTTP wrapper (`via: "wrapper"`). */
   call: LinkedCall;
   pages: PageReach[];
   target:
-    | { kind: "route"; route: EffectiveRoute; confidence: Confidence; reason?: string }
+    | RouteTarget
     /** A call to another service: `base` is its host or env var name; `name` the workspace file's
      * `external` entry that lists that base, when one does. */
     | { kind: "external"; base: string; name?: string }
     | { kind: "unresolved"; reason: string };
+  /** Extra route matches through the repo's workspace `proxies` (spec §4): this call's URL, with the
+   * matching rule's prefix stripped (default) or kept (`stripPrefix: false`), matched against the named
+   * repo's routes — exact/param confidence as for any other UI call. Absent, or [], when the repo
+   * declares no `proxies` or none applies. `target` (the call's own-repo match, e.g. a catch-all proxy
+   * route) is unaffected by this: that chain stays, and buildChains adds a further chain per entry here,
+   * continuing into that repo's handler and tables. */
+  proxied?: RouteTarget[];
 }
 
 /** Plain `repo:file#symbol` key for comparing `SymbolRef`s. */
@@ -178,10 +194,25 @@ export function chooseBackend(
   return { repos: backends, hinted: false };
 }
 
+/** The `HttpClient` named `call.client`: a single repo-wide match wins outright; with more than one,
+ * the one declared in the call's own file wins (two unrelated files each declaring their own local
+ * client under the same conventional name, e.g. "apiClient", never cross-link). When the calling file
+ * declares none of them, there is no real import graph available here to say which one it actually
+ * imports (review fix, round 2: that would need tracing imports through `EndpointsFile`, which carries
+ * none — out of scope for this fix), so this never guesses: it is ambiguous, and `undefined` (no base
+ * prepended) is safer than a same-named client that happens to belong to an unrelated file. This is a
+ * narrow, local fix (one lookup site); every other `clients.find(c => c.name === ...)` in this module
+ * keeps the project's existing by-name-only convention. */
+function clientFor(call: HttpCall, clients: HttpClient[]): HttpClient | undefined {
+  const named = clients.filter((c) => c.name === call.client);
+  if (named.length <= 1) return named[0];
+  return named.find((c) => c.file === call.at.file);
+}
+
 /** Call path after a known axios/ky instance's literal baseURL is prepended. */
 export function callPathWithClient(call: HttpCall, clients: HttpClient[]): string {
   if (call.kind === "unknown") return "";
-  const client = clients.find((c) => c.name === call.client);
+  const client = clientFor(call, clients);
   return client?.baseLiteral ? joinPaths(client.baseLiteral, call.path) : call.path;
 }
 
@@ -270,10 +301,74 @@ function resolveRouteTarget(
   return { kind: "unresolved", reason: "no matching route" };
 }
 
+/** `from`, trailing "/" trimmed (except "/" itself) — the schema already requires a leading "/" (review
+ * fix: no more silently inserting one for a bad value; a `from` that doesn't start with "/" is now a
+ * workspace-file validation error, never guessed at). */
+function normalizeProxyFrom(from: string): string {
+  const trimmed = from.trim();
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
+}
+
+/** `call.path` with `proxy.from`'s prefix stripped (default) or kept (`stripPrefix: false`), when the
+ * call's URL starts with that prefix at a path-segment boundary (so "/api/core" never matches
+ * "/api/core-x"); undefined when it does not — this rule simply does not apply to the call. */
+export function proxyPathFor(callPath: string, proxy: Pick<ProxyRule, "from" | "stripPrefix">): string | undefined {
+  const prefix = normalizeProxyFrom(proxy.from);
+  const stripped = callPath === prefix ? "/" : callPath.startsWith(`${prefix}/`) ? callPath.slice(prefix.length) : undefined;
+  if (stripped === undefined) return undefined;
+  return proxy.stripPrefix === false ? callPath : stripped;
+}
+
+/** `effectiveByRepo`'s routes turned into `pickRoute` candidates once per repo (review fix: previously
+ * rebuilt on every call, for every proxy rule). Built once in `linkUi` and reused by every call's
+ * `resolveProxyTargets`. */
+export function routeCandidatesByRepo(effectiveByRepo: Map<string, EffectiveRoute[]>): Map<string, RouteCandidate<EffectiveRoute>[]> {
+  const out = new Map<string, RouteCandidate<EffectiveRoute>[]>();
+  for (const [id, routes] of effectiveByRepo) {
+    out.set(id, routes.map((er): RouteCandidate<EffectiveRoute> => ({
+      item: er, method: er.route.method, path: er.effectivePath, mountsKnown: er.mountsKnown,
+    })));
+  }
+  return out;
+}
+
+/** Extra route match for `call` through `ref.proxies` (spec §4): the rule whose prefix matches and is
+ * *longest* (review fix: overlapping rules, e.g. "/api" and "/api/core" both configured, must not both
+ * fire — the most specific one wins, the rest are not tried at all) is run, via the same pickRoute
+ * matching as any other UI call, against the named repo's routes; at most one entry, or `[]` when no
+ * rule matches, the matched rule's repo has no matching route, or (review fix) the call plainly isn't
+ * same-origin: proxies are a same-origin, relative-URL convention, so this returns `[]` outright when
+ * `call` has its own absolute host or a stripped `base` of its own, when its client's own baseURL is
+ * absolute (`baseHost`) or unresolved (`baseExpr`), or when `target` (the call's own-repo resolution,
+ * already computed by `resolveTarget`) says the call is third-party (`kind: "external"`) — any of these
+ * means the call's destination is not decided by a simple path prefix, so a `from` that happens to match
+ * the call's (host-stripped) path text must never invent a link. An unknown-kind call has no literal URL
+ * to match either. */
+export function resolveProxyTargets(
+  call: LinkedCall, ref: RepoRef, clients: HttpClient[], candidatesByRepo: Map<string, RouteCandidate<EffectiveRoute>[]>,
+  target: UiLink["target"],
+): RouteTarget[] {
+  if (call.kind === "unknown" || target.kind === "external") return [];
+  if (ownHostOf(call) !== undefined || call.base !== undefined) return [];
+  const client = clientFor(call, clients);
+  if (client?.baseHost !== undefined || client?.baseExpr !== undefined) return [];
+  const effectivePath = callPathWithClient(call, clients);
+  let best: { proxy: ProxyRule; stripped: string } | undefined;
+  for (const proxy of ref.proxies ?? []) {
+    const stripped = proxyPathFor(effectivePath, proxy);
+    if (stripped === undefined) continue;
+    if (!best || normalizeProxyFrom(proxy.from).length > normalizeProxyFrom(best.proxy.from).length) best = { proxy, stripped };
+  }
+  if (!best) return [];
+  const picked = pickRoute(call.method, best.stripped, candidatesByRepo.get(best.proxy.to) ?? []);
+  return picked ? [{ kind: "route", route: picked.item, confidence: picked.match.confidence, ...(picked.match.reason !== undefined ? { reason: picked.match.reason } : {}) }] : [];
+}
+
 /** For each HttpCall: the UI pages that reach it, and the route (or external/unresolved) it targets. */
 export function linkUi(input: LinkInput): UiLink[] {
   const allBackends = input.ws.repos.filter((r) => r.endpoints.routes.length > 0);
   const effectiveByRepo = new Map(input.ws.repos.map((r) => [r.ref.id, effectiveRoutes(r.endpoints)]));
+  const proxyCandidatesByRepo = routeCandidatesByRepo(effectiveByRepo);
   const knownHosts = apiBaseHosts(input.ws.repos);
   const externalCtx = { repos: input.ws.repos, external: input.ws.external ?? [] };
   const links: UiLink[] = [];
@@ -287,11 +382,13 @@ export function linkUi(input: LinkInput): UiLink[] {
     const derived = resolver ? wrapperCalls(resolver, repo.endpoints.httpCalls).filter((c) => !seen.has(key(c))) : [];
     const calls: LinkedCall[] = [...repo.endpoints.httpCalls, ...derived];
     for (const call of calls) {
+      const target = resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts, externalCtx);
       links.push({
         repo: repo.ref.id,
         call,
         pages: reachingPages(input, repo.ref.id, call),
-        target: resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts, externalCtx),
+        target,
+        proxied: resolveProxyTargets(call, repo.ref, repo.endpoints.httpClients, proxyCandidatesByRepo, target),
       });
     }
   }

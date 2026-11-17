@@ -114,6 +114,47 @@ describe("loadWorkspace", () => {
     const ws = loadWorkspace(join(repo, "src"));
     expect(ws.repos).toEqual([{ id: basename(repo), path: "." }]);
   });
+
+  it("reads repo proxies, and rejects one naming an unknown repo (spec §4)", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "a.ts": "" }, join(root, "api"));
+    const file = join(root, "codeloom.workspace.json");
+    const base = { version: 1, name: "shop", links: [] };
+    writeFileSync(file, JSON.stringify({
+      ...base,
+      repos: [{ id: "web", path: "web", proxies: [{ from: "/api/core", to: "api" }] }, { id: "api", path: "api" }],
+    }));
+    expect(loadWorkspace(root).repos).toEqual([
+      { id: "web", path: "web", proxies: [{ from: "/api/core", to: "api" }] },
+      { id: "api", path: "api" },
+    ]);
+    writeFileSync(file, JSON.stringify({
+      ...base,
+      repos: [{ id: "web", path: "web", proxies: [{ from: "/api/core", to: "core" }] }, { id: "api", path: "api" }],
+    }));
+    expect(() => loadWorkspace(root)).toThrow(/unknown repo "core"/);
+  });
+
+  // Review fix 5: `to` naming the rule's own repo is also rejected (nothing to proxy to itself), and
+  // `from` must start with "/" at the schema level — no silent correction of a bad value.
+  it("rejects a proxy whose `to` names its own repo, and a `from` with no leading slash", () => {
+    const root = mkdtempSync(join(tmpdir(), "codeloom-ws-"));
+    makeRepo({ "a.ts": "" }, join(root, "web"));
+    makeRepo({ "a.ts": "" }, join(root, "api"));
+    const file = join(root, "codeloom.workspace.json");
+    const base = { version: 1, name: "shop", links: [] };
+    writeFileSync(file, JSON.stringify({
+      ...base,
+      repos: [{ id: "web", path: "web", proxies: [{ from: "/api/core", to: "web" }] }, { id: "api", path: "api" }],
+    }));
+    expect(() => loadWorkspace(root)).toThrow(/names its own repo/);
+    writeFileSync(file, JSON.stringify({
+      ...base,
+      repos: [{ id: "web", path: "web", proxies: [{ from: "api/core", to: "api" }] }, { id: "api", path: "api" }],
+    }));
+    expect(() => loadWorkspace(root)).toThrow(/start with/);
+  });
 });
 
 describe("listFiles", () => {

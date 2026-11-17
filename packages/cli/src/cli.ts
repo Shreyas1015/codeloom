@@ -1,11 +1,13 @@
 import { Command, CommanderError } from "commander";
+import { findClaude, runClaudeHeadless } from "./claude/headless.js";
 import { runCheck } from "./commands/check.js";
 import { runDashboard } from "./commands/dashboard.js";
 import { CodeloomError, dataError } from "./errors.js";
 import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { codeloomBin, formatInit, runInit } from "./commands/init.js";
+import { effectiveYes, formatInitWizard, readlineAsk, runInitWizard } from "./commands/init-wizard.js";
 import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
-import { parseReviewFormat, runReview } from "./commands/review.js";
+import { isInteractive, parseReviewFormat, runReviewCommand, terminalConfirm } from "./commands/review.js";
 import { runServeCommand } from "./commands/serve.js";
 import { parseMaxSize, parsePrNumber, runSnapshot, runSnapshotSite } from "./commands/snapshot.js";
 import { formatViewsList, runViewsReset } from "./commands/views.js";
@@ -24,11 +26,34 @@ export function buildProgram(): Command {
 
   program
     .command("init")
-    .description("Set up codeloom in a repo, or in a folder of repos (a workspace)")
+    .description("Guided one-step setup: pick your repos, commit or keep codeloom local, connect Claude Code, index, and open the dashboard")
     .argument("[dir]", "folder to set up", ".")
-    .option("--github", "also write .github/workflows/codeloom-review-build.yml and codeloom-review-publish.yml, pinned to this codeloom version")
-    .action((dir: string, opts: { github?: boolean }) => {
-      console.log(formatInit(runInit(dir, { bin: codeloomBin(), github: opts.github })));
+    .option("--github", "also write .github/workflows/codeloom-review-build.yml and codeloom-review-publish.yml, pinned to this codeloom version (skips the guided questions)")
+    .option("--yes", "take every default instead of asking (for CI and scripts; also the default when stdin or stdout is not a terminal)")
+    .action(async (dir: string, opts: { github?: boolean; yes?: boolean }) => {
+      if (opts.github) {
+        // --github is an automation flag (CI workflow install): run the plain, non-interactive setup.
+        console.log(formatInit(runInit(dir, { bin: codeloomBin(), github: true })));
+        return;
+      }
+      const ask = readlineAsk();
+      try {
+        const result = await runInitWizard(dir, {
+          ask,
+          yes: effectiveYes(opts.yes),
+          bin: codeloomBin(),
+          claude: findClaude(),
+          run: runClaudeHeadless,
+          openDashboard: async (root) => {
+            await runDashboard(root, {});
+          },
+        });
+        console.log(formatInitWizard(result));
+      } finally {
+        // Closes the readline interface so an interactive run returns to the shell; without this the
+        // open stdin listener keeps the process alive even after the wizard is done.
+        ask.close();
+      }
     });
 
   program
@@ -57,13 +82,19 @@ export function buildProgram(): Command {
 
   program
     .command("review")
-    .description("The PR block (summary + Mermaid diagram) for merge-base(<ref>, HEAD)..HEAD, ready to paste into a pull request")
+    .description("The PR block for merge-base(<ref>, HEAD)..HEAD (what it writes, where it matters, risks, code to check, the changed path), ready to paste into a pull request")
     .requiredOption("--base <ref>", 'the ref to compare against, e.g. "origin/main"')
-    .option("--format <format>", 'markdown (default) or json (the Review model)', "markdown")
+    .option("--repo <id>", "in a folder of separate repos: the repo the pull request is in (only its history is diffed)")
+    .option("--format <format>", "markdown (default: the draft), full (every touched chain, the 0.4 layout) or json (the Review model)", "markdown")
     .option("--link <url>", 'add an "Open the full review map" line to the markdown, pointing at this URL')
-    .action((opts: { base: string; format: string; link?: string }) => {
-      const { output } = runReview(process.cwd(), { base: opts.base, format: parseReviewFormat(opts.format), link: opts.link });
-      console.log(output);
+    .option("--packet", "print the check packet Claude reads (JSON, at most 24,000 characters) instead of the block")
+    .option("--check", "let Claude check and correct the draft now (runs your Claude Code, allowed only save_pr_review), then print the checked block")
+    .action(async (opts: { base: string; format: string; link?: string; repo?: string; packet?: boolean; check?: boolean }) => {
+      await runReviewCommand(
+        process.cwd(),
+        { base: opts.base, format: parseReviewFormat(opts.format), link: opts.link, repo: opts.repo, packet: opts.packet, check: opts.check },
+        { claude: findClaude(), run: runClaudeHeadless, interactive: isInteractive(), confirm: terminalConfirm, print: (t) => console.log(t), warn: (l) => console.error(l) },
+      );
     });
 
   program

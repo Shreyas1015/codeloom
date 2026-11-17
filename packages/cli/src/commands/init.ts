@@ -16,7 +16,7 @@ const CACHE_IGNORE = `${CODELOOM_DIR}/${FILES.fingerprints}`;
 /** The .mcp.json entry codeloom installs for itself. */
 export const MCP_ENTRY = { command: "npx", args: ["-y", "codeloom", "serve"] } as const;
 
-export type McpFileResult = "added" | "present" | "kept-custom" | "invalid";
+export type McpFileResult = "added" | "present" | "kept-custom" | "invalid" | "updated";
 
 /** Structural equality for parsed JSON values (key order doesn't matter). */
 function jsonEqual(a: unknown, b: unknown): boolean {
@@ -63,7 +63,7 @@ interface McpInspection {
   servers?: Record<string, unknown>;
 }
 
-function inspectMcp(root: string): McpInspection {
+function inspectMcp(root: string, entry: Record<string, unknown> = MCP_ENTRY): McpInspection {
   const path = join(root, MCP_FILE);
   if (!existsSync(path)) return { state: "missing-file" };
   let parsed: unknown;
@@ -80,7 +80,7 @@ function inspectMcp(root: string): McpInspection {
   }
   const serversObj = (servers as Record<string, unknown> | undefined) ?? {};
   if ("codeloom" in serversObj) {
-    return { state: jsonEqual(serversObj.codeloom, MCP_ENTRY) ? "present" : "kept-custom" };
+    return { state: jsonEqual(serversObj.codeloom, entry) ? "present" : "kept-custom" };
   }
   return { state: "missing-entry", obj, servers: serversObj };
 }
@@ -95,19 +95,64 @@ export function mcpInvalidReason(root: string): McpInvalidReason | undefined {
   return inspectMcp(root).reason;
 }
 
-/** Merge mcpServers.codeloom into <root>/.mcp.json, keeping every other key/entry.
+/** The .mcp.json entry pinned to one codeloom version (`npx -y codeloom@<version> serve`), so Claude
+ * always runs the codeloom that was connected, never whatever "latest" resolves to later — the same
+ * reasoning as the GitHub workflow templates (renderGithubTemplate). Used by the init wizard's "Connect
+ * Claude Code?" step; plain `codeloom init` still writes the floating MCP_ENTRY. */
+export function pinnedMcpEntry(version: string = VERSION): { command: string; args: string[] } {
+  return { command: "npx", args: ["-y", `codeloom@${version}`, "serve"] };
+}
+
+/** The codeloom version an .mcp.json entry pins, when it is exactly pinnedMcpEntry's shape
+ * (`npx -y codeloom@<version> serve`) — the init wizard's own entry, of this or another version. */
+export function pinnedVersionOf(entry: unknown): string | undefined {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  const e = entry as Record<string, unknown>;
+  if (Object.keys(e).length !== 2 || e.command !== "npx" || !Array.isArray(e.args) || e.args.length !== 3) return undefined;
+  const [y, pkg, serve] = e.args as unknown[];
+  if (y !== "-y" || serve !== "serve" || typeof pkg !== "string") return undefined;
+  const m = /^codeloom@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(pkg);
+  return m?.[1];
+}
+
+/** Read-only: the version <root>/.mcp.json's codeloom entry pins (pinnedVersionOf), else undefined. */
+export function mcpPinnedVersion(root: string): string | undefined {
+  const path = join(root, MCP_FILE);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, unknown> } | null;
+    const servers = parsed?.mcpServers;
+    return servers && typeof servers === "object" && !Array.isArray(servers) ? pinnedVersionOf(servers.codeloom) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Replace mcpServers.codeloom in <root>/.mcp.json with `entry`, keeping every other key/entry ("updated");
+ * an unmergeable file is left untouched ("invalid"); no file or no entry → added as ensureMcpEntry does. */
+export function replaceMcpEntry(root: string, entry: Record<string, unknown>): McpFileResult {
+  const found = inspectMcp(root, entry);
+  if (found.state !== "kept-custom") return ensureMcpEntry(root, entry);
+  const obj = JSON.parse(readFileSync(join(root, MCP_FILE), "utf8")) as Record<string, unknown>;
+  const servers = (obj.mcpServers as Record<string, unknown> | undefined) ?? {};
+  writeJsonAtomic(join(root, MCP_FILE), { ...obj, mcpServers: { ...servers, codeloom: entry } });
+  return "updated";
+}
+
+/** Merge mcpServers.codeloom into <root>/.mcp.json, keeping every other key/entry. `entry` defaults to
+ * the plain MCP_ENTRY; the init wizard passes pinnedMcpEntry() instead when it connects Claude Code.
  * No file → created with just the codeloom entry. Existing identical entry → left untouched,
  * "present". An existing different codeloom entry → left alone, "kept-custom". A top-level value
  * that isn't an object, or an `mcpServers` that exists but isn't an object → untouched, "invalid". */
-export function ensureMcpEntry(root: string): McpFileResult {
+export function ensureMcpEntry(root: string, entry: Record<string, unknown> = MCP_ENTRY): McpFileResult {
   const path = join(root, MCP_FILE);
-  const found = inspectMcp(root);
+  const found = inspectMcp(root, entry);
   switch (found.state) {
     case "missing-file":
-      writeJsonAtomic(path, { mcpServers: { codeloom: MCP_ENTRY } });
+      writeJsonAtomic(path, { mcpServers: { codeloom: entry } });
       return "added";
     case "missing-entry":
-      writeJsonAtomic(path, { ...found.obj, mcpServers: { ...found.servers, codeloom: MCP_ENTRY } });
+      writeJsonAtomic(path, { ...found.obj, mcpServers: { ...found.servers, codeloom: entry } });
       return "added";
     default:
       return found.state;
@@ -424,6 +469,8 @@ function mcpLine(mcp: McpFileResult, reason: McpInvalidReason = "not-json"): str
       return "codeloom already in .mcp.json";
     case "kept-custom":
       return "kept your own codeloom entry in .mcp.json";
+    case "updated":
+      return "Updated codeloom in .mcp.json";
     case "invalid":
       return `${mcpInvalidText(reason)} — add this entry by hand: ${JSON.stringify({ mcpServers: { codeloom: MCP_ENTRY } })}`;
   }

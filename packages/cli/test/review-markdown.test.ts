@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { escapeMarkdownCell, escapeMarkdownInline, renderReviewMarkdown } from "../src/review/markdown.js";
-import { escapeMermaidLabel, renderMermaid } from "../src/review/mermaid.js";
+import { escapeMermaidLabel, renderChangedPath, renderMermaid } from "../src/review/mermaid.js";
 import { GITHUB_BODY_LIMIT } from "../src/review/pr-body.js";
 import type { Review, ReviewNodeChange, ReviewStop } from "../src/review/types.js";
 
@@ -70,6 +70,11 @@ function baseReview(partial: Partial<Review> = {}): Review {
     queues: [],
     truncated: false,
     notes: [],
+    repoId: "",
+    entries: [],
+    writes: [],
+    readsOnly: [],
+    risks: [],
     ...partial,
   };
 }
@@ -156,6 +161,71 @@ describe("renderMermaid", () => {
   it("is deterministic", () => {
     const review = baseReview();
     expect(renderMermaid(review)).toBe(renderMermaid(review));
+  });
+});
+
+describe("renderChangedPath — 0.5 acceptance fix: the entry survives being cut", () => {
+  /** One straight chain: a route entry (index 0), 8 changed functions in series, then a db write — more
+   * changed+write stops (9) than DRAFT_MAX_NODES (8) alone, so the old "changed stops and writes first"
+   * priority fills every slot with them and leaves no room for the entry at all. */
+  function overflowingChangedChain(): ReviewStop[] {
+    const stops: ReviewStop[] = [
+      { ref: "api::route:GET /things", repo: "api", lane: "api", kind: "route", label: "GET /things", file: "start/routes.ts", changed: false },
+    ];
+    for (let i = 1; i <= 8; i++) {
+      stops.push({
+        ref: `api::function:app/services/thing_${i}.ts:Thing${i}.run`, repo: "api", lane: "code", kind: "function",
+        label: `Thing${i}.run`, file: `app/services/thing_${i}.ts`, changed: true, from: i - 1,
+      });
+    }
+    stops.push({ ref: "api::db:things:insert", repo: "api", lane: "db", kind: "db", op: "insert", label: "things (insert)", file: "app/services/thing_8.ts", changed: false, from: 8 });
+    return stops;
+  }
+
+  it("keeps the chain's own entry drawn even when changed stops and writes alone would fill every slot", () => {
+    const review = baseReview({ journeys: [], chains: ["ch_1"], chainStops: { ch_1: overflowingChangedChain() }, chainNames: { ch_1: "GET /things" } });
+    const out = renderChangedPath(review);
+    expect(out).toContain('["GET /things"]'); // the entry — never cut
+    expect(out).toMatch(/\+\d+ more/); // something still had to give, with 10 nodes and an 8-node cap
+  });
+
+  it("gives at least one entry per drawn chain where space allows, even with several overflowing chains", () => {
+    const a = overflowingChangedChain();
+    const b = overflowingChangedChain().map((s, i) => ({ ...s, ref: `${s.ref}#b`, label: i === 0 ? "GET /others" : s.label, from: s.from }));
+    const review = baseReview({
+      journeys: [], chains: ["ch_1", "ch_2"],
+      chainStops: { ch_1: a, ch_2: b },
+      chainNames: { ch_1: "GET /things", ch_2: "GET /others" },
+    });
+    const out = renderChangedPath(review);
+    expect(out).toContain('["GET /things"]');
+    expect(out).toContain('["GET /others"]');
+  });
+
+  it("never lets entries crowd out the changed stop: one changed function reached from 9 routes", () => {
+    const chains: string[] = [];
+    const chainStops: Record<string, ReviewStop[]> = {};
+    const chainNames: Record<string, string> = {};
+    for (let i = 0; i < 9; i++) {
+      const id = `ch_${i}`;
+      chains.push(id);
+      chainNames[id] = `GET /r${i}`;
+      chainStops[id] = [
+        { ref: `api::route:GET /r${i}`, repo: "api", lane: "api", kind: "route", label: `GET /r${i}`, changed: false },
+        { ref: `api::h${i}`, repo: "api", lane: "code", kind: "handler", label: `H${i}`, changed: false, from: 0 },
+        { ref: "api::function:svc.ts:Svc.changed", repo: "api", lane: "code", kind: "function", label: "Svc.changed", changed: true, from: 1 },
+        { ref: "api::db:orders:update", repo: "api", lane: "db", kind: "db", op: "update", label: "orders (update)", changed: false, from: 2 },
+      ];
+    }
+    const out = renderChangedPath(baseReview({ journeys: [], chains, chainStops, chainNames }));
+    expect(out).toContain('["✏️ Svc.changed"]:::changed');
+    expect(out).toContain('["orders (update)"]');
+    const entryIds = [...out.matchAll(/^(n\d+)\["GET \/r\d+"\]$/gm)].map((m) => m[1]!);
+    expect(entryIds.length).toBeGreaterThan(0);
+    expect(entryIds.length).toBeLessThanOrEqual(4); // at most half the 8 slots
+    // Every drawn entry is connected to something drawn.
+    for (const id of entryIds) expect(out).toMatch(new RegExp(`^${id} --> n\\d+$`, "m"));
+    expect(out.match(/^n\d+\[/gm)?.length).toBe(9); // 8 stops + "+N more"
   });
 });
 

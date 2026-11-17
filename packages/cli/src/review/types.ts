@@ -48,6 +48,12 @@ export interface ReviewStop {
   repo: string;
   lane: string;
   label: string;
+  /** The ChainStop's own kind (page/call/route/handler/function/db/publish/consume) — lets the 0.5 draft
+   * diagram keep only the stops that matter (entry, route, handler, changed, writes). Optional: review.json
+   * written by 0.4 has none. */
+  kind?: string;
+  /** db/queue stops only: the ChainStop's op (read/insert/update/delete/upsert, publish/consume). */
+  op?: string;
   file?: string;
   changed: boolean;
   /** Index (into this same chain's ReviewStop[]) of the stop this one was reached from — copied from
@@ -66,6 +72,26 @@ export interface ReviewJourney {
   spec: "linked" | "candidates" | "none" | "unchecked";
   /** This journey's chain ids touched by the diff, sorted. */
   chains: string[];
+}
+
+/** A file whose change needs care before deploying (spec §2 "⚠ Before deploying"). `file` is shown as is:
+ * "<repo id>/<repo-relative path>", or a workspace-root-relative path for a file outside every repo (e.g. the
+ * root's own `.github/workflows/…` when the workspace is itself one git repo). */
+export interface ReviewRisk {
+  kind: "migration" | "schema" | "env" | "docker" | "ci";
+  file: string;
+  /** e.g. "new file", "new key: GST_RATE", "new env read: CUSTOMER_WEBHOOK_URL". */
+  detail?: string;
+}
+
+/** An entry point (a chain's first stop) that reaches the changed code (spec §2 "Where it matters"). `label`
+ * is the page's URL path, the route's "METHOD /path", or the consumed queue's name; `journey` the name of
+ * the (first, by name) journey that chain belongs to, when one is named. */
+export interface ReviewEntry {
+  kind: "route" | "page" | "consumer";
+  label: string;
+  journey?: string;
+  repo: string;
 }
 
 /** The impact of one diff, ready to render as a PR block (markdown.ts) or inspect as JSON. */
@@ -92,4 +118,16 @@ export interface Review {
   queues: string[];
   truncated: boolean;
   notes: string[];
+  /** The repo whose history was diffed (`--repo`, or the one picked for the caller); "" when the workspace
+   * root is itself the git repo and every repo in it was diffed together (0.4's only mode). */
+  repoId: string;
+  /** Entry points of the touched chains, named-journey ones first; deduplicated. */
+  entries: ReviewEntry[];
+  /** Tables/queues the changed stops write on their own chains, after the changed stop (db insert/update/
+   * delete/upsert, queue publish; never past a queue's consumer). Sorted. */
+  writes: string[];
+  /** Tables the changed stops only read (db read after the changed stop), minus `writes`. Sorted. */
+  readsOnly: string[];
+  /** Files to look at before deploying: migrations/schema, env, Docker, CI. */
+  risks: ReviewRisk[];
 }
