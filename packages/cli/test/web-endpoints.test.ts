@@ -35,6 +35,8 @@ const OverviewResponse = z.strictObject({
     repos: z.array(z.strictObject({ id: z.string(), head: z.string(), indexedCommit: z.string().nullable(), stale: z.boolean(), changedFiles: z.array(z.string()), truncated: z.boolean() })),
   }),
   mcpConnected: z.boolean(),
+  /** 0.6 §5: open questions about the map. */
+  gaps: z.strictObject({ open: z.number().int().nonnegative() }).optional(),
 });
 
 const JourneyRow = z.strictObject({
@@ -179,6 +181,7 @@ describe("dashboard JSON API on demo-shop", () => {
   it("/api/overview", async () => {
     const o = await ok("/api/overview", OverviewResponse);
     expect(o.repos.map((r) => r.id)).toEqual(["api", "billing", "web"]);
+    expect(o.gaps?.open).toEqual(expect.any(Number));
   });
 
   it("/api/journeys lists the named journey and the unnamed chains", async () => {

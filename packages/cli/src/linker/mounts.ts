@@ -1,4 +1,4 @@
-import { joinPaths } from "./paths.js";
+import { joinPaths, type RouteCandidate } from "./paths.js";
 import type { EndpointsFile, Mount, Route, RouterDef } from "../store/schemas.js";
 import { compare } from "../util.js";
 
@@ -213,4 +213,20 @@ export function effectiveRoutes(endpoints: EndpointsFile): EffectiveRoute[] {
 
 export function routeKey(r: EffectiveRoute): string {
   return `${r.repo}:${r.route.method} ${r.effectivePath}`;
+}
+
+/** `path` with 1, 2, … leading segments of `prefix` stripped (`/api/admin/x`, "/api/admin" -> /admin/x, /x). */
+function registeredAltPaths(path: string, prefix: string | undefined): string[] {
+  if (prefix === undefined || !path.startsWith(`${prefix}/`)) return [];
+  const segs = prefix.split("/").filter(Boolean);
+  const out: string[] = [];
+  for (let n = 1; n <= segs.length; n++) out.push(path.slice(`/${segs.slice(0, n).join("/")}`.length));
+  return out;
+}
+
+/** An effective route as a `pickRoute` candidate; an Adonis route whose prefix came from a group in another file
+ * also offers its path without it (Route.registeredPrefix). */
+export function routeCandidate<T extends EffectiveRoute>(er: T): RouteCandidate<T> {
+  const altPaths = registeredAltPaths(er.effectivePath, er.route.registeredPrefix);
+  return { item: er, method: er.route.method, path: er.effectivePath, mountsKnown: er.mountsKnown, repo: er.repo, ...(altPaths.length > 0 ? { altPaths } : {}) };
 }

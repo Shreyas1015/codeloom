@@ -10,4 +10,6 @@ export const FILES = {
   journeys: "journeys.json",
   summaries: "summaries.json",
   specCandidates: "spec-candidates.json",
+  /** 0.6 §5: the user's answers about the map (map-interview), applied on every link. */
+  answers: "answers.json",
 } as const;

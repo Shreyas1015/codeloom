@@ -6,7 +6,7 @@ import { formatScore, hopKey, hopsFromChains, scoreChains } from "../src/evals/s
 import { CODELOOM_DIR, FILES } from "../src/store/paths.js";
 import { ChainsFileSchema, ExpectedJourneysSchema } from "../src/store/schemas.js";
 import type { Chain, ChainStop, ExpectedHop, ExpectedJourneys } from "../src/store/schemas.js";
-import { makeRepo, materializeFixture } from "./helpers.js";
+import { freshHome, makeRepo, materializeFixture } from "./helpers.js";
 
 function fakeChain(overrides: Partial<Chain>): Chain {
   return {
@@ -235,8 +235,9 @@ describe("handler-store hops carry the worst confidence of their path (final rev
 
   async function chainsOf(files: Record<string, string>) {
     const root = makeRepo({ "package.json": pkg, "prisma/schema.prisma": schema, "src/order-service.ts": service, ...files });
-    await runIndex(root);
-    return ChainsFileSchema.parse(JSON.parse(readFileSync(join(root, CODELOOM_DIR, FILES.chains), "utf8"))).chains;
+    freshHome();
+    const ws = await runIndex(root);
+    return ChainsFileSchema.parse(JSON.parse(readFileSync(join(ws.root, CODELOOM_DIR, FILES.chains), "utf8"))).chains;
   }
 
   it("a store reached through a guessed (unique-method) call scores as guess, not exact", async () => {

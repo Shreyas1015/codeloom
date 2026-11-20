@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { runIndex } from "../src/commands/index-cmd.js";
 import { CodeloomError } from "../src/errors.js";
 import { type DashboardServer, startDashboardServer } from "../src/web/server.js";
-import { makeRepo, materializeFixture } from "./helpers.js";
+import { freshHome, makeRepo, materializeFixture } from "./helpers.js";
 
 const TOKEN = "a".repeat(64);
 const INDEX_HTML = '<!doctype html><html><body><div id="root"></div><script src="/assets/index-AbCd1234.js"></script></body></html>';
@@ -551,9 +551,10 @@ describe("/api/overview", () => {
   });
 
   it("a bad data file → 409 with code bad-data", async () => {
+    freshHome();
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
-    await runIndex(repo);
-    writeFileSync(join(repo, ".codeloom", "chains.json"), "{ not json");
+    const { root } = await runIndex(repo);
+    writeFileSync(join(root, ".codeloom", "chains.json"), "{ not json");
     const s = await startDashboardServer({ start: repo, port: 0, assetsDir: assets, token: TOKEN, watch: false });
     try {
       const r = await get(s.port, "/api/overview", { host: `127.0.0.1:${s.port}`, ...cookie(TOKEN, s.port) });

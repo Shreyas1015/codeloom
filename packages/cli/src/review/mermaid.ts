@@ -107,6 +107,9 @@ const PATH_KINDS = new Set(["route", "handler", "consume"]);
  * then the api lane stands in for "route". */
 function drawn(stops: readonly ReviewStop[], i: number): boolean {
   const s = stops[i]!;
+  // 0.6: a service's outgoing call is the function it sits in calling another repo's route: the edge from that
+  // function to the route shows it, not a second box of the same function.
+  if (i > 0 && s.kind === "call" && s.lane === "code") return false;
   if (i === 0 || s.changed || isWrite(s)) return true;
   return s.kind !== undefined ? PATH_KINDS.has(s.kind) : s.lane === "api";
 }
@@ -118,7 +121,8 @@ function drawn(stops: readonly ReviewStop[], i: number): boolean {
  * slots entries do not reserve; entries reserve at most half the slots (one per drawn chain while there is
  * room, at least one) and are drawn only for chains whose changed stop is drawn — so a changed function
  * reached from many routes never loses its ✏️ box to them, and a reviewer still sees how it is reached; then
- * what the changed stops write; then whatever else fits. Edges connect only what is drawn. Empty string when
+ * (0.6) the other repos' routes the changed stops call; then what the changed stops write; then whatever else
+ * fits. Edges connect only what is drawn. Empty string when
  * no chain has a changed stop. Every label goes through escapeMermaidLabel, as in renderMermaid. */
 export function renderChangedPath(review: Review, maxNodes = DRAFT_MAX_NODES): string {
   const named = new Map<string, string>();
@@ -139,6 +143,8 @@ export function renderChangedPath(review: Review, maxNodes = DRAFT_MAX_NODES): s
    * their writes, then whatever else is on the path — each ref classified once, by the first chain that draws
    * it; a changed stop is always "changed", even as its chain's own first stop. */
   const writeRefs: string[] = [];
+  /** 0.6: another repo's route a changed stop calls (a service hop): drawn before the writes. */
+  const hopRefs: string[] = [];
   const restRefs: string[] = [];
   const ranked = new Set<string>();
   /** Per drawn chain: its own entry's ref (unless that entry is itself changed) and its changed stops' refs. */
@@ -154,12 +160,19 @@ export function renderChangedPath(review: Review, maxNodes = DRAFT_MAX_NODES): s
     const onPath = new Set<number>();
     const changedIdx = new Set<number>();
     const writeIdx = new Set<number>();
+    const hopIdx = new Set<number>();
     stops.forEach((s, i) => {
       if (!s.changed) return;
       onPath.add(i);
       changedIdx.add(i);
       for (const a of ancestors(stops, i)) onPath.add(a);
       for (const d of downstream(stops, i)) {
+        const t = stops[d]!;
+        if (t.kind === "route" && t.repo !== s.repo) {
+          onPath.add(d);
+          hopIdx.add(d);
+          for (const a of ancestors(stops, d)) onPath.add(a);
+        }
         if (!isWrite(stops[d]!)) continue;
         onPath.add(d);
         writeIdx.add(d);
@@ -180,7 +193,8 @@ export function renderChangedPath(review: Review, maxNodes = DRAFT_MAX_NODES): s
       if (ranked.has(s.ref)) continue;
       ranked.add(s.ref);
       if (changedIdx.has(i) || i === 0) continue; // changed stops and entries are picked per chain below
-      if (writeIdx.has(i)) writeRefs.push(s.ref);
+      if (hopIdx.has(i)) hopRefs.push(s.ref);
+      else if (writeIdx.has(i)) writeRefs.push(s.ref);
       else restRefs.push(s.ref);
     }
     chainEntries.push(mine);
@@ -219,7 +233,7 @@ export function renderChangedPath(review: Review, maxNodes = DRAFT_MAX_NODES): s
       add(c.entry);
       entries++;
     }
-    for (const ref of [...writeRefs, ...restRefs]) add(ref);
+    for (const ref of [...hopRefs, ...writeRefs, ...restRefs]) add(ref);
   }
   const ids = new Map(order.map((ref, i) => [ref, `n${i + 1}`]));
 

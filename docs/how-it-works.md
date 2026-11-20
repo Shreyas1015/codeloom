@@ -53,7 +53,7 @@ What `graph.json` holds (v0.2a):
 |---|---|
 | UI pages | Next.js (`app/` and `pages/`), React Router |
 | HTTP calls | `fetch` (and `$fetch`, `ofetch`, `useFetch`), axios, ky, got, superagent, redaxios, wretch, clients made with `.create(...)`, and your own wrapper functions around them |
-| API routes | Express, Fastify, NestJS, Next.js API routes (`app/**/route.ts` and `pages/api`), AdonisJS |
+| API routes | Express, Fastify, NestJS, Next.js API routes (`app/**/route.ts` and `pages/api`), AdonisJS v5 and v6 (string handlers by namespace, resources) |
 | Database | Prisma, Drizzle, TypeORM, Knex, AdonisJS Lucid, Mongoose (collections), raw SQL (pg, mysql2, better-sqlite3, postgres, sqlite3), `.sql` files, `schema.prisma` |
 | Queues | RabbitMQ through amqplib (`sendToQueue`, `publish`, `consume`, `bindQueue`) |
 

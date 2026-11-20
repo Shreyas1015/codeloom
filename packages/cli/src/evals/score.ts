@@ -82,7 +82,8 @@ export function hopsFromChains(chains: Chain[]): FoundHop[] {
       if (p === null) {
         key = undefined;
       } else if (stop.kind === "route") {
-        const own = (i === 0 || stops[p]?.kind === "call") && chain.routeKey !== "";
+        // A backend's call to another service (code lane, 0.6 §3) reaches that route's own segment.
+        const own = (i === 0 || (stops[p]?.kind === "call" && stops[p]?.lane !== "code")) && chain.routeKey !== "";
         key = own ? chain.routeKey : `${stop.repo}:${stop.label ?? ""}`;
       } else if (stop.kind === "consume" && i > 0) {
         const h = stops.findIndex((s, j) => j > i && s.kind === "handler" && parentOf(j) === i);

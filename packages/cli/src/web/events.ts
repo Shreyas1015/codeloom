@@ -8,6 +8,7 @@ import { type RepoRef, WorkspaceFileSchema } from "../store/schemas.js";
 import { TOURS_DIR } from "../store/tours.js";
 import { compare } from "../util.js";
 import { defaultRepoId, findWorkspaceRoot } from "../workspace/repos.js";
+import { findGroup, groupWorkspace, readRegistry, REGISTRY_FILE, registryPath } from "../workspace/registry.js";
 import type { ChangeKey } from "./api-types.js";
 
 export type { ChangeKey };
@@ -42,6 +43,22 @@ interface WatchedWorkspace {
   root: string;
   name: string;
   repos: RepoRef[];
+  /** Set for a group (0.6 §1): repos join by `codeloom index` in them, which rewrites the registry. */
+  group?: string;
+}
+
+/** The group of the registered repo at `top` or of the group data folder holding `start` (no git; a bad
+ * registry reads as no group). */
+function readGroup(start: string, top: string | null): WatchedWorkspace | null {
+  try {
+    const reg = readRegistry();
+    const group = findGroup(reg, start, top);
+    if (group === null) return null;
+    const g = groupWorkspace(reg, group);
+    return { root: g.root, name: g.name, repos: g.repos, group };
+  } catch {
+    return null;
+  }
 }
 
 /** This workspace's personal progress file (store/progress.ts), or null when there are no repos yet or
@@ -71,6 +88,8 @@ function readRepos(start: string, previous: WatchedWorkspace | null): WatchedWor
     return { root: wsRoot, name: "", repos: [] };
   }
   const top = gitRoot(start);
+  const group = readGroup(start, top);
+  if (group) return group;
   if (top) {
     const id = defaultRepoId(top);
     return { root: top, name: id, repos: [{ id, path: "." }] };
@@ -160,7 +179,8 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
           return emit(["views"]);
         }
         if (name === FILES.specCandidates || name === SPECS_FILE) emit(["specs"]);
-        else if (name === FILES.chains) emit(["chains"]);
+        // answers.json (0.6 §5) changes the open questions Home counts, even when no chain changes.
+        else if (name === FILES.chains || name === FILES.answers) emit(["chains"]);
         else if (name === FILES.journeys) emit(["journeys"]);
         else if (rootRepo) emit([`repo:${rootRepo.id}`]);
       },
@@ -210,6 +230,23 @@ export function watchMap(start: string, onChange: (keys: ChangeKey[]) => void, o
             },
           });
         }
+      }
+    }
+    // A group: a repo joining (or leaving) rewrites the registry; re-read the repo list then.
+    if (ws.group !== undefined) {
+      const home = dirname(registryPath());
+      if (existsSync(home)) {
+        const other = want.get(home); // the progress folder's not-yet-there watcher may share this folder
+        want.set(home, {
+          sig: `registry${other ? `+${other.sig}` : ""}`,
+          onName: (name) => {
+            if (name === null || name === REGISTRY_FILE) {
+              sync();
+              emit(["workspace"]);
+            }
+            other?.onName(name);
+          },
+        });
       }
     }
     for (const repo of repos) {

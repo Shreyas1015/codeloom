@@ -10,6 +10,10 @@ import { ChainsFileSchema, type CheckReport } from "../store/schemas.js";
 
 export interface CheckOptions {
   json?: boolean;
+  /** Plain text: list every info-only item (otherwise summarised). */
+  verbose?: boolean;
+  /** JSON: every item of every kind (otherwise at most 200 per kind, the rest counted in `truncated`). */
+  all?: boolean;
   failUnder?: string;
   traces?: boolean;
 }
@@ -50,7 +54,7 @@ export async function runCheck(
 ): Promise<{ report: CheckReport; output: string; exitCode: 0 | 1 }> {
   const failUnder = parseFailUnder(opts.failUnder);
   const report = await buildReport(start, { traces: opts.traces });
-  const output = opts.json ? formatCheckJson(report) : formatCheckText(report);
+  const output = opts.json ? formatCheckJson(report, { all: opts.all === true }) : formatCheckText(report, { verbose: opts.verbose === true });
   const exitCode: 0 | 1 = failUnder !== undefined && belowFailUnder(report, failUnder) ? 1 : 0;
   return { report, output, exitCode };
 }

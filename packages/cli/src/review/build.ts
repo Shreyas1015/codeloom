@@ -1,14 +1,15 @@
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import type { GraphNode } from "@codeloom/core";
 import { dataError } from "../errors.js";
 import { functionExtents, functionStartBySymbol, functionsAt, impactOfDiff, indexedCommit, type Range, overlaps } from "../mcp/tools/check.js";
 import { listSpecs } from "../mcp/tools/specs.js";
 import { chainLookup, formatNodeRef, journeysForChains, loadMapState, parseNodeRef } from "../mcp/state.js";
-import type { RepoData, WorkspaceData } from "../store/read.js";
+import { loadWorkspaceData, type RepoData, type WorkspaceData } from "../store/read.js";
 import type { Chain, ChainStop } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { type DiffHunk, diffHunks, isGitRepo, resolveCommit } from "../workspace/diff.js";
 import { git } from "../workspace/git.js";
+import { realPath } from "../workspace/registry.js";
 import { downstream, fileKind, isRead, isWrite } from "./paths.js";
 import type { Review, ReviewEntry, ReviewFile, ReviewHunk, ReviewJourney, ReviewNodeChange, ReviewRisk, ReviewStop } from "./types.js";
 
@@ -371,6 +372,10 @@ function pickTarget(start: string, ws: WorkspaceData, repoId: string | undefined
   }
   const rootTop = gitTop(ws.root);
   if (rootTop !== undefined && ws.repos.every((r) => gitTop(r.abs) === rootTop)) return { repoId: "", dir: ws.root };
+  if (wholeWorkspaceOnly && ws.group !== undefined) {
+    // A group's data folder is no git repo: one repo's history is diffed at a time.
+    throw dataError(`In a group, pass --repo <id> (${ids.join(", ")}): each repo has its own git history.`);
+  }
   if (wholeWorkspaceOnly) {
     throw dataError(
       rootTop === undefined
@@ -382,11 +387,22 @@ function pickTarget(start: string, ws: WorkspaceData, repoId: string | undefined
     throw dataError(`${ws.root} is not a git repository, and neither is any repo in it. "codeloom review" needs git history.`);
   }
   if (ws.repos.length === 1) return one(ws.repos[0]!);
+  // Real paths on both sides: a group's repo paths are real (registry), `start` may not be (/var vs /private/var).
+  const startReal = realPath(start);
   const here = ws.repos
-    .filter((r) => isWithin(r.abs, resolve(start)))
-    .sort((a, b) => b.abs.length - a.abs.length)[0];
+    .map((r) => ({ r, real: realPath(r.abs) }))
+    .filter((x) => isWithin(x.real, startReal))
+    .sort((a, b) => b.real.length - a.real.length)[0]?.r;
   if (here) return one(here);
   throw dataError(`This workspace is a folder of separate repos: pass --repo <id> to pick the one the pull request is in (${ids.join(", ")}).`);
+}
+
+/** Which git history `codeloom review` / `codeloom pr` would diff for `start` (pickTarget, without building the
+ * review): the repo id ("" for the whole workspace) and the folder git runs in — e.g. to pick a default base ref
+ * there. Same errors as buildReview. */
+export function reviewTarget(start: string, opts: { repoId?: string } = {}): { repoId: string; dir: string } {
+  const t = pickTarget(start, loadWorkspaceData(start), opts.repoId);
+  return { repoId: t.repoId, dir: t.dir };
 }
 
 // ---- Where it matters / what it writes ---------------------------------------------------------------------

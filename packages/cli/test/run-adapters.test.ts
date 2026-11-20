@@ -195,3 +195,179 @@ describe("imported axios instances (hardening H2)", () => {
     expect(finalizeEndpoints("web", parts).httpCalls).toEqual([]);
   });
 });
+
+describe("v0.6 Task B: queue names one import hop away", () => {
+  const ctx = ctxWith("amqplib");
+  const resolve = (_from: string, spec: string) =>
+    ({ "./constants/queues": "src/constants/queues.ts" } as Record<string, string>)[spec] ?? null;
+
+  it("resolves a wrapper call's queue name from an `as const` object exported by another file", () => {
+    const parts = [
+      runAdapters("src/constants/queues.ts", `export const Queues = { INVOICE_CREATED: "invoice.created" } as const;`, ctx),
+      runAdapters("src/invoice-service.ts", `
+        import { Queues } from "./constants/queues";
+        class QueueService {
+          channel: any;
+          async publish(queue: string, msg: object) { this.channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg))); }
+        }
+        const queueService = new QueueService();
+        export async function createInvoice(payload: object) {
+          await queueService.publish(Queues.INVOICE_CREATED, payload);
+        }
+      `, ctx),
+    ];
+    const ep = finalizeEndpoints("billing", parts, resolve);
+    expect(ep.queues).toEqual([
+      { queue: "invoice.created", op: "publish", at: { file: "src/invoice-service.ts", line: 9, symbol: "createInvoice" } },
+    ]);
+  });
+
+  it("resolves a wrapper call's routing key from an enum exported by another file", () => {
+    const parts = [
+      runAdapters("src/constants/queues.ts", `export enum RoutingKeys { ORDER_CREATED = "order.created" }`, ctx),
+      runAdapters("src/events.ts", `
+        import { RoutingKeys } from "./constants/queues";
+        declare const channel: import("amqplib").Channel;
+        export function publishEvent(name: string, body: object) {
+          return channel.publish("events", name, Buffer.from(JSON.stringify(body)));
+        }
+        export function createOrder(body: object) {
+          publishEvent(RoutingKeys.ORDER_CREATED, body);
+        }
+      `, ctx),
+    ];
+    const ep = finalizeEndpoints("billing", parts, resolve);
+    expect(ep.queues).toEqual([
+      {
+        queue: "events:order.created", op: "publish", exchange: "events", routingKey: "order.created",
+        at: { file: "src/events.ts", line: 8, symbol: "createOrder" },
+      },
+    ]);
+  });
+
+  it("never guesses: drops the queue op when the import cannot be resolved to a repo file", () => {
+    const parts = [
+      runAdapters("src/invoice-service.ts", `
+        import { Queues } from "./constants/queues";
+        class QueueService {
+          channel: any;
+          async publish(queue: string, msg: object) { this.channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg))); }
+        }
+        const queueService = new QueueService();
+        export async function createInvoice(payload: object) {
+          await queueService.publish(Queues.INVOICE_CREATED, payload);
+        }
+      `, ctx),
+    ];
+    expect(finalizeEndpoints("billing", parts, resolve).queues).toEqual([]);
+    expect(finalizeEndpoints("billing", parts).queues).toEqual([]); // no resolver at all
+  });
+
+  it("never guesses: drops the queue op when the target file has no such exported member", () => {
+    const parts = [
+      runAdapters("src/constants/queues.ts", `export const Queues = { INVOICE_PAID: "invoice.paid" } as const;`, ctx),
+      runAdapters("src/invoice-service.ts", `
+        import { Queues } from "./constants/queues";
+        class QueueService {
+          channel: any;
+          async publish(queue: string, msg: object) { this.channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg))); }
+        }
+        const queueService = new QueueService();
+        export async function createInvoice(payload: object) {
+          await queueService.publish(Queues.INVOICE_CREATED, payload);
+        }
+      `, ctx),
+    ];
+    expect(finalizeEndpoints("billing", parts, resolve).queues).toEqual([]);
+  });
+});
+
+describe("v0.6 Task B: a wrapper itself resolved one import hop away", () => {
+  const ctx = ctxWith("amqplib");
+  const resolve = (_from: string, spec: string) =>
+    ({ "./queue-service": "src/queue-service.ts", "./events": "src/events.ts" } as Record<string, string>)[spec] ?? null;
+
+  it("resolves a call on an imported service-singleton instance against the class's wrapper method", () => {
+    const parts = [
+      runAdapters("src/queue-service.ts", `
+        import amqp from "amqplib";
+        export class QueueService {
+          channel: any;
+          async publish(queue: string, msg: object) { this.channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg))); }
+        }
+        export const queueService = new QueueService();
+      `, ctx),
+      runAdapters("src/invoice-service.ts", `
+        import { queueService } from "./queue-service";
+        export async function createInvoice(payload: object) {
+          await queueService.publish("invoice.created", payload);
+        }
+      `, ctx),
+    ];
+    const ep = finalizeEndpoints("billing", parts, resolve);
+    expect(ep.queues).toEqual([
+      { queue: "invoice.created", op: "publish", at: { file: "src/invoice-service.ts", line: 4, symbol: "createInvoice" } },
+    ]);
+  });
+
+  it("resolves a bare function wrapper imported from another file, plus the caller's own routing key", () => {
+    const parts = [
+      runAdapters("src/events.ts", `
+        declare const channel: import("amqplib").Channel;
+        export function publishEvent(name: string, body: object) {
+          return channel.publish("events", name, Buffer.from(JSON.stringify(body)));
+        }
+      `, ctx),
+      runAdapters("src/orders.ts", `
+        import { publishEvent } from "./events";
+        export function createOrder(body: object) {
+          publishEvent("order.created", body);
+        }
+      `, ctx),
+    ];
+    const ep = finalizeEndpoints("billing", parts, resolve);
+    expect(ep.queues).toEqual([
+      {
+        queue: "events:order.created", op: "publish", exchange: "events", routingKey: "order.created",
+        at: { file: "src/orders.ts", line: 4, symbol: "createOrder" },
+      },
+    ]);
+  });
+
+  it("never guesses: a call to an imported name that is not actually a queue wrapper resolves to nothing", () => {
+    const parts = [
+      runAdapters("src/queue-service.ts", `export function helper(a: string, b: object) { return { a, b }; }`, ctx),
+      runAdapters("src/invoice-service.ts", `
+        import { helper } from "./queue-service";
+        export async function createInvoice(payload: object) {
+          helper("invoice.created", payload);
+        }
+      `, ctx),
+    ];
+    expect(finalizeEndpoints("billing", parts, resolve).queues).toEqual([]);
+  });
+
+  it("never guesses: drops the call when the wrapper's own import cannot be resolved to a repo file", () => {
+    const parts = [
+      runAdapters("src/invoice-service.ts", `
+        import { queueService } from "./queue-service";
+        export async function createInvoice(payload: object) {
+          await queueService.publish("invoice.created", payload);
+        }
+      `, ctx),
+    ];
+    expect(finalizeEndpoints("billing", parts).queues).toEqual([]); // no resolver at all
+  });
+});
+
+describe("v0.6 Task B review round 1, item 4: tolerates a part cached before these fields existed", () => {
+  it("never throws when a cached part object lacks queueDrafts/queueLiteralExports/queueWrapperExports/queueWrapperCalls/exchanges/exchangeDrafts", () => {
+    const part = runAdapters("src/x.ts", `export function f(channel: any) { channel.sendToQueue("a", Buffer.from("x")); }`, ctxWith("amqplib"));
+    const old = { ...part } as Record<string, unknown>;
+    for (const key of ["queueDrafts", "queueLiteralExports", "queueWrapperExports", "queueWrapperCalls", "exchanges", "exchangeDrafts"]) {
+      delete old[key];
+    }
+    expect(() => finalizeEndpoints("r", [old as never])).not.toThrow();
+    expect(finalizeEndpoints("r", [old as never]).queues.map((q) => q.queue)).toEqual(["a"]);
+  });
+});

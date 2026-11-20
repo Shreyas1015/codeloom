@@ -78,6 +78,10 @@ interface Ctx extends RepoResolveInput {
   /** v0.2a §4: `<file>#<component>|<prop>` -> what the component is given as that prop (null: nothing / ambiguous;
    * also the in-progress mark that stops a prop handed on in a cycle). */
   propMemo: Map<string, SymbolRef | null>;
+  /** Folder names a bare import may start from (built on first use). */
+  localRoots?: Set<string>;
+  /** Names some repo file exports (built on first use). */
+  exportNames?: Set<string>;
 }
 
 function splitDotted(name: string): { base: string; rest: string } {
@@ -112,12 +116,23 @@ function exportedMember(fi: FileCodeIndex, base: string, rest: string): CodeSymb
     const m = fi.symbols.find((s) => s.kind === "method" && s.name === cls.name + rest);
     if (m) return m;
   }
+  // An exported instance (`export default new Lookup()`): its method is the class's.
+  for (const ob of objectBases(fi, base)) {
+    const m = instanceMethod(fi, ob, rest);
+    if (m) return m;
+  }
   for (const ob of objectBases(fi, base)) {
     const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === ob + rest);
     if (m) return m;
   }
   // v0.2a §4: `customersApi.useGetCustomerQuery` on an imported RTK Query api.
   return rest.indexOf(".", 1) < 0 ? rtkEndpointSymbol(fi, base, rest.slice(1)) : undefined;
+}
+
+/** `rest` (".find") on the class instance `fi` exports as `exportName`, when it declares that method. */
+function instanceMethod(fi: FileCodeIndex, exportName: string, rest: string): CodeSymbol | undefined {
+  const inst = fi.instances?.find((i) => i.export === exportName);
+  return inst ? fi.symbols.find((s) => s.kind === "method" && s.name === inst.className + rest) : undefined;
 }
 
 /** A non-dotted export: a function/class exported under exactly that name (`export { a as b }` /
@@ -143,7 +158,8 @@ function exportedPlain(fi: FileCodeIndex, exportedName: string): CodeSymbol | un
     const m = fi.symbols.find((s) => s.kind === "object-method" && s.exported && s.name === `${b}.${exportedName}`);
     if (m) return m;
   }
-  return undefined;
+  // `require("./lookup").find()` on `module.exports = new Lookup()`.
+  return instanceMethod(fi, "exports", `.${exportedName}`);
 }
 
 /** v0.2a §4: the `query` function of the RTK Query endpoint that generated hook `hook` of api `api` stands for. */
@@ -283,10 +299,13 @@ export const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
   "paginate", "count", "refresh", "serialize", "destroy", "remove", "upsert", "populate", "lean", "transaction",
 ]);
 
-const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|fixtures|__mocks__)\//;
-const TEST_FILE_RE = /\.(test|spec)\.[^/]+$/;
+/** Folders that hold tests, test data or mocks: unit and acceptance tests, e2e suites (Cypress, Playwright), load
+ * scripts, fixtures, mocks. */
+const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|spec|specs|e2e|cypress|playwright|load-tests?|fixtures|__fixtures__|__mocks__|mocks)\//;
+const TEST_FILE_RE = /\.(test|spec|e2e|cy)\.[^/]+$/;
 
-/** Test, fixture and mock files: never a resolution target for production code (H4). */
+/** Test, fixture and mock files: never a resolution target for production code (H4), never a chain's entry and
+ * never counted by check or the gaps (0.6: their calls and routes are left out of endpoints.json). */
 export function isTestFile(file: string): boolean {
   return TEST_DIR_RE.test(file) || TEST_FILE_RE.test(file);
 }
@@ -438,7 +457,13 @@ function resolveMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<C
   }
 
   // A receiver known to be a literal, a built-in, or a library type: its method is not a repo method.
-  if (callee.recvType !== undefined && isExternalType(ctx, file, callee.recvType)) return null;
+  // A field destructured from a library type (`const { response } = ctx`) is the library's too, unless the repo
+  // exports something of that name (`const { customerService } = req` on a Request the app decorates).
+  if (callee.recvType !== undefined && isExternalType(ctx, file, callee.recvType)
+    && !(callee.recvField && repoExports(ctx).has(callee.object))) return null;
+  // A receiver imported from a package (`Event.emit()` from "@ioc:Adonis/Core/Event", `Mail.send()`).
+  const recvImport = callee.local ? undefined : fi.imports.find((i) => i.local === callee.object);
+  if (recvImport && isPackageSpecifier(ctx, file, recvImport.from)) return null;
   // `Promise.all()`, `JSON.parse()`, `window.open()`: a global object the file does not declare or import (v0.2a §4).
   if (callee.recvType === undefined && GLOBAL_OBJECTS.has(callee.object)
     && !fi.imports.some((i) => i.local === callee.object) && !fi.symbols.some((s) => s.name === callee.object)) return null;
@@ -469,6 +494,49 @@ function isExternalType(ctx: Ctx, file: string, name: string): boolean {
   const imp = fi.imports.find((i) => i.local === name);
   if (imp) return resolveImport(file, imp.from, ctx.files, ctx.aliases) === null;
   return GLOBAL_CLASSES.has(name);
+}
+
+/** A bare package specifier that resolves to no repo file ("stripe", "@ioc:Adonis/Core/Event"): not a
+ * relative path, not a path alias (`@/x`, `~/x`, `#x`, or any configured alias prefix) codeloom failed to place. */
+function isPackageSpecifier(ctx: Ctx, file: string, spec: string): boolean {
+  if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("#") || /^[@~]\//.test(spec)) return false;
+  for (const a of ctx.aliases) {
+    if (a.prefix === "") continue;
+    // The repo's own package (`@demo/shared`, `@demo/shared/x`), or a configured alias.
+    if (a.kind === "workspace" ? spec === a.prefix || spec.startsWith(`${a.prefix}/`) : spec.startsWith(a.prefix)) return false;
+  }
+  // A bare path into a folder of the repo (`services/customer`, resolved by a bundler setting codeloom does not read).
+  if (localRoots(ctx).has(spec.split("/")[0]!)) return false;
+  return resolveImport(file, spec, ctx.files, ctx.aliases) === null;
+}
+
+/** Every name some repo file exports (functions, classes, instances, object literals' bases). */
+function repoExports(ctx: Ctx): Set<string> {
+  if (ctx.exportNames) return ctx.exportNames;
+  const names = new Set<string>();
+  for (const fi of ctx.index.values()) {
+    for (const sym of fi.symbols) {
+      for (const n of sym.exportNames ?? []) names.add(n);
+      if (sym.kind === "object-method" && sym.exported) names.add(sym.name.split(".")[0]!);
+    }
+    for (const i of fi.instances ?? []) names.add(i.export);
+  }
+  names.delete("default");
+  ctx.exportNames = names;
+  return names;
+}
+
+/** Folder names a bare import may start from: top-level folders and those directly under any `src/`. */
+function localRoots(ctx: Ctx): Set<string> {
+  if (ctx.localRoots) return ctx.localRoots;
+  const roots = new Set<string>();
+  for (const f of ctx.files) {
+    const segs = f.split("/");
+    if (segs.length > 1) roots.add(segs[0]!);
+    for (let i = 0; i < segs.length - 2; i++) if (segs[i] === "src") roots.add(segs[i + 1]!);
+  }
+  ctx.localRoots = roots;
+  return roots;
 }
 
 function resolveNewMember(ctx: Ctx, file: string, site: CallSite, callee: Extract<Callee, { kind: "new-member" }>): ResolvedCall | null {

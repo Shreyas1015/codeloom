@@ -72,6 +72,10 @@ export type Callee =
      * "String") or from its initializer (`[]` -> "Array", `{}` -> "Object", `new Map()` -> "Map", a string
      * literal -> "String"). Absent when unknown. The resolver never guesses onto a non-repo type. */
     recvType?: string;
+    /** The receiver is declared inside a function (a parameter or local), so it is not a same-named import. */
+    local?: true;
+    /** With `recvType`: the receiver is a field destructured from a value of that type (`{ svc }: Request`). */
+    recvField?: true;
     /** v0.2a §4: `object` is the first parameter of the named function `props` (a component's props object), so
      * `props.onX()` calls whatever the component is given as `onX` (connect's mapDispatchToProps, or a JSX prop). */
     props?: string;
@@ -103,6 +107,12 @@ export interface CallSite {
    * a function handed over by reference, e.g. the `handleEmail` in `channel.consume("emails",
    * handleEmail)` — with their argument position. Absent when none. */
   refArgs?: Array<{ index: number; name: string }>;
+  /** 0.6 Task C: `this.<member>` arguments (also `this.<member>.bind(this)`) where `<cls>.<member>` is a method of
+   * the class around the call — a class method handed over by reference, e.g. `channel.consume("q",
+   * this.handleX)` — with their argument position. Absent when none. */
+  thisArgs?: Array<{ index: number; cls: string; member: string }>;
+  /** 0.6 Task C: positions of arguments that are inline functions (`(msg) => ...`, `function () {}`). Absent when none. */
+  inlineArgs?: number[];
   /** Arguments with literal URL text (`'/user'`, `` `/articles/${slug}` ``), as route patterns, so a call to an
    * HTTP wrapper (resolved later by the linker) can become an HTTP call. Absent when none. */
   urlArgs?: UrlArg[];
@@ -149,6 +159,11 @@ export interface FileCodeIndex {
   /** CommonJS `module.exports = obj` / `export = obj` where `obj` is a local object literal: its name,
    * so `require("./x").m()` / a default import's `x.m()` resolve to `obj.m`. */
   defaultObject?: string;
+  /** Exported instances of a class declared in this file (`export default new Lookup()`, `export const lookup =
+   * new Lookup()`, `const lookup = new Lookup(); export default lookup`, `module.exports = new Lookup()`, keyed
+   * "exports" like a CommonJS default object): an importer's `lookup.find()` is `Lookup.find`. Sorted by export
+   * name. Absent when none. */
+  instances?: Array<{ export: string; className: string }>;
   /** HTTP wrapper functions declared in this file (source order). Absent when none. */
   wrappers?: HttpWrapper[];
   /** Properties of a named object literal (`export default {…}` -> "default", `module.exports = {…}` ->
@@ -290,16 +305,37 @@ function declaredIn(statements: ts.NodeArray<ts.Statement>, name: string): ts.Va
 /** The receiver type of identifier `id` from its nearest declaration in scope: a parameter of an enclosing
  * function, or a variable declared directly in an enclosing block / the file. The nearest declaration wins
  * (shadowing), and one without a usable type gives undefined. */
-function receiverTypeOf(id: ts.Identifier): string | undefined {
+function receiverTypeOf(id: ts.Identifier, depth = 0): string | undefined {
   const name = id.text;
   for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
     if (ts.isFunctionLike(cur)) {
       const p = cur.parameters.find((x) => ts.isIdentifier(x.name) && x.name.text === name);
       if (p) return typeNodeName(p.type) ?? initializerTypeName(p.initializer);
+      // `({ response }: HttpContextContract)`: a property of the parameter's type, so it lives wherever that
+      // type does (only ever used to rule out a guess onto a repo method when that type is a library's).
+      const d = cur.parameters.find((x) => ts.isObjectBindingPattern(x.name) && x.name.elements.some((el) => ts.isIdentifier(el.name) && el.name.text === name));
+      if (d) return typeRefName(d.type);
     }
     if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isModuleBlock(cur) || ts.isCaseClause(cur) || ts.isDefaultClause(cur)) {
       const d = declaredIn(cur.statements, name);
       if (d) return typeNodeName(d.type) ?? initializerTypeName(d.initializer);
+      // `const { response } = ctx`: a property of what it is destructured from (see the parameter case).
+      const from = destructuredIn(cur.statements, name);
+      if (from) {
+        if (from.type) return typeRefName(from.type);
+        return from.initializer && ts.isIdentifier(from.initializer) && depth < 2 ? receiverTypeOf(from.initializer, depth + 1) : undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** A variable declaration directly in `statements` that destructures `name` from an object (`const { name } = x`). */
+function destructuredIn(statements: ts.NodeArray<ts.Statement>, name: string): ts.VariableDeclaration | undefined {
+  for (const st of statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (ts.isObjectBindingPattern(d.name) && d.name.elements.some((el) => ts.isIdentifier(el.name) && el.name.text === name)) return d;
     }
   }
   return undefined;
@@ -339,9 +375,14 @@ function classify(expr: ts.Expression): Callee {
       if (keyed) return { kind: "member", object: obj.text, prop, hook: keyed.hook, hookKey: keyed.key };
       const recvType = receiverTypeOf(obj);
       const props = propsOwnerOf(obj);
+      // Only worth knowing when an import of the same name exists (it would otherwise be taken for it).
+      const decl = importedNames(obj.getSourceFile()).has(obj.text) ? nearestDeclaration(obj) : undefined;
+      const local = decl !== undefined && !isTopLevelDeclaration(decl);
+      const field = recvType !== undefined && isDestructured(obj);
       return {
         kind: "member", object: obj.text, prop,
-        ...(recvType !== undefined ? { recvType } : {}), ...(props !== undefined ? { props } : {}),
+        ...(recvType !== undefined ? { recvType } : {}), ...(field ? { recvField: true as const } : {}),
+        ...(props !== undefined ? { props } : {}), ...(local ? { local: true as const } : {}),
       };
     }
     const receiver = identifierChain(obj);
@@ -731,6 +772,40 @@ function declaredInStatements(statements: ts.NodeArray<ts.Statement>, name: stri
 /** The identifier of the nearest declaration of `id`'s name in scope: a parameter of an enclosing function,
  * a `for`/`catch` variable, or a declaration directly in an enclosing block / the file. The search stops after
  * `stop` (inclusive). Undefined when there is none (a global, or declared outside `stop`). */
+/** Is `id`'s nearest declaration a field of an object destructuring (`const { svc } = req`, `({ svc }: T)`)? */
+function isDestructured(id: ts.Identifier): boolean {
+  const decl = nearestDeclaration(id);
+  return !!decl && ts.isBindingElement(decl.parent) && ts.isObjectBindingPattern(decl.parent.parent);
+}
+
+const importedNamesMemo = new WeakMap<ts.SourceFile, Set<string>>();
+
+/** Local names bound by the file's import declarations. */
+function importedNames(sf: ts.SourceFile): Set<string> {
+  let names = importedNamesMemo.get(sf);
+  if (names) return names;
+  names = new Set();
+  for (const st of sf.statements) {
+    const c = ts.isImportDeclaration(st) ? st.importClause : undefined;
+    if (!c) continue;
+    if (c.name) names.add(c.name.text);
+    const b = c.namedBindings;
+    if (b && ts.isNamespaceImport(b)) names.add(b.name.text);
+    if (b && ts.isNamedImports(b)) for (const el of b.elements) names.add(el.name.text);
+  }
+  importedNamesMemo.set(sf, names);
+  return names;
+}
+
+/** Is the declaring identifier `decl` a top-level (module-scope) variable, function or class? */
+function isTopLevelDeclaration(decl: ts.Identifier): boolean {
+  for (let cur: ts.Node | undefined = decl.parent; cur; cur = cur.parent) {
+    if (ts.isSourceFile(cur)) return true;
+    if (ts.isFunctionLike(cur) || ts.isBlock(cur) || ts.isCatchClause(cur) || ts.isForStatement(cur) || ts.isForOfStatement(cur) || ts.isForInStatement(cur)) return false;
+  }
+  return true;
+}
+
 function nearestDeclaration(id: ts.Identifier, stop?: ts.Node): ts.Identifier | undefined {
   const name = id.text;
   for (let cur: ts.Node | undefined = id.parent; cur; cur = cur.parent) {
@@ -1025,6 +1100,8 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   const fnNodes = new Map<string, ts.FunctionLikeDeclaration>();
   /** `export default <hoc>(X)` / `module.exports = <hoc>(X)`: X, checked against the symbols after the walk. */
   let wrapCandidate: { name: string; known: boolean } | undefined;
+  /** export name -> local class of an exported instance (checked against the file's classes after the walk). */
+  const instanceExports = new Map<string, string>();
 
   walk(file.sf, (node) => {
     const fnName = functionLikeName(node);
@@ -1186,7 +1263,21 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
 
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const className = newExpressionClass(node.initializer);
-      if (className) idx.localNews.push({ caller: enclosingSymbol(node), local: node.name.text, className });
+      if (className) {
+        const caller = enclosingSymbol(node);
+        idx.localNews.push({ caller, local: node.name.text, className });
+        const stmt = ownVariableStatement(node);
+        if (caller === "<module>" && stmt && isExported(stmt)) instanceExports.set(node.name.text, className);
+      }
+    }
+    // `export default new Lookup()` / `module.exports = new Lookup()`.
+    if (ts.isExportAssignment(node) && !node.isExportEquals) {
+      const className = newExpressionClass(node.expression);
+      if (className) instanceExports.set("default", className);
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isModuleExports(node.left)) {
+      const className = newExpressionClass(node.right);
+      if (className) instanceExports.set("exports", className); // CommonJS: what `require()` returns
     }
 
     if (ts.isObjectLiteralExpression(node)) {
@@ -1211,6 +1302,14 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
       const site: CallSite = { caller: enclosingSymbol(node), line: lineOf(node), callee: classify(node.expression) };
       const refArgs = node.arguments.flatMap((a, index) => (ts.isIdentifier(a) ? [{ index, name: a.text }] : []));
       if (refArgs.length > 0) site.refArgs = refArgs;
+      const thisArgs = node.arguments.flatMap((a, index) => {
+        const member = thisMemberArg(a);
+        const cls = member !== undefined ? enclosingClassName(node) : undefined;
+        return member !== undefined && cls !== undefined ? [{ index, cls, member }] : [];
+      });
+      if (thisArgs.length > 0) site.thisArgs = thisArgs;
+      const inlineArgs = node.arguments.flatMap((a, index) => (ts.isArrowFunction(a) || ts.isFunctionExpression(a) ? [index] : []));
+      if (inlineArgs.length > 0) site.inlineArgs = inlineArgs;
       const urlArgs = urlArgsOf(node);
       if (urlArgs.length > 0) site.urlArgs = urlArgs;
       const configArgs = configArgsOf(node);
@@ -1230,6 +1329,17 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
   });
 
   applyExportMarks(idx, marks);
+  // A module-level `const x = new C()` exported by name or as the default (`export default x`, `export { x }`).
+  for (const { local, as } of marks) {
+    const n = idx.localNews.find((l) => l.caller === "<module>" && l.local === local);
+    if (n && !instanceExports.has(as)) instanceExports.set(as, n.className);
+  }
+  const classes = new Set(idx.symbols.filter((sym) => sym.kind === "class").map((sym) => sym.name));
+  const instances = [...instanceExports.entries()]
+    .filter(([, className]) => classes.has(className))
+    .map(([as, className]) => ({ export: as, className }))
+    .sort((a, b) => compare(a.export, b.export));
+  if (instances.length > 0) idx.instances = instances;
   const found = [...wrappers.values()].filter((w): w is HttpWrapper => w !== null);
   if (found.length > 0) idx.wrappers = found;
   // Keep only identifier arguments that can name a function: a local function/class or an import.
@@ -1237,10 +1347,14 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     ...idx.symbols.filter((s) => s.binding && (s.kind === "function" || s.kind === "class")).map((s) => s.name),
     ...idx.imports.filter((i) => i.kind !== "namespace").map((i) => i.local),
   ]);
+  const methodNames = new Set(idx.symbols.filter((s) => s.kind === "method").map((s) => s.name));
   for (const site of idx.calls) {
     const kept = site.refArgs?.filter((a) => fnNames.has(a.name));
     if (kept && kept.length > 0) site.refArgs = kept;
     else delete site.refArgs;
+    const methods = site.thisArgs?.filter((a) => methodNames.has(`${a.cls}.${a.member}`));
+    if (methods && methods.length > 0) site.thisArgs = methods;
+    else delete site.thisArgs;
   }
   // A plain-name JSX reference (`value={title}`) counts only when the name can be a function.
   // A name destructured from a hook's result can be a function too (H10).
@@ -1273,6 +1387,27 @@ export function buildFileCodeIndex(file: ParsedFile): FileCodeIndex {
     idx.defaultObject = obj;
   }
   return idx;
+}
+
+/** `this.x` or `this.x.bind(this)` as an argument: `x`. */
+function thisMemberArg(arg: ts.Expression): string | undefined {
+  let e = arg;
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "bind"
+    && e.arguments.length === 1 && e.arguments[0]!.kind === ts.SyntaxKind.ThisKeyword) {
+    e = e.expression.expression;
+  }
+  return ts.isPropertyAccessExpression(e) && e.expression.kind === ts.SyntaxKind.ThisKeyword && ts.isIdentifier(e.name)
+    ? e.name.text : undefined;
+}
+
+/** The class a node sits in, when the nearest function around it is that class's own method (an arrow inside
+ * the method keeps `this`; a nested `function () {}` does not). */
+function enclosingClassName(node: ts.Node): string | undefined {
+  for (let cur: ts.Node | undefined = node.parent; cur; cur = cur.parent) {
+    if (ts.isFunctionDeclaration(cur) || ts.isFunctionExpression(cur)) return undefined;
+    if (ts.isClassLike(cur)) return className(cur);
+  }
+  return undefined;
 }
 
 export function symbolAt(idx: FileCodeIndex, line: number): CodeSymbol | undefined {

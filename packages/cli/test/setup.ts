@@ -1,11 +1,15 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 
-// Personal progress lives under CODELOOM_HOME (else ~/.codeloom): never let a test read or write the
-// real home folder.
+// Personal progress, the repo registry and group data live under CODELOOM_HOME (else ~/.codeloom): never let
+// a test read or write the real home folder, and give every test its own, so no two tests share a registry
+// (since 0.6, `codeloom index` in a lone repo registers it there). A file's beforeAll runs with the first.
 process.env.CODELOOM_HOME = mkdtempSync(join(tmpdir(), "codeloom-home-"));
+beforeEach(() => {
+  process.env.CODELOOM_HOME = mkdtempSync(join(tmpdir(), "codeloom-home-"));
+});
 
 // Tests commit to temp git repos through codeloom's own git() wrapper, which (like the product) passes no
 // identity. CI runners have no git identity and no full user name, so give every test commit one here.

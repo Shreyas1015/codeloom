@@ -1,10 +1,10 @@
-import { join } from "node:path";
 import { compare } from "../util.js";
 import { git } from "../workspace/git.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import { buildReview } from "./build.js";
 import { codeToCheckOrder, fileKind } from "./paths.js";
 import type { Review, ReviewEntry, ReviewNodeChange, ReviewRisk } from "./types.js";
+import { repoAbsPath } from "../workspace/registry.js";
 
 // The check packet (0.5 spec §3): everything Claude needs to check codeloom's draft of a PR, and nothing more,
 // so a check costs few tokens and needs no other tool call. Built from the Review alone (no AI) plus the
@@ -160,6 +160,42 @@ function largest(max: number, fits: (n: number) => boolean): number {
   return lo;
 }
 
+/** Every name the Review offers, by kind (before any cap): the changed functions and the function/handler stops of
+ * the touched chains (never one in a test or docs file), entry routes/pages/queues, tables and queues, changed files
+ * and journey names — plus the (clipped) queue names, which never count as tables. */
+function factPool(review: Review): { everything: Record<FactKey, string[]>; queueNames: Set<string> } {
+  const nodes = codeToCheckOrder(review);
+  const stops = Object.keys(review.chainStops)
+    .filter((id) => Object.hasOwn(review.chainStops, id))
+    .flatMap((id) => review.chainStops[id]!);
+  const stopNames = (pred: (kind: string | undefined, lane: string) => boolean): string[] =>
+    stops.filter((s) => pred(s.kind, s.lane)).map((s) => String(s.label).replace(/ \((?:read|insert|update|delete|upsert|publish|consume)\)$/, ""));
+  const queueNames = new Set([...review.queues, ...stopNames((_k, lane) => lane === "queue")].map(clip));
+  // A function/handler stop in a test or docs file (paths.ts fileKind) is never an uncited fact either
+  // (0.5 acceptance fix): review.nodes already excludes it, so only a chain stop could still sneak it in.
+  const nonTestDocsFunctionStops = stops
+    .filter((s) => (s.kind === "function" || s.kind === "handler") && !(s.file !== undefined && (fileKind(s.file) === "tests" || fileKind(s.file) === "docs")))
+    .map((s) => String(s.label).replace(/ \((?:read|insert|update|delete|upsert|publish|consume)\)$/, ""));
+  const everything: Record<FactKey, string[]> = {
+    functions: [...nodes.map((n) => n.symbol), ...nonTestDocsFunctionStops],
+    routes: [...review.entries.filter((e) => e.kind === "route").map((e) => e.label), ...stopNames((k) => k === "route")],
+    pages: [...review.entries.filter((e) => e.kind === "page").map((e) => e.label), ...stopNames((k) => k === "page")],
+    queues: [...review.queues, ...review.entries.filter((e) => e.kind === "consumer").map((e) => e.label), ...stopNames((_k, lane) => lane === "queue")],
+    tables: [...review.writes, ...review.readsOnly, ...review.tables, ...stopNames((_k, lane) => lane === "db")].filter((n) => !queueNames.has(clip(n))),
+    files: [...review.risks.map((r) => r.file), ...review.files.map((f) => `${f.repo}/${f.file}`)],
+    journeys: review.journeys.map((j) => j.name),
+  };
+  return { everything, queueNames };
+}
+
+/** Every name a Review offers, by kind — what a check packet's facts are drawn from (before the packet's caps). Each
+ * name as the Review has it and, when longer than PACKET_LIMITS.stringChars, also as the packet clips it (the form
+ * Claude saw). The hosted snapshot checks data/pr-summary.json's names against these. */
+export function reviewFacts(review: Review): Record<FactKey, Set<string>> {
+  const { everything } = factPool(review);
+  return Object.fromEntries(FACT_KEYS.map((k) => [k, new Set(everything[k].flatMap((n) => [String(n), clip(String(n))]))])) as Record<FactKey, Set<string>>;
+}
+
 /** The packet for an already-built Review and its commit lines (oldest first). Pure: no git, no files.
  * Caps first (each hunk ≤ 60 lines, ≤ 400 hunk lines shared evenly between the changed functions, ≤ 40 commit
  * lines, ≤ 300 characters a string, ≤ 100 items a list — never below what the draft cites); then, while the JSON
@@ -212,26 +248,7 @@ export function packetFromReview(review: Review, commitLinesIn: string[]): Check
     Object.fromEntries(DRAFT_CUT_ORDER.map((k) => [k, (fullDraft[k] as unknown[]).slice(0, draftKept[k])])) as unknown as CheckPacket["draft"];
 
   // Facts: the names the (full) draft cites, then every other name on the touched chains (the "uncited" pool).
-  const stops = Object.keys(review.chainStops)
-    .filter((id) => Object.hasOwn(review.chainStops, id))
-    .flatMap((id) => review.chainStops[id]!);
-  const stopNames = (pred: (kind: string | undefined, lane: string) => boolean): string[] =>
-    stops.filter((s) => pred(s.kind, s.lane)).map((s) => String(s.label).replace(/ \((?:read|insert|update|delete|upsert|publish|consume)\)$/, ""));
-  const queueNames = new Set([...review.queues, ...stopNames((_k, lane) => lane === "queue")].map(clip));
-  // A function/handler stop in a test or docs file (paths.ts fileKind) is never an uncited fact either
-  // (0.5 acceptance fix): review.nodes already excludes it, so only a chain stop could still sneak it in.
-  const nonTestDocsFunctionStops = stops
-    .filter((s) => (s.kind === "function" || s.kind === "handler") && !(s.file !== undefined && (fileKind(s.file) === "tests" || fileKind(s.file) === "docs")))
-    .map((s) => String(s.label).replace(/ \((?:read|insert|update|delete|upsert|publish|consume)\)$/, ""));
-  const everything: Record<FactKey, string[]> = {
-    functions: [...nodes.map((n) => n.symbol), ...nonTestDocsFunctionStops],
-    routes: [...review.entries.filter((e) => e.kind === "route").map((e) => e.label), ...stopNames((k) => k === "route")],
-    pages: [...review.entries.filter((e) => e.kind === "page").map((e) => e.label), ...stopNames((k) => k === "page")],
-    queues: [...review.queues, ...review.entries.filter((e) => e.kind === "consumer").map((e) => e.label), ...stopNames((_k, lane) => lane === "queue")],
-    tables: [...review.writes, ...review.readsOnly, ...review.tables, ...stopNames((_k, lane) => lane === "db")].filter((n) => !queueNames.has(clip(n))),
-    files: [...review.risks.map((r) => r.file), ...review.files.map((f) => `${f.repo}/${f.file}`)],
-    journeys: review.journeys.map((j) => j.name),
-  };
+  const { everything, queueNames } = factPool(review);
   const cited0 = citedBy(fullDraft, queueNames);
   const uncited = {} as Record<FactKey, string[]>;
   const uncitedKept = {} as Record<FactKey, number>;
@@ -352,7 +369,7 @@ export function reviewedDir(start: string, repoId: string): string {
   const ws = loadWorkspace(start);
   if (repoId === "") return ws.root;
   const ref = ws.repos.find((r) => r.id === repoId);
-  return ref ? join(ws.root, ref.path) : ws.root;
+  return ref ? repoAbsPath(ws.root, ref) : ws.root;
 }
 
 /** The check packet for an already-built Review: reads its commit messages from the reviewed repo. Read only. */

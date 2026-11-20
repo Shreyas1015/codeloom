@@ -9,7 +9,8 @@ import { stripCounts, understoodPercent } from "@/lib/progress";
 import { ContinueBand } from "./ContinueBand";
 import { JourneyList } from "./JourneyList";
 import { UnnamedChains } from "./UnnamedChains";
-import { AgentHint } from "./parts";
+import { isSnapshot } from "@/api/static";
+import { AgentHint, OpenQuestions } from "./parts";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 const plural = (n: number, one: string, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
@@ -132,6 +133,8 @@ function HomeBody({
   return (
     <>
       <CountStrip counts={counts(overview)} />
+      {/* A hosted snapshot has no Claude Code session to answer in. */}
+      {overview.gaps && !isSnapshot() && <OpenQuestions open={overview.gaps.open} />}
       <ContinueBand workspace={overview.name} data={data} progress={progress} />
       {nothing ? (
         <Empty />

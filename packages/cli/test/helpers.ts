@@ -15,8 +15,29 @@ export function commitAll(dir: string): void {
   git(dir, "commit", "-q", "--allow-empty", "-m", "update");
 }
 
+/** Point CODELOOM_HOME at a new empty folder. Since 0.6, `codeloom index` in a repo with no workspace file
+ * registers it there, and repos with no remote in the same parent folder (every makeRepo under tmpdir) form
+ * one group: a test indexing lone repos starts from its own empty registry. */
+export function freshHome(): string {
+  process.env.CODELOOM_HOME = mkdtempSync(join(tmpdir(), "codeloom-home-"));
+  return process.env.CODELOOM_HOME;
+}
+
+/** The folder a test repo gets by default: a fresh temp folder, then the package.json name (0.6: a group repo's id
+ * is its remote's repo name, else its folder name — so a lone test repo is still named like its package). */
+function defaultRepoDir(files: Record<string, string>): string {
+  let name = "repo";
+  try {
+    const pkg = files["package.json"] !== undefined ? (JSON.parse(files["package.json"]) as { name?: unknown }) : {};
+    if (typeof pkg.name === "string" && pkg.name.trim() !== "") name = pkg.name.replace(/@/g, "").replace(/[/:#]/g, "-");
+  } catch {
+    // not JSON: keep "repo"
+  }
+  return join(mkdtempSync(join(tmpdir(), "codeloom-repo-")), name);
+}
+
 /** Create a git repo with the given files committed. Returns its absolute path. */
-export function makeRepo(files: Record<string, string>, dir = mkdtempSync(join(tmpdir(), "codeloom-repo-"))): string {
+export function makeRepo(files: Record<string, string>, dir = defaultRepoDir(files)): string {
   mkdirSync(dir, { recursive: true });
   for (const [rel, content] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, rel)), { recursive: true });

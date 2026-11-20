@@ -1,6 +1,6 @@
 # Working with your agent
 
-Tours, progress, specs and views: what your agent writes through MCP, and where it is kept.
+Tours, progress, specs, views and answers about the map: what your agent writes through MCP, and where it is kept.
 
 ## Tours and progress
 
@@ -86,3 +86,26 @@ cannot be read never breaks the dashboard: it shows what is wrong and `codeloom 
 | Spec candidates | `.codeloom/spec-candidates.json` | Committed. Rebuilt by `codeloom index`. |
 | Spec links | `.codeloom/specs.json` | Committed. Written only by `save_spec_links`. |
 | Views | `.codeloom/views/<id>.json` | Committed. Written only by `save_view`. |
+
+## Questions about the map
+
+codeloom never guesses a link it cannot see in the code. What it cannot settle becomes a question:
+`codeloom gaps` lists them (a call through `process.env.BILLING_URL` that two repos could serve, a queue nobody
+consumes, a repo connected to nothing, a route nothing calls), the ones touching most journeys first.
+
+Run `codeloom ask`: it asks before starting Claude Code with the interview (or run
+`/mcp__codeloom__map-interview` in Claude Code yourself). Claude reads the list
+(`map_gaps`), asks you one short question at a time with an answer proposed from the evidence, and saves your
+answer with `save_map_answers`. codeloom checks every name in it against the map, links the map again without
+parsing any repo, and tells Claude which questions closed and which chains appeared; the dashboard updates by
+itself.
+
+An answer about an env var or host is for one calling repo, since two frontends may point the same variable
+at different backends. A call that two repos could serve is settled with a link for that call; a repo's role
+only describes it. codeloom refuses an answer that sends calls where none of them match, or that would make a
+link it was sure of weaker for some other call. Saying a repo's uncalled routes are expected also hides routes of that repo that lose
+their caller later.
+
+Answers live in `.codeloom/answers.json` of the group (`~/.codeloom/groups/<group>/`) or of the workspace
+folder, and every later `codeloom index` of any repo applies them, so nothing is asked twice. After editing
+that file by hand, run `codeloom link`.

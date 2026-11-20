@@ -7,6 +7,8 @@ import { runIndex } from "../packages/cli/dist/commands/index-cmd.js";
 import { runSnapshot } from "../packages/cli/dist/commands/snapshot.js";
 import { chainId } from "../packages/cli/dist/linker/chains.js";
 import { saveJourneysTool } from "../packages/cli/dist/mcp/tools/journeys.js";
+import { buildCheckPacket } from "../packages/cli/dist/review/packet.js";
+import { rememberPacket, savePrReview } from "../packages/cli/dist/review/saved.js";
 import { commitChange, git, materializeSingleRepoDemoShop, serveSnapshot, type StaticSite } from "./workspace";
 
 // This PR review maps' hosted snapshot (design §7): a real `codeloom snapshot` of demo-shop after a commit
@@ -50,6 +52,16 @@ test.beforeAll(async () => {
   // A Next.js dynamic segment: "[id]" in the path (final review C1 — such a path used to make the publish
   // step refuse the whole snapshot, and its %-escaped Map folder key 404'd on a static host).
   commitChange(repoRoot, ID_PAGE, (text) => text.replace("<h1>{customer.name}</h1>", "<h1>Customer {customer.name}</h1>"), "edit the [id] page");
+
+  // Claude's checked review of this head (what `codeloom pr --check` saves through save_pr_review), so the page
+  // opens on the checked summary.
+  const packet = buildCheckPacket(repoRoot, "main");
+  rememberPacket(repoRoot, packet);
+  savePrReview(repoRoot, {
+    head: packet.head,
+    whatItDoes: "Creating a customer now requires an email instead of writing an audit log row.",
+    codeToCheck: [{ name: "CustomerService.create", note: "the audit log insert is gone" }],
+  });
 
   // `codeloom snapshot --base main --out <dir>`: the full static site (data + dashboard assets +
   // review.md), not `--data-only` — this is what `codeloom init --github`'s publish workflow serves.
@@ -101,8 +113,25 @@ test("a hosted PR snapshot: This PR screen, the diff, rail navigation, hash relo
   const rail = page.getByRole("complementary", { name: "codeloom" });
   await expect(rail.getByRole("link", { name: "This PR" })).toHaveAttribute("aria-current", "page");
 
+  // ---- the page opens on the PR summary, above the counts: Claude's checked review merged with the facts ----
+  const summary = screen.getByRole("region", { name: "What this PR does" });
+  await expect(summary).toContainText("Checked by Claude");
+  await expect(summary).toContainText("Creating a customer now requires an email instead of writing an audit log row.");
+  const codeToCheck = summary.getByRole("list", { name: "Code to check" });
+  await expect(codeToCheck).toContainText("CustomerService.create");
+  await expect(codeToCheck).toContainText("Claude: the audit log insert is gone");
+  const summaryBox = await summary.boundingBox();
+  const totalsBox = await screen.getByRole("list", { name: "PR totals" }).boundingBox();
+  expect(summaryBox!.y + summaryBox!.height).toBeLessThanOrEqual(totalsBox!.y);
+
+  // ---- a Code to check function opens its diff in the code panel ----
+  await codeToCheck.getByRole("button", { name: "CustomerService.create" }).click();
+  const fromSummary = page.getByRole("complementary", { name: "Code panel" });
+  await expect(fromSummary.getByRole("tab", { name: "Change" })).toHaveAttribute("aria-selected", "true");
+  await expect(fromSummary.locator('[data-slot="diff-view"]')).toContainText("email required");
+
   // ---- the changed stop: Change tab shows the added lines by default ----
-  const stop = screen.getByRole("button", { name: /CustomerService\.create/ });
+  const stop = screen.getByRole("button", { name: /^Stop \d+: CustomerService\.create/ });
   await expect(stop).toHaveAttribute("data-changed", "true");
   await stop.click();
 

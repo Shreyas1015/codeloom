@@ -28,7 +28,23 @@ web  /customers/new        (page)
 
 ## Quick start
 
-You need Node 20 or newer and git. Run this in a repo, or in a folder that holds several repos:
+You need Node 20 or newer and git. Go into each repo and run `npx codeloom index`:
+
+```sh
+cd web && npx codeloom index
+cd ../api && npx codeloom index    # links web's calls to api's routes
+npx codeloom dashboard             # from inside any of them
+```
+
+No setup file is needed. Repos with the same git remote owner (`github.com/your-team`) join one group and
+are linked into journeys by themselves, in any order and from any folder; a repo with no remote joins the
+group of its parent folder's name, and `--group <name>` picks one by hand. Indexing a repo re-links its
+group from the other repos' saved maps, without parsing them again. Of several checkouts of the same repo,
+the one indexed last is used; two different repos with the same name get `-2`, in index order. Each repo's
+own map stays in its `.codeloom/` (kept out of `git status` through `.git/info/exclude`); the group's journeys
+live in `~/.codeloom/groups/`.
+
+Prefer one folder for all repos? Run this in a repo, or in a folder that holds several repos:
 
 ```sh
 npx codeloom init
@@ -43,6 +59,8 @@ offers to open the dashboard. `--yes` takes every default instead of asking (for
 When Claude Code is connected, `init` can also ask it to name your journeys right there — or run
 `/mcp__codeloom__name-journeys` yourself any time. Claude groups the request chains into named journeys,
 and the dashboard updates by itself. codeloom never starts Claude without asking first.
+
+On a PR branch: `npx codeloom pr` — one page that shows what the PR does (and, if you say so, checked by Claude).
 
 `init` also adds a git hook that re-indexes after each commit (when you chose to commit its files). Install
 codeloom globally (`npm i -g codeloom`) so the hook keeps working after the npx cache is cleared.
@@ -61,6 +79,10 @@ codeloom globally (`npm i -g codeloom`) so the hook keeps working after the npx 
   the real ones, so you can see which features have no spec.
 - **Views on request.** Ask Claude for a page ("customer journeys with no spec") and it builds one from
   codeloom's widgets.
+- **Questions instead of guesses.** When codeloom cannot tell where a call goes (an unknown `BILLING_URL`, a
+  queue nobody consumes, a repo connected to nothing), `codeloom gaps` lists it as a short question.
+  `codeloom ask` starts Claude Code (after asking you) to go through them one at a time, fixing the map after
+  each answer; every later index keeps the answers.
 - **A CI check.** `codeloom check --fail-under 80` fails the build when too few UI journeys reach the database.
 - **PR drafts Claude can check.** `codeloom review --base main` writes a plain draft of a pull request from
   the map alone (no AI): where it matters, what it writes, what to do before deploying, the functions to check

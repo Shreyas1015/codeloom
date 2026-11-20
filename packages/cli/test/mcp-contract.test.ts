@@ -55,6 +55,8 @@ const StopView = z
     reason: str.optional(),
     ref: str.regex(/^[^:]+::.+$/).optional(),
     from: int.nonnegative().optional(),
+    /** 0.6: a route stop not expanded here goes on in this chain. */
+    continues: z.object({ chain: str.regex(/^ch_[0-9a-f]{12}$/), name: str, journey: str.optional() }).strict().optional(),
   })
   .strict();
 
@@ -317,6 +319,40 @@ const RawSchemas: Record<string, z.ZodObject> = {
     })
     .strict(),
   save_pr_review: z.object({ saved: z.literal(true), head: str.regex(/^[0-9a-f]{40}$/), path: str, checkedOn: str.regex(/^\d{4}-\d{2}-\d{2}$/) }).strict(),
+  map_gaps: z
+    .object({
+      open: int.nonnegative(),
+      shown: int.nonnegative(),
+      gaps: z.array(z.object({
+        id: str.regex(/^g_[0-9a-f]{12}$/),
+        kind: z.enum(["repo-alone", "unconnected-repo", "unknown-base", "unplaced-proxy", "ambiguous-match", "call-no-route", "queue-no-consumer", "queue-no-publisher", "queue-unknown", "route-no-caller", "unclear-role"]),
+        journeys: int.positive().optional(),
+        chains: int.positive().optional(),
+        question: str.min(1),
+        evidence: z.array(str).max(2),
+        more: int.positive().optional(),
+        close: str.min(1),
+        suggest: z.array(str).max(3).optional(),
+        related: z.array(str.regex(/^g_[0-9a-f]{12}$/)).max(3).optional(),
+      }).strict()).max(40),
+      answerShapes: z.record(z.enum(["env", "external", "proxy", "link", "role", "ignore-repo", "queue-alias", "ignore-gap", "join-group", "queue-name"]), str),
+      next: str.optional(),
+    })
+    .strict(),
+  save_map_answers: z
+    .object({
+      saved: int.positive(),
+      moved: z.array(z.object({ gap: str.regex(/^g_[0-9a-f]{12}$/).optional(), from: str, to: str, n: int.positive() }).strict()).max(10).optional(),
+      closed: z.array(z.object({ id: str.regex(/^g_[0-9a-f]{12}$/), kind: str }).strict()).max(10),
+      opened: z.array(z.object({ id: str.regex(/^g_[0-9a-f]{12}$/), kind: str }).strict()).max(10),
+      newChains: z.array(z.object({ name: str, repos: str, complete: z.boolean() }).strict()).max(3),
+      moreNewChains: int.positive().optional(),
+      grown: z.array(z.object({ name: str, repos: str, complete: z.boolean() }).strict()).max(3).optional(),
+      moreGrown: int.positive().optional(),
+      open: int.nonnegative(),
+      chains: z.object({ total: int, complete: int }).strict(),
+    })
+    .strict(),
   workspace_overview: z
     .object({
       name: str,
@@ -558,11 +594,15 @@ function textOf(r: CallToolResult): string {
 }
 
 /** Call a tool, require success, check the contract, return the result object. */
+const TEXT_ONLY = new Set(["map_gaps", "save_map_answers"]);
+
 async function valid(client: Client, name: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const r = (await client.callTool({ name, arguments: args })) as CallToolResult;
   if (r.isError) throw new Error(`${name} failed: ${JSON.stringify(r.content)}`);
   const parsed = JSON.parse(textOf(r)) as Record<string, unknown>;
-  expect(r.structuredContent).toEqual(parsed);
+  // The map-interview tools send their compact JSON once, as text only (0.6 §5 token budget).
+  if (TEXT_ONLY.has(name)) expect(r.structuredContent).toBeUndefined();
+  else expect(r.structuredContent).toEqual(parsed);
   const check = Schemas[name]!.safeParse(parsed);
   if (!check.success) throw new Error(`${name} result breaks the contract: ${JSON.stringify(check.error.issues, null, 2)}`);
   return parsed;
@@ -802,6 +842,22 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(c, root, "pr_check_packet", { base: "HEAD", repo: "nope" });
   });
 
+  it("map_gaps and save_map_answers: the gaps are listed, an answer is saved and re-linked; invented names write nothing", async () => {
+    const root = copyShop(shop);
+    const c = await connect(root);
+    const gaps = (await valid(c, "map_gaps")) as { open: number; gaps: Array<{ id: string }> };
+    expect(gaps.open).toBeGreaterThanOrEqual(0);
+    await invalid(c, root, "save_map_answers", { answers: [{ kind: "env", name: "NEXT_PUBLIC_BILLING_URL", repo: "demo-ghost" }] });
+    await invalid(c, root, "save_map_answers", { answers: [{ kind: "env", name: "GHOST_URL", repo: "demo-billing" }] });
+    await invalid(c, root, "save_map_answers", { answers: [{ kind: "link", from: "demo-web:lib/billing.ts#createInvoice", to: "route:demo-billing:GET /nope" }] });
+    await invalid(c, root, "save_map_answers", { answers: [] });
+    await invalid(c, root, "save_map_answers", { answers: [{ kind: "galaxy" }] });
+    const saved = (await valid(c, "save_map_answers", { answers: [{ kind: "env", name: "NEXT_PUBLIC_BILLING_URL", repo: "demo-billing" }] })) as { saved: number };
+    expect(saved.saved).toBe(1);
+    expect(existsSync(join(root, ".codeloom", "answers.json"))).toBe(true);
+    await invalid(emptyClient, empty, "map_gaps");
+  });
+
   it("every tool rejects invalid input with isError and changes no file", async () => {
     // tools with no input: point them at a folder that is not an indexed workspace
     expect(await invalid(emptyClient, empty, "workspace_overview")).toMatch(/codeloom/i);
@@ -837,11 +893,12 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     await invalid(client, shop, "delete_view", { id: "../x" });
     await invalid(client, shop, "pr_check_packet", { base: "HEAD" }); // a folder of repos: --repo needed
     await invalid(client, shop, "save_pr_review", { head: "../x", whatItDoes: "x" });
+    await invalid(client, shop, "save_map_answers", { answers: [{ kind: "role", repo: "nope", role: "lib" }] });
   });
 
   it("prompts/list and getPrompt", async () => {
     const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "check-pr", "make-view", "match-specs", "name-journeys", "verify-journey", "write-tour"]);
+    expect(prompts.map((p) => p.name).sort()).toEqual(["check-me", "check-pr", "make-view", "map-interview", "match-specs", "name-journeys", "verify-journey", "write-tour"]);
     expect(prompts.find((p) => p.name === "check-pr")!.arguments).toEqual([
       expect.objectContaining({ name: "base", required: true }),
       expect.objectContaining({ name: "repo", required: false }),
@@ -865,6 +922,8 @@ describe("MCP contract on demo-shop", { timeout: 90_000 }, () => {
     expect(check.messages[0]!.content.text).toMatch(/record_check/);
     await expect(client.getPrompt({ name: "write-tour", arguments: {} })).rejects.toThrow();
     await expect(client.getPrompt({ name: "check-me", arguments: {} })).rejects.toThrow();
+    const interview = PromptResult.parse(await client.getPrompt({ name: "map-interview" }));
+    expect(interview.messages[0]!.content.text).toMatch(/map_gaps[\s\S]*ONE short question[\s\S]*save_map_answers/);
     const pr = PromptResult.parse(await client.getPrompt({ name: "check-pr", arguments: { base: "HEAD", repo: "demo-api" } }));
     expect(pr.messages[0]!.content.text).toMatch(/save_pr_review[\s\S]*"facts"/);
   });

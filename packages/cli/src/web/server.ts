@@ -33,7 +33,7 @@ export interface DashboardServer {
   close(): Promise<void>;
 }
 
-const HOST = "127.0.0.1";
+export const HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
 /** The session cookie name: per port, because browsers scope cookies by host, not port, so two
@@ -94,7 +94,7 @@ function sameOrigin(req: IncomingMessage, port: number): boolean {
  * nothing, or is malformed. Works on the raw path (each segment percent-decoded on its own), so "..",
  * "%2e%2e" and encoded slashes/backslashes/NULs are all refused rather than normalised away; the
  * resolved real path (symlinks followed) must still lie inside root's real path. */
-function resolveStatic(root: string, rawPath: string): { file: string; rel: string } | "bad" | "missing" {
+export function resolveStatic(root: string, rawPath: string): { file: string; rel: string } | "bad" | "missing" {
   const segs: string[] = [];
   for (const raw of rawPath.split("/")) {
     if (raw === "") continue;
@@ -148,7 +148,7 @@ function sendIndexHtml(res: ServerResponse, assetsDir: string, head: boolean): v
   res.end(html);
 }
 
-function sendFile(res: ServerResponse, file: string, rel: string, head: boolean): void {
+export function sendFile(res: ServerResponse, file: string, rel: string, head: boolean): void {
   const type = CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
   const immutable = rel.startsWith("assets/") && HASHED.test(rel);
   res.writeHead(200, {

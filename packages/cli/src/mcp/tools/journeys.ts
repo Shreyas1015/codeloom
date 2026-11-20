@@ -17,7 +17,8 @@ import {
  * the stop sits on a graph node, ready for get_node / explain_context, and `from` (the index, in the same
  * chain's stops, of the stop it was reached from). `withFrom: false` for lists that merge several chains'
  * stops (get_journey's lanes), where an index into one chain would mislead. */
-function stopView(s: ChainStop, withFrom = true): Record<string, unknown> {
+function stopView(s: ChainStop, withFrom = true, cont?: ContinuesOf): Record<string, unknown> {
+  const goesOn = s.continues !== undefined ? cont?.(s.continues) : undefined;
   return {
     lane: s.lane, kind: s.kind, repo: s.repo, file: s.file, line: s.line, symbol: s.symbol,
     ...(s.label !== undefined ? { label: s.label } : {}),
@@ -26,6 +27,25 @@ function stopView(s: ChainStop, withFrom = true): Record<string, unknown> {
     ...(s.hop.reason !== undefined ? { reason: s.hop.reason } : {}),
     ...(s.nodeId !== undefined ? { ref: formatNodeRef({ repo: s.repo, nodeId: s.nodeId }) } : {}),
     ...(withFrom && s.from !== undefined ? { from: s.from } : {}),
+    ...(goesOn ? { continues: goesOn } : {}),
+  };
+}
+
+/** 0.6: a route stop a chain does not expand (a service hop past the chain's limit) names the chain it goes on in
+ * (`continues`): the id that chain has now (ids, then aliases), its name, and the journey naming it, if any — so a
+ * cut-off route never reads as a dead end. */
+type ContinuesOf = (id: string) => { chain: string; name: string; journey?: string } | undefined;
+
+function continuesOf(state: MapState): ContinuesOf {
+  const lookup = chainLookup(state.chains);
+  const journeys = journeysByChain(state);
+  const names = new Map(state.journeys.map((j) => [j.id, j.name]));
+  return (id) => {
+    const c = lookup.resolve([id]).chains[0];
+    if (!c) return undefined;
+    const j = journeys.get(c.id)?.[0];
+    const journey = j !== undefined ? names.get(j) : undefined;
+    return { chain: c.id, name: c.name, ...(journey !== undefined ? { journey } : {}) };
   };
 }
 
@@ -50,8 +70,8 @@ function chainRow(c: Chain, journeys: Map<string, string[]>): Record<string, unk
 }
 
 /** chainRow plus the stops and what the linker could not resolve (list_chains `detail: true`, get_journey). */
-function chainView(c: Chain, journeys: Map<string, string[]>): Record<string, unknown> {
-  return { ...chainRow(c, journeys), stops: c.stops.map((s) => stopView(s)), unresolved: c.unresolved };
+function chainView(c: Chain, journeys: Map<string, string[]>, cont?: ContinuesOf): Record<string, unknown> {
+  return { ...chainRow(c, journeys), stops: c.stops.map((s) => stopView(s, true, cont)), unresolved: c.unresolved };
 }
 
 function sortedChains(state: MapState): Chain[] {
@@ -87,8 +107,9 @@ export function listChains(start: string, args: ListChainsArgs): Record<string, 
   const limit = args.limit ?? 100;
   const offset = args.offset ?? 0;
   const page = hits.slice(offset, offset + limit);
-  const view = args.detail ? chainView : chainRow;
-  return { total: hits.length, chains: page.map((c) => view(c, journeys)), truncated: offset + page.length < hits.length };
+  const cont = args.detail ? continuesOf(state) : undefined;
+  const view = (c: Chain) => (args.detail ? chainView(c, journeys, cont) : chainRow(c, journeys));
+  return { total: hits.length, chains: page.map(view), truncated: offset + page.length < hits.length };
 }
 
 // ---- get_journey -------------------------------------------------------------------------------
@@ -125,6 +146,7 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
     throw dataError(`Unknown id "${id}": pass a journey id (j_…) or a chain id (ch_…).`);
   }
 
+  const cont = continuesOf(state);
   const lanes: Record<string, Record<string, unknown>[]> = Object.fromEntries(LANES.map((l) => [l, []]));
   const seen = new Set<string>();
   const files = new Set<string>();
@@ -138,13 +160,13 @@ export function getJourney(start: string, id: string): Record<string, unknown> {
       const key = JSON.stringify([s.lane, s.repo, s.file, s.line, s.symbol]);
       if (seen.has(key)) continue;
       seen.add(key);
-      lanes[s.lane]!.push(stopView(s, false));
+      lanes[s.lane]!.push(stopView(s, false, cont));
     }
   }
   const journeys = journeyIndex(state);
   return fitJourney({
     journey,
-    chains: chains.map((c) => chainView(c, journeys)),
+    chains: chains.map((c) => chainView(c, journeys, cont)),
     lanes,
     files: [...files].sort(compare),
     tables: [...tables].sort(compare),
@@ -403,9 +425,10 @@ export function traceRoute(start: string, from: string): Record<string, unknown>
       }),
     );
   }
+  const cont = continuesOf(state);
   return {
     from,
-    matches: hits.slice(0, TRACE_LIMIT).map((c) => ({ chainId: c.id, name: c.name, stops: c.stops.map((s) => stopView(s)) })),
+    matches: hits.slice(0, TRACE_LIMIT).map((c) => ({ chainId: c.id, name: c.name, stops: c.stops.map((s) => stopView(s, true, cont)) })),
     truncated: hits.length > TRACE_LIMIT,
   };
 }
@@ -468,7 +491,9 @@ export function registerJourneyTools(server: McpServer, opts: ServerOptions): vo
         "One user journey (id j_…) or one chain (id ch_…) laid out by lane: its chains, the ui / api / code / db / " +
         "queue stops (shared stops shown once), the files, tables and queues it touches, and what the linker could not resolve. " +
         "A saved chain id that now belongs to a longer chain (the flow gained a UI step) is followed to it and listed in " +
-        "movedChainIds ({from, to}); missingChainIds lists only ids that match no chain at all.",
+        "movedChainIds ({from, to}); missingChainIds lists only ids that match no chain at all. A route stop with " +
+        "`continues` ({chain, name, journey?}) is another service's route this chain does not expand: it goes on in that " +
+        "chain (call get_journey on it), never a dead end.",
       inputSchema: { id: z.string().min(1).describe("A journey id (j_…) or a chain id (ch_…).") },
     },
     withErrors(

@@ -1,0 +1,11 @@
+{
+  "extends": "./node_modules/adonis-preset-ts/tsconfig",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "./",
+    "paths": {
+      "App/*": ["./app/*"],
+      "Config/*": ["./config/*"]
+    }
+  }
+}

@@ -2,7 +2,9 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { contentHash, type KnowledgeGraph } from "@codeloom/core";
 import { JS_EXT, parseSource } from "../adapters/ast.js";
+import { withForwards } from "../adapters/proxy-forward.js";
 import { finalizeEndpoints, loadContext, runAdapters } from "../adapters/run.js";
+import { isTestFile } from "../linker/resolve-calls.js";
 import { emptyPart, type EndpointsPart, type ParsedFile } from "../adapters/types.js";
 import { CodeloomError } from "../errors.js";
 import { buildFileCodeIndex, type FileCodeIndex, type RepoCodeIndex } from "../linker/code-index.js";
@@ -24,7 +26,7 @@ const MAX_BYTES = 1_000_000;
 
 // Bump this whenever a cached record's shape changes (e.g. new fields on FileRecord,
 // a different endpoints/structure format) so stale cache entries get invalidated.
-export const CACHE_FORMAT = 30;
+export const CACHE_FORMAT = 34;
 
 /** The key a fingerprints cache must carry to be reused: CACHE_FORMAT, the codeloom version and the
  * repo's dependency context (loadContext(...).key). A cache with any other key is discarded. */
@@ -86,6 +88,25 @@ type FileRecord = Fingerprints["files"][string] & FileEntry & { endpoints: Endpo
 function toParsedFile(rel: string, content: string): ParsedFile {
   const isJs = JS_EXT.test(rel) && !rel.endsWith(".d.ts");
   return { rel, content, sf: isJs ? parseSource(rel, content) : undefined };
+}
+
+/** Reads and parses a repo's JS/TS files on demand, once each (files over the size limit or unreadable: none). */
+function sourceLoader(repoAbs: string, files: Set<string>): (rel: string) => ParsedFile | undefined {
+  const cache = new Map<string, ParsedFile | undefined>();
+  return (rel) => {
+    if (cache.has(rel)) return cache.get(rel);
+    let file: ParsedFile | undefined;
+    if (files.has(rel) && JS_EXT.test(rel) && !rel.endsWith(".d.ts")) {
+      try {
+        const abs = join(repoAbs, rel);
+        if (statSync(abs).size <= MAX_BYTES) file = toParsedFile(rel, readFileSync(abs, "utf8"));
+      } catch {
+        file = undefined; // deleted mid-run: nothing to follow
+      }
+    }
+    cache.set(rel, file);
+    return file;
+  };
 }
 
 export async function indexRepo(
@@ -161,7 +182,9 @@ export async function indexRepo(
     }
     next[rel] = record;
     entries.set(rel, { structure: record.structure, calls: record.calls });
-    parts.push(record.endpoints);
+    // 0.6: a test, e2e, load or mock file's calls, routes and queues are not the system's: never chain entries,
+    // never counted by check or the gaps. (Its code stays in the graph.)
+    parts.push(isTestFile(rel) ? emptyPart() : record.endpoints);
   }
 
   const head = gitHead(repoAbs);
@@ -172,7 +195,11 @@ export async function indexRepo(
   // re-indexing unchanged code leaves git clean. Time and commit go to the git-ignored cache.
   graph.project.analyzedAt = "";
   graph.project.gitCommitHash = "";
-  const endpoints = finalizeEndpoints(repoId, parts, (from, spec) => resolveImport(from, spec, fileSet, aliases));
+  const resolve = (from: string, spec: string) => resolveImport(from, spec, fileSet, aliases);
+  const finalized = finalizeEndpoints(repoId, parts, resolve);
+  // 0.6 §2: where each Next.js catch-all route forwards, followed across a few imports (only those routes' files
+  // and what they import are read again, so this is not cached per file).
+  const endpoints: EndpointsFile = { ...finalized, routes: withForwards(finalized.routes, sourceLoader(repoAbs, fileSet), resolve) };
   if (opts?.writeGraph !== false) writeJsonIfChanged(join(dir, FILES.graph), graph);
   writeJsonIfChanged(join(dir, FILES.endpoints), endpoints);
   writeJsonAtomic(cachePath, {
@@ -181,6 +208,7 @@ export async function indexRepo(
     indexedAt: new Date().toISOString(),
     gitCommitHash: head,
     files: next,
+    link: { format: CACHE_FORMAT, files, aliases },
   } satisfies Fingerprints);
 
   const codeIndex: RepoCodeIndex = new Map();

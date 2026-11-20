@@ -415,6 +415,19 @@ describe("Journey screen", () => {
     expect(aItems[5]).toHaveTextContent("From stop 4 · exact link");
   });
 
+  it("a route stop that continues in another chain links to it: a cut-off route is no dead end (0.6)", async () => {
+    const cut = structuredClone(journeyResult) as typeof journeyResult;
+    const chain = cut.chains[0]!;
+    const i = chain.stops.findIndex((s) => s.kind === "route");
+    chain.stops[i] = { ...chain.stops[i]!, continues: { chain: "ch_bbbb", name: "POST /billing/invoices", journey: "Billing raises an invoice" } };
+    stubApi({ j_invoice: cut, ch_aaaa: chainResult });
+    renderAt("/journeys/j_invoice");
+    await opened();
+    await userEvent.click(screen.getByRole("tab", { name: "Chains" }));
+    const link = screen.getByRole("link", { name: "Continues in Billing raises an invoice" });
+    expect(link).toHaveAttribute("href", "/journeys/ch_bbbb");
+  });
+
   it("a chain id shows the chain, marked as not in a journey yet", async () => {
     stubApi();
     renderAt("/journeys/ch_aaaa");

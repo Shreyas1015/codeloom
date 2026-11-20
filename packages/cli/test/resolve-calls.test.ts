@@ -3,7 +3,10 @@ import { buildFileCodeIndex } from "../src/linker/code-index.js";
 import type { RepoCodeIndex } from "../src/linker/code-index.js";
 import { BUILTIN_METHOD_NAMES, createCallResolver, isTestFile, MAX_DEPTH, walkCalls, walkCallers } from "../src/linker/resolve-calls.js";
 import type { CallResolver, SymbolRef } from "../src/linker/resolve-calls.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parsed } from "./adapter-helpers.js";
+import { makeRepo } from "./helpers.js";
 
 function repoOf(files: Record<string, string>): { index: RepoCodeIndex; files: Set<string> } {
   const index: RepoCodeIndex = new Map();
@@ -1015,5 +1018,144 @@ describe("this inside a nested function() {} is rebound (final review §7)", () 
     const calls = r.callsFrom(ref("services/customer.ts", "CustomerService.saveAll")).map((c) => `${c.site.line}:${c.target.symbol} (${c.confidence})`);
     expect(calls).toContain("4:CustomerService.checkInvoice (exact)");
     expect(calls.filter((c) => c.startsWith("3:")).every((c) => !c.endsWith("(exact)"))).toBe(true);
+  });
+});
+
+describe("exported class instances (singletons)", () => {
+  const LOOKUP = `class CustomerLookup {\n  find(id: number) { return { id }; }\n}\n`;
+  const caller = (imp: string) => `${imp}\nexport class CustomersController {\n  show() { return lookup.find(1); }\n}\n`;
+  const shapes: Array<[string, string, string]> = [
+    ["export default new C()", `${LOOKUP}export default new CustomerLookup();`, `import lookup from "./lookup.js";`],
+    ["const x = new C(); export default x", `${LOOKUP}const lookup = new CustomerLookup();\nexport default lookup;`, `import lookup from "./lookup.js";`],
+    ["export const x = new C()", `${LOOKUP}export const customerLookup = new CustomerLookup();`, `import { customerLookup as lookup } from "./lookup.js";`],
+    ["const x = new C(); export { x }", `${LOOKUP}const customerLookup = new CustomerLookup();\nexport { customerLookup };`, `import { customerLookup as lookup } from "./lookup.js";`],
+    ["module.exports = new C()", `${LOOKUP}module.exports = new CustomerLookup();`, `const lookup = require("./lookup.js");`],
+  ];
+  for (const [name, lookup, imp] of shapes) {
+    it(`follows an imported instance's method to its class: ${name}`, () => {
+      const resolver = resolverOf({ "lookup.ts": lookup, "controller.ts": caller(imp) });
+      expect(siteAt(resolver, "controller.ts", "CustomersController.show")).toMatchObject({
+        target: { file: "lookup.ts", symbol: "CustomerLookup.find" }, confidence: "exact",
+      });
+    });
+  }
+
+  it("does not treat an instance of an imported (library) class as a repo class", () => {
+    const resolver = resolverOf({
+      "client.ts": `import Redis from "ioredis";\nexport default new Redis();`,
+      "controller.ts": `import client from "./client.js";\nexport class C {\n  show() { return client.get("k"); }\n}\n`,
+    });
+    expect(siteAt(resolver, "controller.ts", "C.show")).toBeNull();
+  });
+});
+
+describe("a destructured parameter of a library type", () => {
+  const files = (sig: string, imp: string) => ({
+    "app/Controllers/Http/InvoicesController.ts": `export default class InvoicesController {\n  public async status() { return 1; }\n}\n`,
+    "app/Controllers/Http/OrdersController.ts": `${imp}\nexport default class OrdersController {\n  public async index(${sig}) { return response.status(200); }\n}\n`,
+  });
+
+  it("never guesses its method onto a same-named repo method (Adonis `{ response }: HttpContextContract`)", () => {
+    const resolver = resolverOf(files("{ response }: HttpContextContract", `import type { HttpContextContract } from "@ioc:Adonis/Core/HttpContext";`));
+    expect(siteAt(resolver, "app/Controllers/Http/OrdersController.ts", "OrdersController.index")).toBeNull();
+  });
+
+  it("follows `const { response } = ctx` back to the parameter's library type", () => {
+    const resolver = resolverOf({
+      "app/Controllers/Http/InvoicesController.ts": `export default class InvoicesController {\n  public async status() { return 1; }\n}\n`,
+      "app/Services/Receipts.ts": `import type { HttpContextContract } from "@ioc:Adonis/Core/HttpContext";
+export const sendReceipt = async (ctx: HttpContextContract) => {
+  const { request, response } = ctx;
+  return response
+    .status(200);
+};
+`,
+    });
+    expect(siteAt(resolver, "app/Services/Receipts.ts", "sendReceipt")).toBeNull();
+  });
+
+  it("still guesses when the parameter's type is the repo's own or unknown", () => {
+    for (const [sig, imp] of [["{ response }: Ctx", "interface Ctx { response: any }"], ["{ response }", ""]]) {
+      const resolver = resolverOf(files(sig!, imp!));
+      expect(siteAt(resolver, "app/Controllers/Http/OrdersController.ts", "OrdersController.index")).toMatchObject({
+        target: { symbol: "InvoicesController.status" }, confidence: "guess",
+      });
+    }
+  });
+});
+
+describe("a receiver imported from a package", () => {
+  const repo = {
+    "app/Controllers/Http/OrdersController.ts": `export default class OrdersController {\n  public async ship() { return 1; }\n  public async send() { return 2; }\n}\n`,
+  };
+
+  it("never guesses its method onto a same-named repo method (`Event.emit`, `Mail.send`)", () => {
+    const resolver = resolverOf({
+      ...repo,
+      "app/Services/Shipping.ts": `import Event from "@ioc:Adonis/Core/Event";
+import Mail from "@ioc:Adonis/Addons/Mail";
+export async function render() {
+  await Event.emit("order:shipped", {});
+  return Mail.send(() => {});
+}
+`,
+    });
+    expect(resolver.callsFrom({ repo: "api", file: "app/Services/Shipping.ts", symbol: "render" })).toEqual([]);
+  });
+
+  it("still guesses for an import codeloom cannot place (an alias or relative path it does not resolve)", () => {
+    for (const spec of ["../missing/lib.js", "@/lib/store", "~/lib/store"]) {
+      const resolver = resolverOf({
+        ...repo,
+        "app/Services/Shipping.ts": `import store from "${spec}";\nexport async function render() {\n  return store.ship();\n}\n`,
+      });
+      expect(siteAt(resolver, "app/Services/Shipping.ts", "render")).toMatchObject({ target: { symbol: "OrdersController.ship" }, confidence: "guess" });
+    }
+  });
+});
+
+describe("a receiver imported from a package: the repo's own packages and shadowing", () => {
+  const SERVICE = `export class CustomerService {\n  listCustomers() { return 1; }\n}\nexport const customerService = new CustomerService();\n`;
+
+  it("keeps the guess for an import of a workspace package of this repo (monorepo)", async () => {
+    const { loadAliases } = await import("../src/indexer/resolve-imports.js");
+    const repo = makeRepo({
+      "package.json": JSON.stringify({ name: "demo-shop-mono", private: true, workspaces: ["packages/*"] }),
+      "packages/shared/package.json": JSON.stringify({ name: "@demo/shared", main: "src/index.ts" }),
+      "packages/shared/src/index.ts": SERVICE,
+      "packages/api/package.json": JSON.stringify({ name: "@demo/api", dependencies: { "@demo/shared": "workspace:*" } }),
+      "packages/api/src/app.ts": `import { customerService } from "@demo/shared";\nimport Event from "@ioc:Adonis/Core/Event";\nexport function list() {\n  Event.emit("x");\n  return customerService.listCustomers();\n}\n`,
+    });
+    const rels = ["package.json", "packages/shared/package.json", "packages/shared/src/index.ts", "packages/api/package.json", "packages/api/src/app.ts"];
+    const { index, files } = repoOf(Object.fromEntries(rels.map((r) => [r, readFileSync(join(repo, r), "utf8")])));
+    const resolver = createCallResolver({ repo: "api", index, files, aliases: loadAliases(repo, rels) });
+    expect(resolver.callsFrom({ repo: "api", file: "packages/api/src/app.ts", symbol: "list" }).map((c) => `${c.target.symbol} ${c.confidence}`))
+      .toEqual(["CustomerService.listCustomers guess"]);
+  });
+
+  it("keeps the guess for a bare import of a folder of the repo (`services/customer` with no baseUrl)", () => {
+    const resolver = resolverOf({
+      "src/services/customer.ts": SERVICE,
+      "src/app.ts": `import { customerService } from "services/customer";\nexport function list() { return customerService.listCustomers(); }\n`,
+    });
+    expect(siteAt(resolver, "src/app.ts", "list")).toMatchObject({ target: { symbol: "CustomerService.listCustomers" }, confidence: "guess" });
+  });
+
+  it("keeps the guess for a field of a library type that the repo exports by that name (a decorated Request)", () => {
+    for (const body of [
+      `import type { Request } from "express";\nexport function list({ customerService }: Request) { return customerService.listCustomers(); }\n`,
+      `import { Request } from "express";\nexport function list(req: Request) { const { customerService } = req; return customerService.listCustomers(); }\n`,
+    ]) {
+      const resolver = resolverOf({ "src/svc.ts": SERVICE, "src/app.ts": body });
+      expect(siteAt(resolver, "src/app.ts", "list")).toMatchObject({ target: { symbol: "CustomerService.listCustomers" }, confidence: "guess" });
+    }
+  });
+
+  it("does not apply to a parameter that shadows a package import", () => {
+    const resolver = resolverOf({
+      "src/svc.ts": SERVICE,
+      "src/app.ts": `import customerService from "some-pkg";\nexport function list() { return [1].map((customerService: any) => customerService.listCustomers()); }\n`,
+    });
+    expect(resolver.callsFrom({ repo: "api", file: "src/app.ts", symbol: "list" }).map((c) => c.target.symbol)).toContain("CustomerService.listCustomers");
   });
 });

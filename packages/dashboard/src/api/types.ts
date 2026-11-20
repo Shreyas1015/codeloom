@@ -97,3 +97,65 @@ export interface Review {
   truncated: boolean;
   notes: string[];
 }
+
+// ---- PR summary (the This PR page's top; `codeloom pr`) -----------------------------------------------------
+// Mirrored by hand from packages/cli/src/review/summary.ts. `GET /api/pr-summary` (in a snapshot,
+// `data/pr-summary.json`) answers with `PrSummary`; an older snapshot has none.
+
+export interface SummaryWhere {
+  name: string;
+  /** Detected entry points only (Claude's ranking has no kind). */
+  kind?: "route" | "page" | "consumer";
+  journey?: string;
+  repo?: string;
+  /** Claude's reason. */
+  why?: string;
+}
+
+export interface SummaryWrite {
+  name: string;
+  /** codeloom found it; false when Claude added it. */
+  detected: boolean;
+  notes: string[];
+}
+
+export interface SummaryRisk {
+  file?: string;
+  kind?: "migration" | "schema" | "env" | "docker" | "ci";
+  detail?: string;
+  detected: boolean;
+  notes: string[];
+}
+
+export interface SummaryCode {
+  name: string;
+  detected: boolean;
+  change?: "new" | "changed" | "deleted";
+  added?: number;
+  removed?: number;
+  /** "<repo>/<file>". */
+  file?: string;
+  /** The changed function's `ReviewNodeChange.ref`: opens its diff. */
+  ref?: string;
+  notes: string[];
+}
+
+/** codeloom's detected facts about the PR, with Claude's checked review merged in when there is one. */
+export interface PrSummary {
+  version: 1;
+  status: "checked" | "draft";
+  head: string;
+  base: string;
+  repoId: string;
+  checkedAt?: string;
+  whatItDoes?: string;
+  whereItMatters: SummaryWhere[];
+  writes: SummaryWrite[];
+  /** Writes only other repos make further along the chains (another service the change calls), by repo. */
+  furtherAlong?: Array<{ repo: string; names: string[] }>;
+  readsOnly: string[];
+  beforeDeploying: SummaryRisk[];
+  codeToCheck: SummaryCode[];
+  notes?: string[];
+  more: { whereItMatters: number; writes: number; readsOnly: number; beforeDeploying: number; beforeDeployingAdded: number; codeToCheck: number; codeToCheckAdded: number };
+}

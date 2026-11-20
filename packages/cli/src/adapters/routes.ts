@@ -6,7 +6,7 @@ import {
   APP_FACTORY_RE, className, enclosingSymbol, fileRoute, isRouterName, lineOf, normalizePath, pascal, pathPattern, prop, routerFactoryRoot,
   stringValue, unwrapRouterChain, walk,
 } from "./ast.js";
-import { type AdapterContext, packageRelative, type MountDraft, type ParsedFile, type RouteDraft } from "./types.js";
+import { type AdapterContext, packageRelative, type MountDraft, type ParsedFile, type RouteDraft, type RouteRegistrarDraft } from "./types.js";
 
 const ROUTE_METHODS: Record<string, HttpMethod> = {
   get: "GET", post: "POST", put: "PUT", patch: "PATCH", delete: "DELETE", del: "DELETE", any: "ANY", all: "ANY",
@@ -62,7 +62,7 @@ function frameworkOf(ctx: AdapterContext): Framework {
   return "express";
 }
 
-type HandlerInfo = Pick<RouteDraft, "handler" | "inline" | "handlerFile" | "handlerLines" | "handlerImport">;
+type HandlerInfo = Pick<RouteDraft, "handler" | "inline" | "handlerFile" | "handlerLines" | "handlerImport" | "adonisController">;
 type HandlerLoc = Pick<RouteDraft, "handlerFile" | "handlerImport">;
 
 function linesOf(node: ts.Node): [number, number] {
@@ -127,7 +127,98 @@ function stringHandlerSpec(s: string): string | undefined {
   return dot >= 0 ? s.slice(0, dot) : s;
 }
 
-function handlerOf(h: ts.Expression | undefined, label: string, sf: ts.SourceFile): HandlerInfo {
+/** Adonis v5's default controllers namespace (`.adonisrc.json` namespaces.httpControllers overrides it). */
+export const ADONIS_V5_CONTROLLERS = "App/Controllers/Http";
+
+/** The controller path of an Adonis v5 string handler that the namespace is put in front of
+ * (`"Admin/CustomersController.index"` → `"Admin/CustomersController"`); undefined for an absolute
+ * (`"/App/X.y"`) or path/alias (`#controllers/x.y`, `./x.y`) handler, which names its module itself. */
+function adonisControllerPath(s: string): string | undefined {
+  if (s.startsWith("#") || s.startsWith(".") || s.startsWith("/")) return undefined;
+  const slash = s.lastIndexOf("/");
+  const dot = s.indexOf(".", slash + 1);
+  const path = dot >= 0 ? s.slice(0, dot) : s;
+  return path || undefined;
+}
+
+/** `ns` + "/" + a controller path. */
+export function adonisNamespaced(ns: string, path: string): string {
+  return `${ns.replace(/\/+$/, "")}/${path}`;
+}
+
+/** An Adonis v5 string handler's controller module by the IoC convention: `"Admin/CustomersController.index"`
+ * under namespace `App/Controllers/Http` → `"App/Controllers/Http/Admin/CustomersController"`; a leading "/"
+ * is an absolute namespace (no prefix). A path or alias specifier (`#controllers/x.y`, `./x.y`) is an
+ * import as written. */
+function adonisV5Spec(s: string, ns: string): string | undefined {
+  if (s.startsWith("#") || s.startsWith(".")) return stringHandlerSpec(s);
+  const rel = adonisControllerPath(s);
+  if (rel !== undefined) return adonisNamespaced(ns, rel);
+  const slash = s.lastIndexOf("/");
+  const dot = s.indexOf(".", slash + 1);
+  const path = (dot >= 0 ? s.slice(0, dot) : s).slice(1);
+  return path || undefined;
+}
+
+/** True when the file imports from Adonis v5's IoC container (`@ioc:Adonis/...`): its string handlers then
+ * follow the v5 controller-namespace convention. */
+function isAdonisV5File(sf: ts.SourceFile): boolean {
+  return sf.statements.some((st) => ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && st.moduleSpecifier.text.startsWith("@ioc:Adonis/"));
+}
+
+/** The calls chained onto `call`: `Route.get(...).middleware(m).namespace(ns)` → middleware, namespace. */
+function chainedCalls(call: ts.CallExpression): Array<{ name: string; call: ts.CallExpression }> {
+  const out: Array<{ name: string; call: ts.CallExpression }> = [];
+  let cur: ts.Node = call;
+  while (ts.isPropertyAccessExpression(cur.parent) && cur.parent.expression === cur && ts.isCallExpression(cur.parent.parent) && cur.parent.parent.expression === cur.parent) {
+    out.push({ name: cur.parent.name.text, call: cur.parent.parent });
+    cur = cur.parent.parent;
+  }
+  return out;
+}
+
+/** The last literal `.namespace("X")` in a chain, if any. */
+function chainNamespace(call: ts.CallExpression): string | undefined {
+  let ns: string | undefined;
+  for (const c of chainedCalls(call)) if (c.name === "namespace") ns = stringValue(c.call.arguments[0]) ?? ns;
+  return ns;
+}
+
+/** The controllers namespace a route call sits in: its own `.namespace()`, else the innermost enclosing
+ * `group(...).namespace()` (Adonis applies a group's namespace only to routes that have none yet). */
+function adonisNamespace(node: ts.CallExpression): string | undefined {
+  const own = chainNamespace(node);
+  if (own !== undefined) return own;
+  for (let cur: ts.Node | undefined = node.parent; cur; cur = cur.parent) {
+    if (
+      (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) &&
+      ts.isCallExpression(cur.parent) &&
+      ts.isPropertyAccessExpression(cur.parent.expression) &&
+      cur.parent.expression.name.text === "group"
+    ) {
+      const ns = chainNamespace(cur.parent);
+      if (ns !== undefined) return ns;
+    }
+  }
+  return undefined;
+}
+
+/** How string handlers name their controller: Adonis v5 (namespace convention) or a plain import path.
+ * `namespaceFromFile`: the namespace came from this file (a route's or group's `.namespace()`), so a caller
+ * in another file cannot change it. */
+type StringHandlers = { v5Namespace?: string; namespaceFromFile?: boolean };
+
+/** A string handler (`"CustomersController.index"`, `"#controllers/x.show"`) as `Class.method` plus the
+ * controller module it names. */
+function stringHandler(s: string, strings: StringHandlers): HandlerInfo {
+  const spec = strings.v5Namespace !== undefined ? adonisV5Spec(s, strings.v5Namespace) : stringHandlerSpec(s);
+  const ctrl = strings.v5Namespace !== undefined && !strings.namespaceFromFile ? adonisControllerPath(s) : undefined;
+  return {
+    handler: adonisStringHandler(s), inline: false, ...(spec ? { handlerImport: spec } : {}), ...(ctrl ? { adonisController: ctrl } : {}),
+  };
+}
+
+function handlerOf(h: ts.Expression | undefined, label: string, sf: ts.SourceFile, strings: StringHandlers = {}): HandlerInfo {
   if (!h) return { handler: label, inline: true };
   if (ts.isArrowFunction(h) || ts.isFunctionExpression(h)) {
     return { handler: label, inline: true, handlerFile: sf.fileName, handlerLines: linesOf(h) };
@@ -139,11 +230,8 @@ function handlerOf(h: ts.Expression | undefined, label: string, sf: ts.SourceFil
     return { handler: `${name}.${stringValue(method) ?? "handle"}`, inline: false, ...loc };
   }
   const s = stringValue(h);
-  if (s !== undefined) {
-    const spec = stringHandlerSpec(s);
-    return { handler: adonisStringHandler(s), inline: false, ...(spec ? { handlerImport: spec } : {}) };
-  }
-  if (ts.isCallExpression(h)) return handlerOf(h.arguments[h.arguments.length - 1], label, sf);
+  if (s !== undefined) return stringHandler(s, strings);
+  if (ts.isCallExpression(h)) return handlerOf(h.arguments[h.arguments.length - 1], label, sf, strings);
   const root = rootIdentifier(h);
   return { handler: h.getText(), inline: false, ...(root ? locateName(sf, root) : {}) };
 }
@@ -259,36 +347,141 @@ function requireSpec(expr: ts.Expression): string | undefined {
   return undefined;
 }
 
-function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFile, framework: Framework): RouteDraft | undefined {
-  if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
+/** Adonis resource actions (v5 and v6): method, path suffix, action, and whether it is a member route. */
+const RESOURCE_ACTIONS: Array<{ method: HttpMethod; suffix: string; action: string; member: boolean }> = [
+  { method: "GET", suffix: "", action: "index", member: false },
+  { method: "GET", suffix: "/create", action: "create", member: false },
+  { method: "POST", suffix: "", action: "store", member: false },
+  { method: "GET", suffix: "/:id", action: "show", member: true },
+  { method: "GET", suffix: "/:id/edit", action: "edit", member: true },
+  { method: "PUT", suffix: "/:id", action: "update", member: true },
+  { method: "PATCH", suffix: "/:id", action: "update", member: true },
+  { method: "DELETE", suffix: "/:id", action: "destroy", member: true },
+];
+
+/** A literal array of strings (`["index", "show"]`), else undefined. */
+function stringArray(expr: ts.Expression | undefined): string[] | undefined {
+  if (!expr || !ts.isArrayLiteralExpression(expr)) return undefined;
+  const out: string[] = [];
+  for (const el of expr.elements) {
+    const v = stringValue(el);
+    if (v === undefined) return undefined;
+    out.push(v);
+  }
+  return out;
+}
+
+/** `customers` → `customer`, `categories` → `category` (Adonis names a parent resource's param after it). */
+function singularSnake(word: string): string {
+  const snake = word.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/-/g, "_").toLowerCase();
+  if (snake.endsWith("ies")) return `${snake.slice(0, -3)}y`;
+  return snake.replace(/([^s])s$/, "$1");
+}
+
+/** The actions a resource's `.only([...])` / `.except([...])` / `.apiOnly()` chain keeps; undefined when a
+ * filter is not a literal list (the routes are then unknown, so none are recorded). */
+function resourceActions(call: ts.CallExpression): Set<string> | undefined {
+  let keep = new Set(RESOURCE_ACTIONS.map((a) => a.action));
+  for (const c of chainedCalls(call)) {
+    if (c.name === "apiOnly") {
+      keep.delete("create");
+      keep.delete("edit");
+    } else if (c.name === "only" || c.name === "except") {
+      const list = stringArray(c.call.arguments[0]);
+      if (!list) return undefined;
+      keep = new Set([...keep].filter((a) => list.includes(a) === (c.name === "only")));
+    }
+  }
+  return keep;
+}
+
+/** `Route.resource("customers.orders", "OrdersController")` (v5) / `router.resource("customers",
+ * CustomersController)` (v6): one route per kept standard action, each to that controller's method. A
+ * shallow resource gives its member routes the short `/<main>/:id` path. */
+function resourceRoutes(
+  node: ts.CallExpression, shallow: boolean, file: ParsedFile, framework: Framework, strings: StringHandlers,
+): RouteDraft[] {
+  const name = stringValue(node.arguments[0]);
+  const ctrl = node.arguments[1];
+  const keep = resourceActions(node);
+  if (!name || !ctrl || !keep) return [];
+  const tokens = name.split(".").map((t) => t.replace(/^\/+|\/+$/g, "")).filter(Boolean);
+  const main = tokens.pop();
+  if (!main) return [];
+  const prefix = groupPrefix(node);
+  const nested = normalizePath(`${prefix}/${tokens.map((t) => `${t}/:${singularSnake(t)}_id`).join("/")}/${main}`);
+  const short = normalizePath(`${prefix}/${main}`);
+  const at = { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) };
+  const ctrlString = stringValue(ctrl);
+  const ctrlName = ts.isIdentifier(ctrl) ? ctrl.text : undefined;
+  if (ctrlString === undefined && ctrlName === undefined) return [];
+  const out: RouteDraft[] = [];
+  for (const a of RESOURCE_ACTIONS) {
+    if (!keep.has(a.action)) continue;
+    const path = normalizePath(`${shallow && a.member ? short : nested}${a.suffix}`);
+    const handler: HandlerInfo = ctrlString !== undefined
+      ? stringHandler(`${ctrlString}.${a.action}`, strings)
+      : { handler: `${ctrlName}.${a.action}`, inline: false, ...locateName(file.sf!, ctrlName!) };
+    out.push({ method: a.method, path, ...handler, framework, at });
+  }
+  return out;
+}
+
+function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFile, framework: Framework, ctx: AdapterContext, v5: boolean): RouteDraft[] {
+  if (!ts.isPropertyAccessExpression(node.expression)) return [];
   const name = node.expression.name.text;
   const recv = node.expression.expression;
   const at = { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) };
+  const strings = (): StringHandlers => {
+    if (!v5) return {};
+    const local = adonisNamespace(node);
+    return { v5Namespace: local ?? ctx.adonisControllers ?? ADONIS_V5_CONTROLLERS, namespaceFromFile: local !== undefined };
+  };
+  const adonisRouter = framework === "adonis" && ts.isIdentifier(recv) && isRouter(node, recv.text);
+
+  if ((name === "resource" || name === "shallowResource") && adonisRouter) {
+    return resourceRoutes(node, name === "shallowResource", file, framework, strings());
+  }
+
+  // Adonis `Route.route("/x", ["GET", "POST"], handler)`: one route per listed method.
+  if (name === "route" && adonisRouter && node.arguments.length >= 3) {
+    const p = pathPattern(node.arguments[0]!)?.path;
+    const methods = stringArray(node.arguments[1]);
+    if (p === undefined || !methods) return [];
+    const full = normalizePath(`${groupPrefix(node)}/${p}`);
+    const out: RouteDraft[] = [];
+    for (const m of methods) {
+      const method = ROUTE_METHODS[m.toLowerCase()];
+      if (!method) continue;
+      out.push({ method, path: full, ...handlerOf(node.arguments[2], `${method} ${full}`, file.sf!, strings()), framework, at });
+    }
+    return out;
+  }
 
   if (name === "route" && ts.isIdentifier(recv) && isRouter(node, recv.text) && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
     const o = node.arguments[0];
     const m = stringValue(prop(o, "method"));
     const url = prop(o, "url") ?? prop(o, "path");
     const p = url && pathPattern(url);
-    if (!m || !p) return undefined;
+    if (!m || !p) return [];
     const method = ROUTE_METHODS[m.toLowerCase()] ?? "ANY";
-    return {
+    return [{
       method, path: p.path, ...handlerOf(prop(o, "handler"), `${method} ${p.path}`, file.sf!),
       framework: "fastify", router: recv.text, at,
-    };
+    }];
   }
 
   const method = ROUTE_METHODS[name];
-  if (!method) return undefined;
+  if (!method) return [];
   let path: string | undefined;
   let router: string | undefined;
   if (ts.isIdentifier(recv) && isRouter(node, recv.text)) {
-    if (node.arguments.length < 2) return undefined;
+    if (node.arguments.length < 2) return [];
     path = pathPattern(node.arguments[0]!)?.path;
     router = recv.text;
   } else if (ts.isCallExpression(recv) && receiverRouter(recv, isRouter) !== undefined) {
     // A route on a self-returning chain: `Router().use(a).get("/x", h)` / `router.use(a).get("/x", h)`.
-    if (node.arguments.length < 2) return undefined;
+    if (node.arguments.length < 2) return [];
     path = pathPattern(node.arguments[0]!)?.path;
     router = receiverRouter(recv, isRouter);
   } else if (
@@ -301,20 +494,20 @@ function routerCall(node: ts.CallExpression, isRouter: IsRouter, file: ParsedFil
     const s = stringValue(recv.arguments[0]);
     path = s === undefined ? undefined : normalizePath(s);
     router = recv.expression.expression.text;
-  } else return undefined;
-  if (path === undefined) return undefined;
+  } else return [];
+  if (path === undefined) return [];
   const full = normalizePath(`${groupPrefix(node)}/${path}`);
-  return {
+  return [{
     method,
     path: full,
-    ...handlerOf(node.arguments[node.arguments.length - 1], `${method} ${full}`, file.sf!),
+    ...handlerOf(node.arguments[node.arguments.length - 1], `${method} ${full}`, file.sf!, strings()),
     framework,
     // The receiver is only a meaningful "router" for express/fastify (schema: "express/fastify");
     // Adonis's router/Route identifiers pass isRouter via the generic-name fallback too, but Adonis
     // has no app.use()-style mount step for Route.router to feed, so it stays undefined there.
     router: framework === "adonis" ? undefined : router,
     at,
-  };
+  }];
 }
 
 function decoratorCall(node: ts.Node, names: string[]): { name: string; arg?: ts.Expression } | undefined {
@@ -532,6 +725,107 @@ function pagesApiMethods(sf: ts.SourceFile): HttpMethod[] {
   return [...methods].sort(compare);
 }
 
+/** The names a top-level function is exported under: `export default () => {}` / `export default function`
+ * -> "default"; `export function x` / `export const x = () => {}` -> "x"; a local `x` later exported with
+ * `export default x` / `export { x as y }`. */
+function topLevelExportNames(fn: ts.Node, sf: ts.SourceFile): string[] {
+  let st: ts.Node = fn;
+  while (st.parent && !ts.isSourceFile(st.parent)) st = st.parent;
+  const mods = ts.canHaveModifiers(st) ? (ts.getModifiers(st) ?? []) : [];
+  const exported = mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  const isDefault = mods.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+  let local: string | undefined;
+  const names: string[] = [];
+  if (ts.isExportAssignment(st) && !st.isExportEquals) {
+    let e: ts.Expression = st.expression;
+    while (ts.isParenthesizedExpression(e)) e = e.expression;
+    if (e === fn) names.push("default");
+  } else if (ts.isFunctionDeclaration(st) && st === fn) {
+    local = st.name?.text;
+    if (exported) names.push(isDefault ? "default" : (local ?? "default"));
+  } else if (ts.isVariableStatement(st)) {
+    const d = st.declarationList.declarations.find((x) => x.initializer === fn && ts.isIdentifier(x.name));
+    if (d) {
+      local = (d.name as ts.Identifier).text;
+      if (exported) names.push(local);
+    }
+  }
+  if (local !== undefined) {
+    for (const other of sf.statements) {
+      if (ts.isExportAssignment(other) && !other.isExportEquals && ts.isIdentifier(other.expression) && other.expression.text === local) names.push("default");
+      if (ts.isExportDeclaration(other) && !other.moduleSpecifier && other.exportClause && ts.isNamedExports(other.exportClause)) {
+        for (const el of other.exportClause.elements) if ((el.propertyName ?? el.name).text === local) names.push(el.name.text);
+      }
+    }
+  }
+  return [...new Set(names)];
+}
+
+/** The export name of the top-level exported function `node` sits in (the outermost function around it),
+ * or undefined when it is not inside one. */
+function exportedRegistrar(node: ts.Node, sf: ts.SourceFile): string | undefined {
+  let outer: ts.Node | undefined;
+  for (let cur: ts.Node | undefined = node.parent; cur && !ts.isSourceFile(cur); cur = cur.parent) {
+    if (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur) || ts.isFunctionDeclaration(cur)) outer = cur;
+  }
+  return outer ? topLevelExportNames(outer, sf)[0] : undefined;
+}
+
+const ADONIS_ROUTER_MODULES = new Set(["@ioc:Adonis/Core/Route", "@adonisjs/core/services/router"]);
+
+/** Adonis: calls in this file that may register another function's routes (`adminRoutes()` inside
+ * `Route.group(() => { ... }).prefix("/api")`): a statement call of an imported binding or of a top-level
+ * exported function of this file, with the group prefix and namespace around it. Only in a file that imports
+ * the router or declares a group/route. */
+export function detectRouteRegistrars(file: ParsedFile, ctx: AdapterContext): RouteRegistrarDraft[] {
+  if (!file.sf || frameworkOf(ctx) !== "adonis" || !ctx.deps.has("@adonisjs/core")) return [];
+  const sf = file.sf;
+  const importsRouter = sf.statements.some((st) => ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && ADONIS_ROUTER_MODULES.has(st.moduleSpecifier.text));
+  let hasGroup = false;
+  const out: RouteRegistrarDraft[] = [];
+  walk(sf, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "group") hasGroup = true;
+    if (!ts.isIdentifier(node.expression)) return;
+    const p = node.parent;
+    const statement = ts.isExpressionStatement(p) || ((ts.isArrowFunction(p)) && p.body === node);
+    if (!statement) return;
+    const name = node.expression.text;
+    const imp = importBinding(sf, name);
+    let target: Pick<RouteRegistrarDraft, "spec" | "file" | "export"> | undefined;
+    if (imp?.export !== undefined) target = { spec: imp.spec, export: imp.export };
+    else if (!imp) {
+      const decl = topLevelFunction(sf, name);
+      const exp = decl ? topLevelExportNames(decl, sf)[0] : undefined;
+      if (exp !== undefined) target = { file: file.rel, export: exp };
+    }
+    if (!target) return;
+    const prefix = groupPrefix(node);
+    const namespace = adonisNamespace(node);
+    const registeredIn = exportedRegistrar(node, sf);
+    out.push({
+      ...target, prefix, ...(namespace !== undefined ? { namespace } : {}), ...(registeredIn !== undefined ? { registeredIn } : {}),
+      at: { file: file.rel, line: lineOf(node), symbol: enclosingSymbol(node) },
+    });
+  });
+  return importsRouter || hasGroup ? out : [];
+}
+
+/** A top-level function declaration / `const x = () => {}` / `const x = function () {}` named `name`. */
+function topLevelFunction(sf: ts.SourceFile, name: string): ts.Node | undefined {
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name?.text === name) return st;
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) {
+          return d.initializer;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[] {
   if (!BACKEND_DEPS.some((d) => ctx.deps.has(d))) return [];
   if (ctx.deps.has("next")) {
@@ -542,11 +836,15 @@ export function detectRoutes(file: ParsedFile, ctx: AdapterContext): RouteDraft[
   const generic = new Set<string>(hasBackendImport(file.sf) ? ROUTER_NAMES : []);
   const isRouter: IsRouter = (node, name) => generic.has(name) || isRouterName(node, name);
   const framework = frameworkOf(ctx);
+  const v5 = framework === "adonis" && isAdonisV5File(file.sf);
+  const sf = file.sf;
   const out: RouteDraft[] = [];
   walk(file.sf, (node) => {
     if (ts.isCallExpression(node)) {
-      const route = routerCall(node, isRouter, file, framework);
-      if (route) out.push(route);
+      const drafts = routerCall(node, isRouter, file, framework, ctx, v5);
+      // Adonis: a route registered inside an exported function gets its caller's group (finalizeEndpoints).
+      const registeredIn = drafts.length > 0 && framework === "adonis" ? exportedRegistrar(node, sf) : undefined;
+      for (const d of drafts) out.push(registeredIn !== undefined ? { ...d, registeredIn } : d);
     }
     if (ts.isClassDeclaration(node) && ctx.deps.has("@nestjs/core")) out.push(...nestRoutes(node, file));
   });

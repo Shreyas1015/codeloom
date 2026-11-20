@@ -7,10 +7,11 @@ import type { ChainStop } from "../store/schemas.js";
  * Unresolved calls (often framework calls such as `res.json(...)`) never affect this. */
 export type ChainReach = "complete" | "api-only" | "incomplete";
 
-type StopLike = Pick<ChainStop, "kind">;
+type StopLike = Pick<ChainStop, "kind"> & { lane?: ChainStop["lane"] };
 
+/** A page, or a call made by UI code. A backend's call to another service (0.6 §3) is in the code lane. */
 export function hasUiStop(stops: readonly StopLike[]): boolean {
-  return stops.some((s) => s.kind === "page" || s.kind === "call");
+  return stops.some((s) => s.kind === "page" || (s.kind === "call" && s.lane !== "code"));
 }
 
 export function reachesStore(stops: readonly StopLike[]): boolean {

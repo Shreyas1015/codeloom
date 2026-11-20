@@ -96,6 +96,20 @@ describe("pickRoute", () => {
     expect(picked).toEqual({ item: "GET /customers/active", match: { confidence: "exact", literals: 2 } });
   });
 
+  it("falls back to a route's path without the prefix another file's group gave it (a base that carries /api)", () => {
+    const api = (path: string, ...altPaths: string[]): RouteCandidate<string> => ({ ...cand(path), altPaths });
+    const candidates = [api("/api/customers/:id", "/customers/:id"), api("/api/orders", "/orders"), cand("/health")];
+    expect(pickRoute("GET", "/customers/7", candidates)).toEqual({ item: "GET /api/customers/:id", match: { confidence: "param", literals: 1 } });
+    // The full path wins when it matches; a route without the prefix is never shadowed by a fallback.
+    expect(pickRoute("GET", "/api/orders", candidates)!.item).toBe("GET /api/orders");
+    expect(pickRoute("GET", "/health", [...candidates, api("/api/health", "/health")])!.item).toBe("GET /health");
+    expect(pickRoute("GET", "/invoices", candidates)).toBeNull();
+    // Fewest segments stripped first: under a base ending in /api, then in /api/admin.
+    const admin = [api("/api/admin/customers", "/admin/customers", "/customers")];
+    expect(pickRoute("GET", "/admin/customers", admin)!.match).toEqual({ confidence: "exact", literals: 2 });
+    expect(pickRoute("GET", "/customers", admin)!.match).toEqual({ confidence: "exact", literals: 1 });
+  });
+
   it("matches ANY-method routes against any call method", () => {
     const candidates = [cand("/health", "ANY")];
     const picked = pickRoute("GET", "/health", candidates);
@@ -177,5 +191,23 @@ describe("pickRoute", () => {
   it("returns null when nothing matches", () => {
     expect(pickRoute("GET", "/nope", [cand("/customers")])).toBeNull();
     expect(pickRoute("POST", "/customers", [cand("/customers", "GET")])).toBeNull();
+  });
+});
+
+describe("no guess without a matching literal; no tie across repos (0.6 Task E, acceptance run 2)", () => {
+  const cand = (path: string, repo: string, method: "GET" | "POST" = "GET") => ({ item: `${repo} ${path}`, method, path, mountsKnown: true, repo });
+  it("a call that is mostly variables never guesses a route whose literals it does not share", () => {
+    expect(matchPath("/:rbacRolesPath/:roleId/permissions", "/auth/user/:id")).toBeNull();
+    expect(pickRoute("GET", "/:rbacRolesPath/:roleId/permissions", [cand("/auth/user/:id", "auth")])).toBeNull();
+    expect(matchPath("/:a/:b", "/auth/:y")).toBeNull();
+    // one shared literal: still a guess, as before
+    expect(matchPath("/:section/permissions", "/roles/permissions")).toMatchObject({ confidence: "guess", literals: 1 });
+    // a plain param match is unchanged
+    expect(matchPath("/orders/1", "/orders/:id")).toMatchObject({ confidence: "param", literals: 1 });
+    expect(matchPath("/", "/")).toMatchObject({ confidence: "exact" });
+  });
+  it("two repos' equally specific routes are no guess; one repo's still are", () => {
+    expect(pickRoute("GET", "/invoices/1", [cand("/invoices/:id", "api"), cand("/invoices/:id", "billing")])).toBeNull();
+    expect(pickRoute("GET", "/invoices/1", [cand("/invoices/:id", "api"), cand("/invoices/:ref", "api")])?.match.reason).toBe("tie between equally specific routes");
   });
 });

@@ -1,12 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
-import { useOverview, useReview } from "@/api/queries";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useOverview, usePrSummary, useReview } from "@/api/queries";
 import { getSnapshot } from "@/api/static";
 import type { Review, ReviewJourney, ReviewNodeChange, ReviewStop, SpecState } from "@/api/types";
 import { SpecBadge } from "@/components/gallery/SpecBadge";
 import { stopLabel } from "@/components/gallery/StopRoundel";
 import { ScreenError } from "@/components/shell/StateBanner";
 import { cn } from "@/lib/utils";
+import { PrSummarySection } from "./PrSummary";
 import { ReviewCodePanel, type ReviewLaneStop, StopNum } from "./ReviewCodePanel";
 
 const LANE_ORDER = ["ui", "api", "code", "db", "queue"] as const;
@@ -62,14 +63,20 @@ function specBadgeProps(mark: ReviewJourney["spec"]): { state: SpecState; checke
   return { state: mark, checked: true };
 }
 
-/** Review ("This PR", `/review`): the start page of a hosted snapshot — every changed file and function,
- * the journeys they touch (or, with none named, the chains), and (once a row and a stop are picked) that
- * stop's code. */
+/** Review ("This PR", `/review`): the start page of a snapshot — the PR summary (what it does, where it matters,
+ * what it writes, before deploying, code to check; when the snapshot has one), every changed file and function, the
+ * journeys they touch (or, with none named, the chains), and (once a row and a stop, or a function under Code to
+ * check, are picked) that code. */
 export function ReviewScreen() {
   const { data, error } = useReview();
+  const summary = usePrSummary();
   const overview = useOverview();
   const [rowId, setRowId] = useState<string | undefined>(undefined);
   const [stopRef, setStopRef] = useState<string | undefined>(undefined);
+  // A changed function picked under Code to check that is a stop of no row: shown in the code panel on its own.
+  const [looseRef, setLooseRef] = useState<string | undefined>(undefined);
+  const [scrollTick, setScrollTick] = useState(0);
+  const boardRef = useRef<HTMLDivElement>(null);
 
   const rows = useMemo(() => (data ? reviewRows(data) : []), [data]);
   useEffect(() => {
@@ -83,10 +90,38 @@ export function ReviewScreen() {
   const selectedStop = stops.find((s) => s.ref === stopRef);
   const repoPath = (repo: string) => overview.data?.repos.find((r) => r.id === repo)?.path;
 
+  const looseNode = looseRef !== undefined ? nodeByRef.get(looseRef) : undefined;
+
   const selectRow = (id: string) => {
     setRowId(id);
     setStopRef(undefined);
+    setLooseRef(undefined);
   };
+  const selectStop = (ref: string) => {
+    setStopRef(ref);
+    setLooseRef(undefined);
+  };
+  /** Code to check → that function's diff: as the stop of the selected row (or the first row that has it), else
+   * on its own; then the board is scrolled into view. */
+  const openCode = (ref: string) => {
+    if (!data) return;
+    const has = (r: ReviewRow) => rowStops(data, r.chains).some((s) => s.ref === ref);
+    const target = row && has(row) ? row : rows.find(has);
+    if (target) {
+      setRowId(target.id);
+      setStopRef(ref);
+      setLooseRef(undefined);
+    } else if (nodeByRef.has(ref)) {
+      setStopRef(undefined);
+      setLooseRef(ref);
+    } else {
+      return;
+    }
+    setScrollTick((t) => t + 1);
+  };
+  useEffect(() => {
+    if (scrollTick > 0) boardRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [scrollTick]);
 
   return (
     <section data-testid="screen-review" aria-labelledby="review-title" className="flex flex-col gap-5.5">
@@ -102,19 +137,31 @@ export function ReviewScreen() {
         </p>
       ) : (
         <>
+          {summary.data ? <PrSummarySection summary={summary.data} onOpenCode={openCode} /> : null}
+
           <CountsRow review={data} />
 
           <RowsSection rows={rows} selectedId={row?.id} onSelect={selectRow} />
 
-          {row && (
-            <div className="grid min-h-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-              <ReviewLanes stops={stops} selectedRef={selectedStop?.ref} onSelect={setStopRef} />
-              {selectedStop ? (
+          {(row || looseNode) && (
+            <div ref={boardRef} className="grid min-h-0 scroll-mt-4 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+              {row ? <ReviewLanes stops={stops} selectedRef={selectedStop?.ref} onSelect={selectStop} /> : <div />}
+              {looseNode ? (
+                <ReviewCodePanel
+                  key={looseNode.ref}
+                  stop={{ ref: looseNode.ref, repo: looseNode.repo, lane: "code", label: looseNode.symbol, file: looseNode.file, changed: true, n: 0 }}
+                  node={looseNode}
+                  journeyId={row?.id ?? ""}
+                  journeyNameById={journeyNameById}
+                  repoPath={repoPath(looseNode.repo)}
+                  snapshot={getSnapshot()}
+                />
+              ) : selectedStop ? (
                 <ReviewCodePanel
                   key={selectedStop.ref}
                   stop={selectedStop}
                   node={nodeByRef.get(selectedStop.ref)}
-                  journeyId={row.id}
+                  journeyId={row!.id}
                   journeyNameById={journeyNameById}
                   repoPath={repoPath(selectedStop.repo)}
                   snapshot={getSnapshot()}

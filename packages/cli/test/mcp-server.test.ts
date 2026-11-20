@@ -13,7 +13,7 @@ import { fail, ok, withErrors } from "../src/mcp/result.js";
 import { createServer, guardStdout, type ServerOptions } from "../src/mcp/server.js";
 import { chainsTouchingNode, findNode, formatNodeRef, journeysForChains, loadMapState, parseNodeRef } from "../src/mcp/state.js";
 import { gitHead } from "../src/workspace/repos.js";
-import { commitAll, materializeFixture, makeRepo } from "./helpers.js";
+import { commitAll, freshHome, materializeFixture, makeRepo } from "./helpers.js";
 
 async function connect(opts: ServerOptions): Promise<Client> {
   const server = createServer(opts);
@@ -243,8 +243,9 @@ interface IndexStatusRepo {
 describe("mcp server: index_status / reindex", () => {
   it("is not stale right after indexing, goes stale on a commit (naming the file) and on an " +
     "untracked file, and clears again after reindex", async () => {
+    freshHome();
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n" });
-    await runIndex(repo);
+    const { root } = await runIndex(repo);
     const client = await connect({ start: repo });
 
     const head0 = gitHead(repo);
@@ -277,7 +278,7 @@ describe("mcp server: index_status / reindex", () => {
     expect(r4.isError).toBeFalsy();
     const reindexResult = r4.structuredContent as { root: string; repos: Array<{ id: string }>; linker: Record<string, unknown> };
     expect(reindexResult.repos.map((x) => x.id)).toEqual([repoId]);
-    expect(realpathSync(reindexResult.root)).toBe(realpathSync(repo));
+    expect(realpathSync(reindexResult.root)).toBe(realpathSync(root));
 
     const r5 = (await client.callTool({ name: "index_status", arguments: {} })) as CallToolResult;
     const s5 = (r5.structuredContent as { repos: IndexStatusRepo[] }).repos[0]!;
@@ -288,6 +289,7 @@ describe("mcp server: index_status / reindex", () => {
   });
 
   it("sees untracked files in a new folder, non-ASCII names, and renames, without git's quoting", async () => {
+    freshHome();
     const repo = makeRepo({ "src/a.ts": "export const a = 1;\n", "src/old.ts": "export const o = 1;\n" });
     await runIndex(repo);
     const client = await connect({ start: repo });
