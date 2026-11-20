@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0
+## 0.6.0 — 2026-11-20 (GitHub release and npm)
 
 Index each repo on its own; codeloom connects them into journeys across repos.
 
