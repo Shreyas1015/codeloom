@@ -3,6 +3,9 @@ import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { loadContext } from "../adapters/run.js";
 import { cacheContextKey } from "../indexer/index-repo.js";
+import { answersPath, readAnswers } from "../map/answers.js";
+import { loadGaps } from "../map/gaps.js";
+import { answerProblems } from "../map/save.js";
 import { repoIndexStatus } from "../mcp/tools/workspace.js";
 import { DOCTOR_HINT, readJson, writeJsonAtomic } from "../store/json.js";
 import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
@@ -26,6 +29,8 @@ import { HOME_VIEW_ID, listViews, readView, strayViewFiles } from "../store/view
 import { compare } from "../util.js";
 import { listFiles } from "../workspace/files.js";
 import { findWorkspaceRoot, loadWorkspace, proxyProblems } from "../workspace/repos.js";
+import { groupWorkspace, readRegistry, repoAbsPath, updateRegistry } from "../workspace/registry.js";
+import { ensureExcludeLines, hasExcludeLine } from "../workspace/exclude.js";
 import {
   ensureGitignore,
   ensureMcpEntry,
@@ -47,8 +52,8 @@ export interface DoctorReport { version: 1; items: DoctorItem[]; summary: { ok: 
 
 /** Check order: report items are sorted by this, then by repo id. */
 const CHECKS = [
-  "git", "workspace", "config", "graph", "endpoints", "cache", "summaries",
-  "chains", "journeys", "progress", "tours", "specs", "views", "hook", "gitignore", "mcp", "index",
+  "git", "workspace", "registry", "config", "graph", "endpoints", "cache", "summaries",
+  "chains", "journeys", "answers", "progress", "tours", "specs", "views", "hook", "gitignore", "exclude", "mcp", "index",
 ] as const;
 type Check = (typeof CHECKS)[number];
 
@@ -97,7 +102,7 @@ function gitAvailable(): boolean {
   }
 }
 
-interface WsInfo { root: string; name: string; repos: RepoRef[] | null }
+interface WsInfo { root: string; name: string; repos: RepoRef[] | null; group?: string }
 
 /** The `workspace` check. Returns the root to check and the repos (null when the workspace file is
  * unusable, so no per-repo check can run), or null when there is neither a workspace nor a git repo. */
@@ -122,12 +127,29 @@ function checkWorkspace(d: Doctor, start: string): WsInfo | null {
   }
   try {
     const ws = loadWorkspace(start);
+    if (ws.group !== undefined) {
+      d.add("workspace", undefined, "ok", `group ${ws.name}: ${ws.repos.length} repo${ws.repos.length === 1 ? "" : "s"} (data in ${ws.root})`);
+      return { root: ws.root, name: ws.name, repos: ws.repos, group: ws.group };
+    }
     d.add("workspace", undefined, "warn", `No ${WORKSPACE_FILE} for this repo: run "codeloom init" to set it up.`);
     return { root: ws.root, name: ws.name, repos: ws.repos };
   } catch (err) {
     d.add("workspace", undefined, "error", errText(err));
     return null;
   }
+}
+
+/** The `registry` check (a group, 0.6 §1): every registered checkout of the group whose folder is gone
+ * (moved or deleted) — --fix drops it from the registry; older duplicate checkouts are listed as ignored. */
+function checkRegistry(d: Doctor, group: string): void {
+  const ws = groupWorkspace(readRegistry(), group);
+  for (const m of ws.missing) {
+    d.fixable("registry", m.id, `${m.path} was moved or deleted: it is no longer part of the group`, "drop it from the registry", () => {
+      updateRegistry((reg) => ({ registry: { version: 1, repos: reg.repos.filter((e) => e.path !== m.path) }, value: undefined }));
+    });
+  }
+  for (const c of ws.copies) d.add("registry", c.id, "ok", `${c.path} is an older checkout of ${c.id}: ignored for linking`);
+  if (ws.missing.length === 0) d.add("registry", undefined, "ok", `${ws.repos.length} repo${ws.repos.length === 1 ? "" : "s"} registered in group ${group}`);
 }
 
 /** Returns the repo's config (defaults when missing or invalid) for the cache check's file list. */
@@ -225,6 +247,33 @@ function checkChainsAndJourneys(d: Doctor, root: string): void {
   } catch (err) {
     d.add("journeys", undefined, "error", errText(err));
   }
+}
+
+/** The `answers` check (0.6 §5): .codeloom/answers.json, the user's answers about the map, is valid. Only when it
+ * exists. A bad one is an error --fix never repairs (it holds the user's answers): every index would refuse it. */
+function checkAnswers(d: Doctor, root: string): void {
+  if (!existsSync(answersPath(root))) return;
+  let answers: ReturnType<typeof readAnswers>;
+  try {
+    answers = readAnswers(root);
+  } catch (err) {
+    return d.add("answers", undefined, "error", errText(err));
+  }
+  // Stale: an answer naming a repo, base, route, file or queue the map no longer has (the code moved on).
+  let stale: string[] = [];
+  try {
+    stale = answerProblems(answers, loadGaps(root), { gaps: false });
+  } catch {
+    stale = []; // the map itself cannot be read: the chains / graph checks report that
+  }
+  if (stale.length > 0) {
+    return d.add(
+      "answers", undefined, "warn",
+      `${stale.length} of your answers about the map name things it no longer has:\n${stale.slice(0, 5).map((p) => `  - ${p}`).join("\n")}` +
+      `\nAnswer again (codeloom ask), or remove them from ${answersPath(root)} and run "codeloom link".`,
+    );
+  }
+  d.add("answers", undefined, "ok", `${answers.length} answer${answers.length === 1 ? "" : "s"} about the map`);
 }
 
 /** The `progress` check: the personal progress file (outside the workspace) is valid or missing. A corrupt
@@ -379,6 +428,15 @@ function checkGitignore(d: Doctor, repoAbs: string, id: string): void {
   });
 }
 
+/** A group's repo (0.6 §1): `.codeloom/` in `.git/info/exclude`, so the map never shows in `git status`. */
+function checkExclude(d: Doctor, repoAbs: string, id: string): void {
+  const line = `${CODELOOM_DIR}/`;
+  if (hasExcludeLine(repoAbs, line)) return d.add("exclude", id, "ok", `.git/info/exclude has ${line}`);
+  d.fixable("exclude", id, `.git/info/exclude is missing the ${line} line (the map shows in git status)`, `add ${line} to .git/info/exclude`, () => {
+    ensureExcludeLines(repoAbs, [line]);
+  });
+}
+
 function checkMcp(d: Doctor, root: string): void {
   const state = mcpEntryState(root);
   switch (state) {
@@ -442,10 +500,11 @@ export function runDoctor(start: string, opts: { fix?: boolean; bin?: string; pa
   const ws = checkWorkspace(d, start);
   if (!ws) return finish(d);
 
+  if (ws.group !== undefined) d.guard("registry", undefined, () => checkRegistry(d, ws.group!));
   const repos = [...(ws.repos ?? [])].sort((a, b) => compare(a.id, b.id));
   const present: Array<{ id: string; abs: string; cacheOutdated: boolean }> = [];
   for (const ref of repos) {
-    const abs = join(ws.root, ref.path);
+    const abs = repoAbsPath(ws.root, ref);
     if (!existsSync(abs) || !statSync(abs).isDirectory()) {
       d.add("config", ref.id, "error", `repo folder not found at ${abs}: fix its path in ${WORKSPACE_FILE}`);
       continue;
@@ -461,17 +520,21 @@ export function runDoctor(start: string, opts: { fix?: boolean; bin?: string; pa
     checkSummaries(d, abs, ref.id);
   }
   checkChainsAndJourneys(d, ws.root);
+  checkAnswers(d, ws.root);
   if (ws.repos !== null) {
-    const store: StoreWorkspace = { root: ws.root, name: ws.name, repos: repos.map((ref) => ({ ref, abs: join(ws.root, ref.path) })) };
+    const store: StoreWorkspace = { root: ws.root, name: ws.name, repos: repos.map((ref) => ({ ref, abs: repoAbsPath(ws.root, ref) })) };
     checkProgress(d, store);
     d.guard("tours", undefined, () => checkTours(d, store));
     d.guard("specs", undefined, () => checkSpecs(d, store));
   }
   d.guard("views", undefined, () => checkViews(d, ws.root));
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
-  for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root, opts.bin, pathEnv));
-  for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));
-  d.guard("mcp", undefined, () => checkMcp(d, ws.root));
+  // The hook and .mcp.json are set up by "codeloom init" in a workspace folder; a group has neither.
+  if (ws.group === undefined) for (const r of present) d.guard("hook", r.id, () => checkHook(d, r.abs, r.id, ws.root, opts.bin, pathEnv));
+  // A group's repos keep their map local through .git/info/exclude; .gitignore is a workspace folder's choice.
+  if (ws.group === undefined) for (const r of present) d.guard("gitignore", r.id, () => checkGitignore(d, r.abs, r.id));
+  else for (const r of present) d.guard("exclude", r.id, () => checkExclude(d, r.abs, r.id));
+  if (ws.group === undefined) d.guard("mcp", undefined, () => checkMcp(d, ws.root));
   for (const r of present) d.guard("index", r.id, () => checkIndex(d, r.abs, r.id, r.cacheOutdated));
   return finish(d);
 }

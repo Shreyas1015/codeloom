@@ -59,6 +59,8 @@ export interface OverviewResult {
 export interface OverviewResponse extends OverviewResult {
   indexStatus: IndexStatusResult;
   mcpConnected: boolean;
+  /** 0.6 §5: how many questions codeloom has about the map (`codeloom gaps`); absent when they cannot be worked out. */
+  gaps?: { open: number };
 }
 
 // ---- /api/journeys (dashboard-only) -------------------------------------------------------------
@@ -135,6 +137,9 @@ export interface StopView {
    * first, always below the stop's own index; `confidence`/`reason` describe that edge. Absent in
    * get_journey's `lanes` (merged across chains) and in chains.json files written before it existed. */
   from?: number;
+  /** 0.6: another service's route this chain does not expand goes on in this chain (its id now, its name, and the
+   * journey naming it, if any): never a dead end. */
+  continues?: { chain: string; name: string; journey?: string };
 }
 
 export interface UnresolvedItem {

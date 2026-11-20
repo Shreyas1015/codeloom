@@ -9,6 +9,7 @@ import { CODELOOM_DIR, FILES, MCP_FILE, WORKSPACE_FILE } from "../store/paths.js
 import { defaultRepoConfig, type RepoRef, type WorkspaceFile, WorkspaceFileSchema } from "../store/schemas.js";
 import { VERSION } from "../version.js";
 import { git } from "../workspace/git.js";
+import { ensureExcludeLines, hasExcludeLine } from "../workspace/exclude.js";
 import { discoverRepos, findWorkspaceRoot } from "../workspace/repos.js";
 import {
   ensureGitignore,
@@ -219,29 +220,6 @@ export function defaultSelection(repos: Array<{ path: string; remote?: string; b
 // ---------------------------------------------------------------------------------------------------
 // Keep-local: exclude files instead of .gitignore (step 2, "keep local").
 // ---------------------------------------------------------------------------------------------------
-
-function gitPath(repoAbs: string, rel: string): string {
-  return resolve(repoAbs, git(repoAbs, ["rev-parse", "--git-path", rel]).trim());
-}
-
-/** Adds any of `lines` not already present to `<repoAbs>/.git/info/exclude` (never `.gitignore`: this is
- * local-only and never committed). Returns whether anything was written. */
-function ensureExcludeLines(repoAbs: string, lines: string[]): boolean {
-  const path = gitPath(repoAbs, "info/exclude");
-  mkdirSync(dirname(path), { recursive: true });
-  const current = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const existingLines = new Set(current.split(/\r?\n/));
-  const missing = lines.filter((l) => !existingLines.has(l));
-  if (missing.length === 0) return false;
-  const prefix = current === "" || current.endsWith("\n") ? current : `${current}\n`;
-  writeFileSync(path, `${prefix}${missing.join("\n")}\n`);
-  return true;
-}
-
-function hasExcludeLine(repoAbs: string, line: string): boolean {
-  const path = gitPath(repoAbs, "info/exclude");
-  return existsSync(path) && readFileSync(path, "utf8").split(/\r?\n/).includes(line);
-}
 
 /** Whether `repoAbs` already looks set up for "commit" (hook or .gitignore line present) or "local" (the
  * .codeloom/ exclude line present), so a re-run can skip asking again. "none" when neither is there yet. */

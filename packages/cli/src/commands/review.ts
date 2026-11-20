@@ -5,7 +5,7 @@ import { checkPrPromptText } from "../mcp/prompts.js";
 import { buildReview } from "../review/build.js";
 import { renderReviewDraft, renderReviewMarkdown } from "../review/markdown.js";
 import { type CheckPacket, packetForReview, packetText } from "../review/packet.js";
-import { loadPrReview, rememberPacket } from "../review/saved.js";
+import { loadPrReview, rememberPacket, type SavedPrReview } from "../review/saved.js";
 import type { Review } from "../review/types.js";
 import { loadWorkspace } from "../workspace/repos.js";
 
@@ -90,27 +90,55 @@ export function isInteractive(): boolean {
   return !!process.stdin.isTTY && !!process.stdout.isTTY;
 }
 
-/** Runs the check-pr prompt headless (packet inlined, only save_pr_review allowed) in the workspace root, then
- * prints the checked block — or, when Claude saved nothing, the draft and a line saying so. Without claude on
- * PATH it starts nothing and prints the prompt to run instead. */
-async function checkNow(start: string, review: Review, packet: CheckPacket, opts: ReviewRunOptions, deps: ReviewRunDeps): Promise<void> {
+/** Lets Claude check `review` now (the caller already has the user's consent: `--check` or a yes): builds the check
+ * packet and keeps it for save_pr_review, then runs the check-pr prompt headless (packet inlined, isolated, only
+ * save_pr_review allowed) in the workspace root and reads back what Claude saved for this head. Without claude on
+ * PATH it starts nothing and prints the prompt to run instead (`ran: false`). Shared by `codeloom review --check`
+ * and `codeloom pr`. */
+export async function letClaudeCheck(
+  start: string,
+  review: Review,
+  deps: Pick<ReviewRunDeps, "claude" | "run" | "print" | "warn">,
+  packet: CheckPacket = packetFor(start, review),
+): Promise<{ ran: boolean; checked: SavedPrReview | null; exitCode?: number; output?: string }> {
   const prompt = checkPrPromptText(packet);
   if (deps.claude === null) {
     deps.print(`Claude Code is not on PATH. Run this in Claude Code (with codeloom connected) to check the PR:\n\n${prompt}`);
-    return;
+    return { ran: false, checked: null };
   }
   const { root } = loadWorkspace(start);
   const result = await deps.run({ prompt, allowedTools: CHECK_PR_ALLOWED_TOOLS, cwd: root, claudeBin: deps.claude });
-  const checked = loadPrReview(start, review.head, deps.warn ?? deps.print);
-  if (checked) {
-    deps.print(renderReviewDraft(review, { link: opts.link, checked }));
+  return { ran: true, checked: loadPrReview(start, review.head, deps.warn ?? deps.print), ...result };
+}
+
+/** The line printed when a headless check saved nothing: its exit code and (control characters dropped) the start of
+ * what Claude said. */
+export function notSavedLine(result: { exitCode?: number; output?: string }): string {
+  const said = (result.output ?? "").trim();
+  return (
+    `\nClaude did not save a review (exit ${result.exitCode ?? 0}). Is codeloom connected in .mcp.json ("codeloom init")?` +
+    (said !== "" ? `\nClaude said: ${stripControl(said).trim().slice(0, 500)}` : "")
+  );
+}
+
+/** The check packet for `review`, kept for save_pr_review. */
+function packetFor(start: string, review: Review): CheckPacket {
+  const packet = packetForReview(start, review);
+  rememberPacket(start, packet);
+  return packet;
+}
+
+/** Runs the check (letClaudeCheck), then prints the checked block — or, when Claude saved nothing, the draft and a
+ * line saying so. */
+async function checkNow(start: string, review: Review, packet: CheckPacket, opts: ReviewRunOptions, deps: ReviewRunDeps): Promise<void> {
+  const result = await letClaudeCheck(start, review, deps, packet);
+  if (!result.ran) return;
+  if (result.checked) {
+    deps.print(renderReviewDraft(review, { link: opts.link, checked: result.checked }));
     return;
   }
   deps.print(renderReviewDraft(review, { link: opts.link }));
-  deps.print(
-    `\nClaude did not save a review (exit ${result.exitCode}). Is codeloom connected in .mcp.json ("codeloom init")?` +
-      (result.output.trim() !== "" ? `\nClaude said: ${stripControl(result.output).trim().slice(0, 500)}` : ""),
-  );
+  deps.print(notSavedLine(result));
 }
 
 /** `codeloom review` as the CLI runs it: `--packet` prints the check packet; `--check` lets Claude check the draft
@@ -127,11 +155,7 @@ export async function runReviewCommand(start: string, opts: ReviewRunOptions, de
   }
 
   const review = buildReview(start, opts.base, repoOpts(opts));
-  const packetOf = (): CheckPacket => {
-    const packet = packetForReview(start, review);
-    rememberPacket(start, packet);
-    return packet;
-  };
+  const packetOf = (): CheckPacket => packetFor(start, review);
 
   if (opts.packet) {
     deps.print(packetText(packetOf()));

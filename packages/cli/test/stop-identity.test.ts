@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { loadMapState, type MapState } from "../src/mcp/state.js";
 import { buildTourContext } from "../src/mcp/tools/tours.js";
@@ -52,9 +52,16 @@ describe("a line added at the top of a stop's file (demo-shop)", () => {
   let state: MapState;
   let beforeKeys: string[];
   const SERVICE = "app/services/customer_service.ts";
+  let home: string;
+
+  // The progress recorded in beforeAll lives in this home: keep it for every test (setup.ts gives each test a new one).
+  beforeEach(() => {
+    process.env.CODELOOM_HOME = home;
+  });
 
   beforeAll(async () => {
-    process.env.CODELOOM_HOME = mkdtempSync(join(tmpdir(), "codeloom-home-"));
+    home = mkdtempSync(join(tmpdir(), "codeloom-home-"));
+    process.env.CODELOOM_HOME = home;
     demo = materializeFixture("demo-shop");
     writeFileSync(
       join(demo, "codeloom.workspace.json"),

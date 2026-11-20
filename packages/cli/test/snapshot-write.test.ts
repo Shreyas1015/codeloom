@@ -252,7 +252,8 @@ describe("writeSnapshotData", () => {
         .reduce((n, f) => n + sizeOf(f.slice(0, -".json".length)), 0);
       expect(mapFolderBytes).toBeGreaterThan(0);
       expect(codeFileBytes).toBeGreaterThan(0);
-      const reviewBytes = sizeOf("review");
+      // review.json and pr-summary.json (the PR summary the This PR page opens on) are written with the always set.
+      const reviewBytes = sizeOf("review") + sizeOf("pr-summary");
       const alwaysAndReviewBytes = full.bytes - mapFolderBytes - codeFileBytes;
       const alwaysOnlyBytes = alwaysAndReviewBytes - reviewBytes;
 

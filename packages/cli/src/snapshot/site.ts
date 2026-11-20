@@ -14,11 +14,12 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { join, resolve } from "node:path";
 import { CodeloomError, dataError } from "../errors.js";
 import { renderReviewMarkdown } from "../review/markdown.js";
+import { buildPrSummary } from "../review/summary.js";
 import { splicePrBody } from "../review/pr-body.js";
 import type { Review } from "../review/types.js";
 import { locateDashboardAssets } from "../web/assets.js";
 import { DEFAULT_MAX_BYTES, type SnapshotManifest } from "./write.js";
-import { validateSnapshotData } from "./validate.js";
+import { PR_SUMMARY_FILE, validateSnapshotData } from "./validate.js";
 
 export interface SiteOptions {
   /** The validated artifact's data/ folder (untrusted until validateSnapshotData passes it). */
@@ -43,6 +44,13 @@ export interface SiteOptions {
    * block gets a one-line note instead of `link`'s "Open the full review map" line — nothing is hosted,
    * even though data/ and the dashboard assets are still written here (Pages may be enabled later). */
   pagesDisabled?: boolean;
+  /** The PR summary (data/pr-summary.json). "rebuild" (default — the publish step): the artifact's own file is
+   * never trusted; the draft is rebuilt from the validated review.json (buildPrSummary(review, null): no Claude
+   * text) and published instead. "keep": the data was just written by this same local run (`codeloom snapshot`,
+   * `codeloom pr`), so its summary — Claude's checked review, when saved — stays. */
+  summary?: "rebuild" | "keep";
+  /** Entries besides `data/` that `outDir` may already hold (`codeloom pr`'s ownership marker). */
+  allowEntries?: string[];
 }
 
 export interface SiteResult {
@@ -102,10 +110,11 @@ function copyAssetEntry(from: string, to: string): void {
  * as both `dataDir`'s parent and `outDir` — so `outDir` already, legitimately, contains exactly its own
  * `data/` folder by the time this runs. Any OTHER entry (or a `data/` that isn't `ownDataDir`) is still
  * refused. */
-export function assertOutDirUsable(outDir: string, ownDataDir?: string): void {
+export function assertOutDirUsable(outDir: string, ownDataDir?: string, allowEntries: readonly string[] = []): void {
   if (!existsSync(outDir)) return;
   if (!statSync(outDir).isDirectory()) throw dataError("--out exists and is not a folder.");
-  const allowed = ownDataDir !== undefined && sameResolved(join(outDir, "data"), ownDataDir) ? new Set(["data"]) : new Set<string>();
+  const allowed = new Set<string>(allowEntries);
+  if (ownDataDir !== undefined && sameResolved(join(outDir, "data"), ownDataDir)) allowed.add("data");
   const entries = readdirSync(outDir);
   if (entries.some((e) => !allowed.has(e))) {
     throw dataError("--out must be empty or not exist — refusing to touch a non-empty folder.");
@@ -116,7 +125,7 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   // C1': outDir's own safety first — before even looking at the artifact. Throws (a dataError, exit 2)
   // and touches nothing.
-  assertOutDirUsable(opts.outDir, opts.dataDir);
+  assertOutDirUsable(opts.outDir, opts.dataDir, opts.allowEntries);
   // Validate the artifact: throws (writing nothing) before any of the writes below ever run.
   const manifest = validateSnapshotData(opts.dataDir, { maxBytes, expectedHead: opts.expectedHead });
 
@@ -140,6 +149,15 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
     throw new CodeloomError("codeloom could not render the review map for this snapshot.");
   }
 
+  // Security review C1 (codeloom pr): the artifact's pr-summary.json is the PR's own bytes — it could say "Checked
+  // by Claude" or put "Claude: …" beside any fact. Never published: the draft is rebuilt here from the validated
+  // review.json instead (no Claude text at all). A rebuild that fails only drops the summary; the page works without.
+  const rebuild = (opts.summary ?? "rebuild") === "rebuild";
+  const summaryJson = rebuild ? draftSummaryJson(review) : null;
+  const files = rebuild
+    ? [...manifest.files.filter((f) => f !== PR_SUMMARY_FILE), ...(summaryJson !== null ? [PR_SUMMARY_FILE] : [])].sort()
+    : manifest.files;
+
   // Only now, after outDir's safety, the artifact's validation, AND a successful render, is outDir
   // touched at all.
   // Built field by field from the already-validated manifest only — never a raw spread (I1'b): an
@@ -152,7 +170,7 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
     base: manifest.base,
     ...(manifest.baseRef !== undefined ? { baseRef: manifest.baseRef } : {}),
     builtAt: manifest.builtAt,
-    files: manifest.files,
+    files,
     omitted: manifest.omitted,
     bytes: manifest.bytes,
     ...(manifest.tooLarge !== undefined ? { tooLarge: manifest.tooLarge } : {}),
@@ -166,8 +184,10 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
   // named file — never anything that could address outside dataDir (security review C1).
   for (const file of manifest.files) {
     if (file === "manifest.json") continue; // written below, patched
+    if (rebuild && file === PR_SUMMARY_FILE) continue; // never the artifact's own: rebuilt below
     copyDataFile(join(opts.dataDir, file), join(outData, file));
   }
+  if (summaryJson !== null) writeFileSync(join(outData, PR_SUMMARY_FILE), summaryJson);
   writeFileSync(join(outData, "manifest.json"), JSON.stringify(patchedManifest));
 
   if (hosted) {
@@ -180,6 +200,24 @@ export function buildSnapshotSite(opts: SiteOptions): SiteResult {
   }
 
   return { reviewMd, hosted, ...spliceIntoBody(opts.bodyFile, reviewMd) };
+}
+
+/** The draft PR summary of a validated review.json (an older one lacks the 0.5 fields: they count as empty), or null
+ * when it cannot be built. */
+function draftSummaryJson(review: Review): string | null {
+  try {
+    const r: Review = {
+      ...review,
+      repoId: review.repoId ?? "",
+      entries: review.entries ?? [],
+      writes: review.writes ?? [],
+      readsOnly: review.readsOnly ?? [],
+      risks: review.risks ?? [],
+    };
+    return JSON.stringify(buildPrSummary(r, null));
+  } catch {
+    return null;
+  }
 }
 
 export interface FailedSiteOptions {

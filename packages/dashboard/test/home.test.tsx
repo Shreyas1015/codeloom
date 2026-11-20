@@ -144,6 +144,19 @@ describe("Home", () => {
     expect(strip).toHaveTextContent("3User journeys");
   });
 
+  it("says how many open questions codeloom has about the map, and how to answer them (0.6 §5)", async () => {
+    renderHome({ "/api/overview": { body: { ...overview, gaps: { open: 3 } } }, "/api/journeys": { body: journeys } });
+    const band = await screen.findByTestId("home-open-questions");
+    expect(band).toHaveTextContent("3 open questions about the map — run /mcp__codeloom__map-interview in Claude Code");
+    expect(within(band).getByRole("button")).toBeInTheDocument();
+  });
+
+  it("shows no open-questions line when there are none", async () => {
+    renderHome({ "/api/overview": { body: { ...overview, gaps: { open: 0 } } }, "/api/journeys": { body: journeys } });
+    await list();
+    expect(screen.queryByTestId("home-open-questions")).toBeNull();
+  });
+
   it("renders a wall label per journey from /api/journeys", async () => {
     renderHome();
     expect(await names()).toEqual(["Admin voids an invoice", "Customer signs up", "Invoice is emailed"]);

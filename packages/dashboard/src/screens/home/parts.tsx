@@ -12,6 +12,9 @@ export const PAGE = 200;
 
 export const NAME_JOURNEYS = "/mcp__codeloom__name-journeys";
 
+/** 0.6 §5: the Claude Code command that goes through codeloom's open questions about the map. */
+export const MAP_INTERVIEW = "/mcp__codeloom__map-interview";
+
 /** A roundel's ring and number in its lane's hue; the queue lane reads in the DB umber family. */
 export const LANE_RING: Record<Lane, string> = {
   ui: "border-lane-ui text-lane-ui",
@@ -105,6 +108,25 @@ export function AgentHint({ className, tone = "default" }: { className?: string;
         Ask your agent: <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12.5px] text-foreground select-all">{NAME_JOURNEYS}</code>
       </span>
       <CopyButton text={NAME_JOURNEYS} />
+    </p>
+  );
+}
+
+/** "N open questions — run /mcp__codeloom__map-interview in Claude Code": what codeloom could not settle about
+ * the map (`codeloom gaps`). Nothing when there are none. Each answer re-links the map, and the count updates
+ * live. */
+export function OpenQuestions({ open }: { open: number }) {
+  if (open <= 0) return null;
+  return (
+    <p
+      data-testid="home-open-questions"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 text-[13.5px]"
+    >
+      <span>
+        <b className="font-semibold tabular-nums">{open.toLocaleString("en-US")}</b> open {open === 1 ? "question" : "questions"} about the map — run{" "}
+        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12.5px] text-foreground select-all">{MAP_INTERVIEW}</code> in Claude Code
+      </span>
+      <CopyButton text={MAP_INTERVIEW} />
     </p>
   );
 }

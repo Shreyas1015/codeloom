@@ -1,10 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatIndexSummary, type IndexRunResult, runIndex } from "../src/commands/index-cmd.js";
-import { commitAll, makeRepo, materializeFixture } from "./helpers.js";
+import { commitAll, freshHome, makeRepo, materializeFixture } from "./helpers.js";
 
 function workspace() {
   const root = materializeFixture("demo-shop");
@@ -118,8 +119,11 @@ describe("stable repo ids across clones (final review batch 2, item C)", () => {
       const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
       writeFileSync(join(repo, "package.json"), JSON.stringify({ ...pkg, name: "shop" }));
       commitAll(repo);
-      await runIndex(repo);
-      out.push(readFileSync(join(repo, ".codeloom", "chains.json"), "utf8"));
+      // 0.6: in a group a repo is named by its remote's repo name, so two clones of one remote get one id.
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:demo-shop/shop.git"], { cwd: repo, stdio: "pipe" });
+      freshHome(); // each clone on its own machine
+      const { root } = await runIndex(repo);
+      out.push(readFileSync(join(root, ".codeloom", "chains.json"), "utf8"));
     }
     expect(out[0]).toContain('"route:shop:');
     expect(out[1]).toBe(out[0]);

@@ -14,6 +14,7 @@ import type {
   Overview,
   ProgressResponse,
   ProgressWriteResponse,
+  PrSummary,
   Review,
   SearchKind,
   SearchResult,
@@ -46,6 +47,7 @@ export const queryKeys = {
   view: (id: string) => ["view", id] as const,
   doc: (repo: string, file: string) => ["doc", repo, file] as const,
   review: () => ["review"] as const,
+  prSummary: () => ["pr-summary"] as const,
 };
 
 const enc = encodeURIComponent;
@@ -179,6 +181,22 @@ export function useDoc(repo: string | undefined, file: string | undefined) {
  * is reached only there. */
 export function useReview() {
   return useQuery({ queryKey: queryKeys.review(), queryFn: () => apiGet<Review>("/api/review") });
+}
+
+/** The PR summary the This PR page opens on (`data/pr-summary.json`, written by `codeloom pr` / `codeloom snapshot`):
+ * null when the snapshot has none (an older one) or it cannot be read — the page then works as before. */
+export function usePrSummary() {
+  return useQuery({
+    queryKey: queryKeys.prSummary(),
+    queryFn: async (): Promise<PrSummary | null> => {
+      try {
+        return await apiGet<PrSummary>("/api/pr-summary");
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+  });
 }
 
 /** After a progress write:the screens that show levels refetch (the watcher would also say so, later). */

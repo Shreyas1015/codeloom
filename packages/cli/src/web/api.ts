@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { GraphNode, KnowledgeGraph } from "@codeloom/core";
 import { mcpEntryState } from "../commands/init.js";
 import { CodeloomError } from "../errors.js";
 import { chainReach, journeyReach } from "../linker/completeness.js";
+import { loadGaps } from "../map/gaps.js";
 import { chainLookup, formatNodeRef, journeysByChain, loadMapState, type MapState } from "../mcp/state.js";
 import { getNeighbors, getNode, type NeighborsArgs, search, type SearchArgs, SEARCH_KINDS, type SearchKind } from "../mcp/tools/graph.js";
 import { getJourney, listChains, type ListChainsArgs } from "../mcp/tools/journeys.js";
@@ -12,7 +13,7 @@ import { getLayers, indexStatusAsync, workspaceOverview } from "../mcp/tools/wor
 import { z } from "zod";
 import { journeyPlacedStops, markSeen, markToured, progressView, TOUR_PHASES } from "../store/progress.js";
 import type { Chain, ExternalCallFact } from "../store/schemas.js";
-import { CODELOOM_DIR } from "../store/paths.js";
+import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import { safeRepoFile } from "../store/safe-file.js";
 import { JOURNEY_ID_RE, readTour, tourRemovedStops, tourStaleStops } from "../store/tours.js";
 import { listSpecs } from "../mcp/tools/specs.js";
@@ -22,7 +23,8 @@ import { readSpecs, specState } from "../store/specs.js";
 import { HOME_VIEW_ID, listViews, readView, VIEW_ID_RE, VIEWS_DIR, viewUrl } from "../store/views.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
-import { loadWorkspace } from "../workspace/repos.js";
+import { findWorkspaceRoot, loadWorkspace } from "../workspace/repos.js";
+import { registryPath, repoAbsPath } from "../workspace/registry.js";
 import type {
   ChainRow,
   ChainsResult,
@@ -95,7 +97,44 @@ export async function overview(start: string): Promise<OverviewResponse> {
   const base = workspaceOverview(start);
   const root = loadWorkspace(start).root;
   const mcp = mcpEntryState(root);
-  return { ...as<OverviewResponse>(base), indexStatus: await indexStatusAsync(start), mcpConnected: mcp === "present" || mcp === "kept-custom" };
+  return {
+    ...as<OverviewResponse>(base), indexStatus: await indexStatusAsync(start), mcpConnected: mcp === "present" || mcp === "kept-custom",
+    ...openGaps(start),
+  };
+}
+
+/** Open-question counts by map root, kept while the files they come from are unchanged (their mtimes). */
+const gapsCache = new Map<string, { sig: string; open: number }>();
+
+const mtime = (path: string): string => {
+  try {
+    return String(statSync(path).mtimeMs);
+  } catch {
+    return "-";
+  }
+};
+
+/** The open map questions (0.6 §5) for Home's "N open questions" line; left out when they cannot be worked out.
+ * Worked out again only when the workspace file, the registry, chains.json, answers.json, journeys.json or a repo's
+ * endpoints.json changed. */
+function openGaps(start: string): { gaps?: { open: number } } {
+  try {
+    const ws = loadWorkspace(start);
+    const wsFile = findWorkspaceRoot(start);
+    const sig = [
+      wsFile === null ? "-" : mtime(join(wsFile, WORKSPACE_FILE)),
+      mtime(registryPath()),
+      ...[FILES.chains, FILES.answers, FILES.journeys].map((f) => mtime(join(ws.root, CODELOOM_DIR, f))),
+      ...ws.repos.map((r) => `${r.id}:${mtime(join(repoAbsPath(ws.root, r), CODELOOM_DIR, FILES.endpoints))}`),
+    ].join("|");
+    const hit = gapsCache.get(ws.root);
+    if (hit?.sig === sig) return { gaps: { open: hit.open } };
+    const open = loadGaps(start).gaps.length;
+    gapsCache.set(ws.root, { sig, open });
+    return { gaps: { open } };
+  } catch {
+    return {};
+  }
 }
 
 // ---- query params (a bad value → 400) -------------------------------------------------------------

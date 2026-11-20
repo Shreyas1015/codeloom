@@ -22,8 +22,10 @@ const Head = z.string().regex(HEAD_RE, "head is not a full commit id (40 hex cha
 export const PR_REVIEW_LIMITS = { whatItDoes: 400, line: 200, name: 300, whereItMatters: 5, writes: 10, beforeDeploying: 10, codeToCheck: 8, notes: 3 } as const;
 
 /** C0 and C1 control characters (terminal escapes, newlines, …): never allowed in anything Claude saves. */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
-const text = (max: number) =>
+export const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** Text Claude wrote: trimmed, 1..max characters, no control character. Shared with review/summary.ts, which holds
+ * a hosted snapshot's pr-summary.json to these same rules. */
+export const text = (max: number) =>
   z.string().trim().min(1).max(max).refine((v) => !CONTROL.test(v), "must not contain a control character (newline, escape, …)");
 const L = PR_REVIEW_LIMITS;
 

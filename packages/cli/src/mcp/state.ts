@@ -6,12 +6,14 @@ import { CODELOOM_DIR, FILES } from "../store/paths.js";
 import { loadWorkspaceData, type RepoData, type WorkspaceData } from "../store/read.js";
 import {
   type Chain,
+  type ChainsFile,
   ChainsFileSchema,
   type Journey,
   JourneysFileSchema,
   type ExternalCallFact,
   type ManualLinkStatus,
   type UiReachFact,
+  type UnresolvedBase,
 } from "../store/schemas.js";
 import { compare } from "../util.js";
 
@@ -23,6 +25,10 @@ export interface MapState {
   manualLinks: ManualLinkStatus[];
   /** UI calls to other services (chains.json `external`; empty when absent). */
   external: ExternalCallFact[];
+  /** Call bases the linker could not place (chains.json `unresolvedBases`, 0.6 §2–§3; empty when absent). */
+  unresolvedBases: UnresolvedBase[];
+  /** Calls made through HTTP wrappers, as the linker derived them (chains.json `wrapperCalls`; empty when absent). */
+  wrapperCalls: NonNullable<ChainsFile["wrapperCalls"]>;
   journeys: Journey[];
   chainsPath: string;
   journeysPath: string;
@@ -42,6 +48,8 @@ export function loadMapState(start: string): MapState {
     uiReach: chainsFile?.uiReach ?? [],
     manualLinks: chainsFile?.manualLinks ?? [],
     external: chainsFile?.external ?? [],
+    unresolvedBases: chainsFile?.unresolvedBases ?? [],
+    wrapperCalls: chainsFile?.wrapperCalls ?? [],
     journeys: journeysFile?.journeys ?? [],
     chainsPath,
     journeysPath,

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runIndex } from "../src/commands/index-cmd.js";
 import { hopsFromChains, hopKey } from "../src/evals/score.js";
 import { ChainsFileSchema, type Chain } from "../src/store/schemas.js";
-import { makeRepo } from "./helpers.js";
+import { freshHome, makeRepo } from "./helpers.js";
 
 // Final review batch 2, item A: publish hits continue into the paired consumer's stops (one level).
 
@@ -81,8 +81,9 @@ async function handleShipment(msg: unknown) {
 }
 
 async function chainsOf(root: string): Promise<Chain[]> {
-  await runIndex(root);
-  return ChainsFileSchema.parse(JSON.parse(readFileSync(join(root, ".codeloom", "chains.json"), "utf8"))).chains;
+  freshHome();
+  const ws = await runIndex(root);
+  return ChainsFileSchema.parse(JSON.parse(readFileSync(join(ws.root, ".codeloom", "chains.json"), "utf8"))).chains;
 }
 
 const brief = (c: Chain) => c.stops.map((s) => `${s.kind}:${s.label ?? s.symbol}:${s.hop.confidence}`);
@@ -143,5 +144,82 @@ describe("queue pairing into chains", () => {
     expect(keys).toContain("handler-store|consumer:q:orders#src/consumers.ts#handleOrder||orders|consume");
     expect(keys).toContain("handler-store|consumer:q:orders#src/consumers.ts#handleOrder|order_logs||insert");
     expect(keys.filter((k) => k.startsWith("handler-store|q:POST /orders|"))).toEqual(["handler-store|q:POST /orders||orders|publish"]);
+  });
+});
+
+// v0.6 Task B (spec §3): the same pairing/chain machinery, but every publish/consume goes through the
+// repo's own wrapper (a QueueService class) instead of a direct amqplib call, with the queue name read
+// from an `as const` object in another file — the shape codeloom found 0 queues for before this task.
+function wrapperApp(): string {
+  return makeRepo({
+    "package.json": JSON.stringify({ name: "w", dependencies: { express: "^4", amqplib: "^0.10", "@prisma/client": "^5" } }),
+    "prisma/schema.prisma": `
+model OrderLog {
+  id Int @id
+  @@map("order_logs")
+}
+`,
+    "src/constants.ts": `export const Queues = { ORDER_CREATED: "order.created" } as const;`,
+    "src/queue-service.ts": `
+import amqp from "amqplib";
+export class QueueService {
+  channel: any;
+  async publish(queue: string, msg: object) {
+    const conn = await amqp.connect("amqp://x");
+    this.channel = await conn.createChannel();
+    this.channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg)));
+  }
+  async consume(queue: string, handler: (msg: unknown) => void) {
+    const conn = await amqp.connect("amqp://x");
+    this.channel = await conn.createChannel();
+    await this.channel.consume(queue, handler);
+  }
+}
+export const queueService = new QueueService();
+`,
+    "src/server.ts": `
+import express from "express";
+import { createOrder } from "./orders";
+const app = express();
+app.post("/orders", createOrder);
+app.listen(3000);
+`,
+    "src/orders.ts": `
+import type { Request, Response } from "express";
+import { queueService } from "./queue-service";
+import { Queues } from "./constants";
+export async function createOrder(req: Request, res: Response) {
+  await queueService.publish(Queues.ORDER_CREATED, { id: 1 });
+  res.json({});
+}
+`,
+    "src/consumers.ts": `
+import { PrismaClient } from "@prisma/client";
+import { queueService } from "./queue-service";
+import { Queues } from "./constants";
+const prisma = new PrismaClient();
+export async function start() {
+  await queueService.consume(Queues.ORDER_CREATED, handleOrderCreated);
+}
+export async function handleOrderCreated(msg: unknown) {
+  await prisma.orderLog.create({ data: { id: 1 } });
+}
+`,
+  });
+}
+
+describe("queue pairing into chains through a repo's own wrapper (v0.6 Task B)", () => {
+  it("a publish/consume pair through a QueueService wrapper still pairs exactly and continues into the handler and its store", async () => {
+    const chains = await chainsOf(wrapperApp());
+    const order = chains.find((c) => c.entry === "route:w:POST /orders")!;
+    expect(brief(order)).toEqual([
+      "route:POST /orders:exact",
+      "handler:createOrder:exact",
+      "publish:order.created:exact",
+      "consume:order.created:exact",
+      "handler:handleOrderCreated:exact",
+      "db:order_logs:exact",
+    ]);
+    expect(order.confidence).toBe("exact");
   });
 });

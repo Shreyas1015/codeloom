@@ -12,7 +12,9 @@ import { git, gitAsync } from "../../workspace/git.js";
 import { gitHead, gitHeadAsync, loadWorkspace } from "../../workspace/repos.js";
 import { withErrors } from "../result.js";
 import type { ServerOptions } from "../server.js";
+import { isAbsolute } from "node:path";
 import { journeysByChain, loadMapState } from "../state.js";
+import { repoAbsPath } from "../../workspace/registry.js";
 
 const distinct = (xs: string[]) => new Set(xs).size;
 
@@ -21,7 +23,8 @@ export function workspaceOverview(start: string): Record<string, unknown> {
   const state = loadMapState(start);
   const repos = state.ws.repos.map((r) => ({
     id: r.ref.id,
-    path: r.ref.path,
+    // A group's repos are registered by absolute path: never shown (nor put in a snapshot); the id stands for it.
+    path: isAbsolute(r.ref.path) ? r.ref.id : r.ref.path,
     ...(r.ref.role ? { role: r.ref.role } : {}),
     files: r.graph.nodes.filter((n) => n.type === "file").length,
     nodes: r.graph.nodes.length,
@@ -149,7 +152,7 @@ export async function repoIndexStatusAsync(repoAbs: string, id: string): Promise
 /** indexStatus without blocking the event loop (the dashboard server): same result, repos in parallel. */
 export async function indexStatusAsync(start: string): Promise<{ repos: RepoIndexStatus[] }> {
   const ws = loadWorkspace(start);
-  const repos = await Promise.all(ws.repos.map((ref) => repoIndexStatusAsync(join(ws.root, ref.path), ref.id)));
+  const repos = await Promise.all(ws.repos.map((ref) => repoIndexStatusAsync(repoAbsPath(ws.root, ref), ref.id)));
   repos.sort((a, b) => compare(a.id, b.id));
   return { repos };
 }
@@ -157,7 +160,7 @@ export async function indexStatusAsync(start: string): Promise<{ repos: RepoInde
 /** index_status: repoIndexStatus for every repo in the workspace, sorted by id. */
 export function indexStatus(start: string): Record<string, unknown> {
   const ws = loadWorkspace(start);
-  const repos = ws.repos.map((ref) => repoIndexStatus(join(ws.root, ref.path), ref.id));
+  const repos = ws.repos.map((ref) => repoIndexStatus(repoAbsPath(ws.root, ref), ref.id));
   repos.sort((a, b) => compare(a.id, b.id));
   return { repos };
 }
@@ -219,8 +222,10 @@ export function registerWorkspaceTools(server: McpServer, opts: ServerOptions): 
     {
       title: "Reindex",
       description:
-        "Re-run codeloom's indexer and linker over every repo in the workspace, rewriting graph.json, " +
-        "endpoints.json and chains.json. Use after code changes so the map reflects them.",
+        "Re-run codeloom's indexer and linker, rewriting graph.json, endpoints.json and chains.json. In a workspace " +
+        "folder: every repo in it. In a group (the server runs inside one repo): that repo only, then the whole group " +
+        "is re-linked from the other repos' saved maps (they are not parsed again). Use after code changes so the map " +
+        "reflects them.",
     },
     withErrors(() => reindex(opts)),
   );

@@ -5,9 +5,10 @@ import ts from "typescript";
 export interface Alias {
   prefix: string;
   targets: string[];
-  /** Set only for aliases derived from a tsconfig/jsconfig's `paths` or `baseUrl`. */
-  kind?: "paths" | "baseUrl";
-  /** The tsconfig/jsconfig's own directory (posix, "" at repo root); used to pick the nearest config. */
+  /** Set only for aliases derived from a tsconfig/jsconfig's `paths` or `baseUrl`, or an `.adonisrc.json`. */
+  kind?: "paths" | "baseUrl" | "adonisrc" | "workspace";
+  /** The config's own directory (posix, "" at repo root): tsconfig picks the nearest config; an
+   * `.adonisrc.json` alias applies only to files under its folder. */
   dir?: string;
 }
 
@@ -84,11 +85,23 @@ export function loadAliases(repoAbs: string, files: string[]): Alias[] {
     const base = posix.basename(rel);
     const dir = posix.dirname(rel) === "." ? "" : posix.dirname(rel);
     if (base === "package.json") {
-      const imports = (readJsonLoose(join(repoAbs, rel))?.imports ?? {}) as Record<string, unknown>;
+      const pkg = readJsonLoose(join(repoAbs, rel));
+      // The repo's own package names (a monorepo's workspace packages): never resolved here, only so a
+      // bare import of one is known not to be a third-party package.
+      if (typeof pkg?.name === "string" && pkg.name !== "") aliases.push({ prefix: pkg.name, targets: [], kind: "workspace", dir });
+      const imports = (pkg?.imports ?? {}) as Record<string, unknown>;
       for (const [key, value] of Object.entries(imports)) {
         const target = firstString(value);
         if (!target || !key.endsWith("*") || !target.includes("*")) continue;
         aliases.push({ prefix: key.slice(0, -1), targets: [posix.normalize(posix.join(dir, target.slice(0, target.indexOf("*"))))] });
+      }
+    }
+    if (base === ".adonisrc.json") {
+      // Adonis v5 IoC aliases (`"App": "app"`): `App/Services/X` is `app/Services/X` in that package.
+      const rcAliases = (readJsonLoose(join(repoAbs, rel))?.aliases ?? {}) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(rcAliases)) {
+        if (typeof value !== "string" || key === "" || /[*/]/.test(key)) continue;
+        aliases.push({ prefix: `${key}/`, targets: [`${posix.normalize(posix.join(dir, value)).replace(/\/+$/, "")}/`], kind: "adonisrc", dir });
       }
     }
     if (base === "tsconfig.json" || base === "jsconfig.json") {
@@ -158,15 +171,30 @@ function nearestConfigDir(fromRel: string, aliases: Alias[]): string | undefined
   return best;
 }
 
+/** The folder of the nearest `.adonisrc.json` above `fromRel` (its aliases are that app's own). */
+function nearestAdonisDir(fromRel: string, aliases: Alias[]): string | undefined {
+  let best: string | undefined;
+  for (const a of aliases) {
+    if (a.kind !== "adonisrc") continue;
+    const dir = a.dir ?? "";
+    if (dir !== "" && !fromRel.startsWith(`${dir}/`)) continue;
+    if (best === undefined || dir.length > best.length) best = dir;
+  }
+  return best;
+}
+
 export function resolveImport(fromRel: string, source: string, files: Set<string>, aliases: Alias[]): string | null {
   const bases: string[] = [];
-  if (source.startsWith("./") || source.startsWith("../")) {
+  // `.` / `..` name a folder's index file, like `./` / `../` do.
+  if (source.startsWith("./") || source.startsWith("../") || source === "." || source === "..") {
     bases.push(posix.normalize(posix.join(posix.dirname(fromRel), source)));
   } else {
     const configDir = nearestConfigDir(fromRel, aliases);
+    const adonisDir = nearestAdonisDir(fromRel, aliases);
     for (const a of aliases) {
-      if (a.kind === "baseUrl") continue;
+      if (a.kind === "baseUrl" || a.kind === "workspace") continue;
       if (a.kind === "paths" && a.dir !== configDir) continue;
+      if (a.kind === "adonisrc" && a.dir !== adonisDir) continue;
       if (source.startsWith(a.prefix)) bases.push(...a.targets.map((t) => posix.normalize(t + source.slice(a.prefix.length))));
     }
     const baseUrlAlias = aliases.find((a) => a.kind === "baseUrl" && a.dir === configDir);

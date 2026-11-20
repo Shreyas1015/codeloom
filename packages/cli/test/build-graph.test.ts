@@ -23,6 +23,9 @@ describe("resolveImport", () => {
     expect(resolveImport("app/x.ts", "@/lib/api", files, aliases)).toBe("src/lib/api.ts");
     expect(resolveImport("src/lib/api.ts", "./util", files, aliases)).toBe("src/lib/util/index.ts");
     expect(resolveImport("src/lib/api.ts", "react", files, aliases)).toBeNull();
+    // `.` and `..` are the folder's (or the parent folder's) index file.
+    expect(resolveImport("src/lib/util/index.ts", "..", new Set([...files, "src/lib/index.ts"]), aliases)).toBe("src/lib/index.ts");
+    expect(resolveImport("src/lib/util/a.ts", ".", files, aliases)).toBe("src/lib/util/index.ts");
   });
 
   it("resolves bare imports through tsconfig baseUrl (realworld-nest shape: baseUrl: \"./src\")", () => {

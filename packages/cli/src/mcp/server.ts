@@ -7,6 +7,7 @@ import { registerPrompts } from "./prompts.js";
 import { registerCheckTools } from "./tools/check.js";
 import { registerGraphTools } from "./tools/graph.js";
 import { registerJourneyTools } from "./tools/journeys.js";
+import { registerMapTools } from "./tools/map.js";
 import { registerPrReviewTools } from "./tools/pr-review.js";
 import { registerSpecTools } from "./tools/specs.js";
 import { registerTourTools } from "./tools/tours.js";
@@ -36,6 +37,7 @@ export function createServer(opts: ServerOptions): McpServer {
   registerSpecTools(server, opts);
   registerViewTools(server, opts);
   registerPrReviewTools(server, opts);
+  registerMapTools(server, opts);
   registerPrompts(server, opts);
   return server;
 }

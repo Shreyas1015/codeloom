@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeGraph } from "@codeloom/core";
 import { isComplete } from "./completeness.js";
-import { parseLinkRef, stepKey, uiReachKey } from "./link.js";
-import type { BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, RouteTarget, StoreHit, UiLink } from "./link.js";
+import { ANSWERED, HANDLER_NOT_FOUND, parseLinkRef, stepKey, uiReachKey } from "./link.js";
+import type {
+  BackendLink, ConsumerLink, LinkRef, LinkResult, ManualLink, PageReach, QueuePair, RouteTarget, ServiceHit, StoreHit, UiLink,
+} from "./link.js";
 import type { SymbolRef, WalkStep } from "./resolve-calls.js";
 import type { EffectiveRoute } from "./mounts.js";
 import { routeKey } from "./mounts.js";
@@ -12,7 +14,7 @@ import { worse } from "./paths.js";
 import type { WorkspaceData } from "../store/read.js";
 import {
   type Chain, type ChainStop, type ChainsFile, type Confidence, type Hop, type Journey, type JourneysFile,
-  JourneysFileSchema, type ExternalCallFact, type ManualLinkStatus, type QueueOp, type UiReachFact, type Unresolved,
+  JourneysFileSchema, type ExternalCallFact, type ManualLinkStatus, type QueueOp, type UiReachFact, type Unresolved, type UnresolvedBase,
 } from "../store/schemas.js";
 import { readJson, writeJsonAtomic, writeJsonIfChanged } from "../store/json.js";
 import { CODELOOM_DIR, FILES } from "../store/paths.js";
@@ -70,15 +72,31 @@ function queueKey(repo: string, q: QueueOp): string {
 interface Ctx {
   ws: WorkspaceData; symbolLine: SymbolLineLookup;
   pairs: Map<string, QueuePair[]>; consumers: Map<string, ConsumerLink>;
+  /** Backend links by route identity: where a service call's chain continues (0.6 §3). */
+  backends: Map<string, BackendLink>;
+  /** The id of a route's own chain (`route:<chain route key>`): where a service call that is not expanded continues. */
+  routeChainId: (er: EffectiveRoute) => string;
+  /** The chain being built (see startChain): the routes already expanded in it, and how many stops it has. */
+  chain: { expanded: Set<string>; stops: number };
+  /** Route identities some stop's `continues` names: each gets a `route:` chain of its own, even when a page
+   * calls it too, so the pointer always resolves to that route's chain. */
+  continued: Set<string>;
   /** Each built stop's parent: the stop it was reached from. Turned into `ChainStop.from` indices once a
    * chain's final stop order is known (see withFrom). */
   parents: WeakMap<ChainStop, ChainStop>;
 }
 
-/** Record that `child` was reached from `parent` (no-op when there is no parent: a chain's entry). */
+/** Record that `child` was reached from `parent` (no-op when there is no parent: a chain's entry), and count it
+ * towards the chain's stop budget. */
 function reachedFrom<T extends ChainStop>(ctx: Ctx, child: T, parent: ChainStop | undefined): T {
   if (parent) ctx.parents.set(child, parent);
+  ctx.chain.stops++;
   return child;
+}
+
+/** A new chain is being built: no route expanded yet, no stops counted. */
+function startChain(ctx: Ctx): void {
+  ctx.chain = { expanded: new Set(), stops: 0 };
 }
 
 /** Set every stop's `from` (index of its recorded parent in `stops`). Every builder records the parent,
@@ -172,7 +190,7 @@ function publishStop(repo: string, hit: StoreHit & { kind: "queue" }, h: Hop): C
 /** A store stop's hop is the worst confidence on its own path: `base` (the route/consume stop through the
  * handler) folded with every step of the hit's viaPath. A store reached through a guessed call, or under a
  * guessed route, is itself only a guess (exact only when every link to it is exact). */
-function storeHop(base: Confidence, hit: StoreHit): Hop {
+function storeHop(base: Confidence, hit: Pick<StoreHit, "viaPath">): Hop {
   const c = hit.viaPath.reduce<Confidence>((acc, step) => worse(acc, step.via?.confidence ?? "exact"), base);
   return c === "exact" ? hop("exact") : hop(c, "worst hop on the path to this store");
 }
@@ -181,27 +199,48 @@ function hopFromStep(step: WalkStep): Hop {
   return step.via ? hop(step.via.confidence, `via ${step.via.via}`) : hop("exact");
 }
 
+/** Service calls (0.6 §3) a link's walk reached, and how many service hops were inlined on the way here. */
+interface Services { calls: ServiceHit[]; depth: number }
+
+const NO_SERVICES: Services = { calls: [], depth: 0 };
+
+/** Service hops a chain inlines (UI → A → B → C); a deeper called route ends at its own stop, which names that
+ * route's own chain (`continues`). */
+const MAX_SERVICE_HOPS = 2;
+/** A chain expands no further called route past its first service hop once it has this many stops... */
+const EXPAND_BUDGET = 24;
+/** ...and adds no further service call stop inside an expanded route once it has this many (the calls its own
+ * entry makes are always shown). */
+const CALL_BUDGET = 36;
+
 /** Intermediate "function" stops for every hit's viaPath (deduped by symbol across all of a link's
- * hits), then each hit's own terminal db/publish stop; then, when `follow` allows, each publish hit's
- * paired consumers (consume, handler, its stores), in hit order then pairQueues order. `emitted` starts containing the entry symbol
- * (handler, or the consume call's own symbol) so it is never re-emitted as a redundant function stop. */
+ * hits), then each hit's own terminal db/publish stop; then (0.6 §3) each service call the walk reached —
+ * the call stop, the route it reaches and that route's own backend stops; then, when `follow` allows, each
+ * publish hit's paired consumers (consume, handler, its stores), in hit order then pairQueues order. `emitted`
+ * starts containing the entry symbol (handler, or the consume call's own symbol) so it is never re-emitted as
+ * a redundant function stop. */
 function hitStops(
   ctx: Ctx, repo: string, hits: StoreHit[], emitted: Map<string, ChainStop>, base: Confidence, follow: QueueFollow, pairedOut?: ChainStop[],
+  services: Services = NO_SERVICES,
 ): ChainStop[] {
   const stops: ChainStop[] = [];
   const paired: ChainStop[] = [];
-  for (const hit of hits) {
-    // Each function stop is reached from the previous step of the walk path that first emitted it; the
-    // store from the last step (the symbol that holds the access), never from a sibling store.
-    hit.viaPath.forEach((step, k) => {
+  const called: ChainStop[] = [];
+  // Each function stop is reached from the previous step of the walk path that first emitted it; the
+  // store (or service call) from the last step (the symbol that holds it), never from a sibling store.
+  const holderOf = (viaPath: WalkStep[]): ChainStop | undefined => {
+    viaPath.forEach((step, k) => {
       const key = stepKey(step.ref);
       if (k === 0 || emitted.has(key)) return;
       const stop = refStop(ctx, "code", "function", step.ref, hopFromStep(step));
-      emitted.set(key, reachedFrom(ctx, stop, emitted.get(stepKey(hit.viaPath[k - 1]!.ref))));
+      emitted.set(key, reachedFrom(ctx, stop, emitted.get(stepKey(viaPath[k - 1]!.ref))));
       stops.push(stop);
     });
-    const last = hit.viaPath.at(-1);
-    const holder = last ? emitted.get(stepKey(last.ref)) : undefined;
+    const last = viaPath.at(-1);
+    return last ? emitted.get(stepKey(last.ref)) : undefined;
+  };
+  for (const hit of hits) {
+    const holder = holderOf(hit.viaPath);
     const h = storeHop(base, hit);
     if (hit.kind === "db") {
       stops.push(reachedFrom(ctx, dbStop(repo, hit, h), holder));
@@ -215,31 +254,65 @@ function hitStops(
       const consumeKey = queueKey(pair.repoTo, pair.consume);
       const consumer = ctx.consumers.get(consumeKey);
       if (!consumer || consumeKey === follow.skip) continue;
-      paired.push(...consumerStops(ctx, consumer, pairedHop(h.confidence, pair), null, publish));
+      paired.push(...consumerStops(ctx, consumer, pairedHop(h.confidence, pair), null, publish, services.depth));
     }
+  }
+  for (const sc of services.calls) {
+    if (services.depth > 0 && ctx.chain.stops >= CALL_BUDGET) break;
+    const call = reachedFrom(ctx, serviceCallStop(ctx, repo, sc, storeHop(base, sc)), holderOf(sc.viaPath));
+    called.push(call, ...serviceStops(ctx, sc, call, services.depth));
   }
   // Paired consumers go after all of this link's own stops, so each consume stop past the first starts a
   // block that runs to the next one (or the end) — the scorer keys those stores to the consumer.
   // `pairedOut` (a manual symbol block inserted mid-chain) collects them for the chain's end instead.
   if (pairedOut) {
     pairedOut.push(...paired);
-    return stops;
+    return [...stops, ...called];
   }
-  return [...stops, ...paired];
+  return [...stops, ...called, ...paired];
+}
+
+/** A backend's outgoing HTTP call (0.6 §3): a "call" stop in the code lane (a UI call is in the ui lane). */
+function serviceCallStop(ctx: Ctx, repo: string, sc: ServiceHit, h: Hop): ChainStop {
+  return withoutUndefined({
+    lane: "code" as const, kind: "call" as const, repo,
+    nodeId: nearestNodeId(graphOf(ctx.ws, repo), sc.call.at.file, sc.call.at.symbol),
+    file: sc.call.at.file, line: sc.call.at.line, symbol: sc.call.at.symbol, op: sc.call.method, label: sc.call.path, hop: h,
+  });
+}
+
+/** The route a service call reaches, then — when that route is not yet expanded in this chain, the chain is
+ * within MAX_SERVICE_HOPS and under EXPAND_BUDGET stops — that route's handler and stores (and its own service
+ * calls). Otherwise the chain ends at the route's stop, whose `continues` names the route's own chain. */
+function serviceStops(ctx: Ctx, sc: ServiceHit, call: ChainStop, depth: number): ChainStop[] {
+  const id = routeIdentity(sc.target.route);
+  const c = worse(call.hop.confidence, sc.target.confidence);
+  const routeHop = c === "exact" ? hop("exact") : hop(c, sc.target.reason ?? "worst hop on the path to this route");
+  const route = reachedFrom(ctx, routeStop(ctx.ws, sc.target.route, routeHop), call);
+  const backend = ctx.backends.get(id);
+  // The budget never cuts a call the chain's own entry makes (depth 0): UI → A → B → table stays whole however
+  // many tables A touches. Deeper hops are budgeted.
+  if (!backend || depth >= MAX_SERVICE_HOPS || ctx.chain.expanded.has(id) || (depth > 0 && ctx.chain.stops >= EXPAND_BUDGET)) {
+    route.continues = ctx.routeChainId(sc.target.route);
+    ctx.continued.add(id);
+    return [route];
+  }
+  return [route, ...backendStops(ctx, backend, routeHop, route, depth + 1)];
 }
 
 /** The hop into a paired consumer: the pair's own confidence (exact; param for a topic-wildcard binding;
  * guess for the no-binding heuristic), folded with the publish stop's — never better than either. */
 function pairedHop(publish: Confidence, pair: QueuePair): Hop {
   const c = worse(publish, pair.confidence);
-  if (c === "exact") return hop("exact");
+  if (c === "exact") return pair.reason === ANSWERED ? hop("exact", ANSWERED) : hop("exact");
   if (c !== pair.confidence) return hop(c, "worst hop on the path to this consumer");
   return hop(c, pair.reason ?? "topic wildcard binding");
 }
 
 /** A handler the code index could not place (BackendLink.handlerConfidence "guess") is still shown, as a
  * guessed hop; a route with no handler file at all stops at the route (check's "handler-not-found"). */
-function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop, route: ChainStop): ChainStop[] {
+function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop, route: ChainStop, depth = 0): ChainStop[] {
+  ctx.chain.expanded.add(routeIdentity(link.route));
   if (!link.handler) return [];
   const handlerHop = link.handlerConfidence === "exact"
     ? hop("exact")
@@ -250,14 +323,18 @@ function backendStops(ctx: Ctx, link: BackendLink, routeHop: Hop, route: ChainSt
   const handler = reachedFrom(ctx, refStop(ctx, "code", "handler", link.handler, handlerHop, inlineLine), route);
   const stops: ChainStop[] = [handler];
   const base = worse(routeHop.confidence, handlerHop.confidence);
-  stops.push(...hitStops(ctx, link.repo, link.hits, new Map([[stepKey(link.handler), handler]]), base, {}));
+  const services: Services = { calls: link.calls ?? [], depth };
+  stops.push(...hitStops(ctx, link.repo, link.hits, new Map([[stepKey(link.handler), handler]]), base, {}, undefined, services));
   return stops;
 }
 
 /** Consume stop, handler stop (unless the callback is inline), then its store stops. `entryHop` is exact
  * for a consumer chain's own entry, or the pair's hop when appended after a publish (see pairedHop); every
- * stop of an appended consumer carries at most that confidence. */
-function consumerStops(ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: QueueFollow, parent?: ChainStop): ChainStop[] {
+ * stop of an appended consumer carries at most that confidence. A handler the linker could not find (the walk
+ * starts at the consume call's enclosing function) makes every store after it a guess. */
+function consumerStops(
+  ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: QueueFollow, parent?: ChainStop, depth = 0,
+): ChainStop[] {
   const graph = graphOf(ctx.ws, link.repo);
   const consumeRef: SymbolRef = { repo: link.repo, file: link.consume.at.file, symbol: link.consume.at.symbol };
   const consume: ChainStop = reachedFrom(ctx, withoutUndefined({
@@ -268,12 +345,14 @@ function consumerStops(ctx: Ctx, link: ConsumerLink, entryHop: Hop, follow: Queu
   }), parent);
   const stops: ChainStop[] = [consume];
   const emitted = new Map([[stepKey(consumeRef), consume]]);
+  const base = worse(entryHop.confidence, link.handlerConfidence ?? "exact");
   if (stepKey(link.handler) !== stepKey(consumeRef)) {
-    const handler = reachedFrom(ctx, refStop(ctx, "code", "handler", link.handler, entryHop), consume);
+    const handlerHop = base === entryHop.confidence ? entryHop : hop(base, HANDLER_NOT_FOUND);
+    const handler = reachedFrom(ctx, refStop(ctx, "code", "handler", link.handler, handlerHop), consume);
     stops.push(handler);
     emitted.set(stepKey(link.handler), handler);
   }
-  stops.push(...hitStops(ctx, link.repo, link.hits, emitted, entryHop.confidence, follow));
+  stops.push(...hitStops(ctx, link.repo, link.hits, emitted, base, follow, undefined, { calls: link.calls ?? [], depth }));
   return stops;
 }
 
@@ -321,13 +400,17 @@ export function defaultChainName(c: Pick<Chain, "entry" | "stops">): string {
 
 /** H11: the ids this flow has under other entries, so a journey saved against one of them still finds
  * it after the chain gains (or loses) a UI step: for a chain with a routeKey, its route-only id; for a
- * page chain, also the call-entry id of each of its call stops. Sorted; never the chain's own id. */
+ * page chain, also the call-entry id of each of its call stops and its own id while unlinked (routeKey ""). Sorted;
+ * never the chain's own id. */
 export function chainAliases(entry: string, rKey: string, stops: ChainStop[]): string[] {
   if (rKey === "") return [];
   const own = chainId(entry, rKey);
   const out = new Set<string>([chainId(`route:${rKey}`, rKey)]);
   if (entry.startsWith("page:")) {
     for (const s of stops) if (s.kind === "call") out.add(chainId(`call:${s.repo}:${s.file}#${s.symbol}`, rKey));
+    // 0.6: the same page while its call matched no route yet (a group's frontend indexed before its backend): a
+    // journey named then follows the page once it links.
+    out.add(chainId(entry, ""));
   }
   out.delete(own);
   return [...out].sort(compare);
@@ -493,9 +576,10 @@ function applyManualLinks(
 }
 
 /** A symbol -> route manual link applies only to an internal UI call in that function that matched no
- * route (never a third-party call, never one that matched a route at any confidence), and only when the
- * function has exactly one such call: the link then supplies that call's route (exact, "manual link"), as
- * if codeloom had matched it. Two or more such calls: the link is ambiguous — broken, nothing linked. */
+ * route, or matched one only as a guess (0.6 §5: a tie between two repos is answered with a link) — never a
+ * third-party call, never one matched for sure — and only when the function has exactly one such call: the link
+ * then supplies that call's route (exact, "manual link"), as if codeloom had matched it. Two or more such calls:
+ * the link is ambiguous — broken, nothing linked. */
 function linkUnmatchedCalls(
   ui: UiLink[], manual: Manual[], backend: BackendLink[], used: Set<number>, broken: Map<number, string>,
 ): UiLink[] {
@@ -503,7 +587,7 @@ function linkUnmatchedCalls(
   for (const m of manual) {
     if (m.from.kind !== "symbol" || m.to.kind !== "route") continue;
     const from = m.from;
-    const calls = ui.filter((l) => l.target.kind === "unresolved"
+    const calls = ui.filter((l) => (l.target.kind === "unresolved" || (l.target.kind === "route" && l.target.confidence === "guess"))
       && l.repo === from.repo && l.call.at.file === from.file && l.call.at.symbol === from.symbol);
     if (calls.length === 0) continue;
     if (calls.length > 1) {
@@ -564,15 +648,31 @@ export function buildChainsAndLinks(
     pairs.set(key, [...(pairs.get(key) ?? []), p]);
   }
   const consumers = new Map(links.consumers.map((c) => [queueKey(c.repo, c.consume), c]));
-  const ctx: Ctx = { ws, symbolLine, pairs, consumers, parents: new WeakMap() };
+  const backends = new Map<string, BackendLink>();
+  for (const b of links.backend) if (!backends.has(routeIdentity(b.route))) backends.set(routeIdentity(b.route), b);
   // Every route a UI link reaches: its own-repo match (target.kind === "route"), plus any found through
   // the repo's workspace `proxies` (spec §4) — the own match is untouched; proxied ones are extra.
-  const routeTargetsOf = (l: UiLink): RouteTarget[] => (l.target.kind === "route" ? [l.target, ...(l.proxied ?? [])] : (l.proxied ?? []));
+  // A match through a Next.js catch-all route read as a proxy rule passes through that route (`via`): the route
+  // alone, a dead end that only forwards, gets no chain of its own.
+  const routeTargetsOf = (l: UiLink): RouteTarget[] => {
+    const proxied = l.proxied ?? [];
+    const passedThrough = l.target.kind === "route" && proxied.some((t) => t.via !== undefined);
+    return l.target.kind === "route" && !passedThrough ? [l.target, ...proxied] : proxied;
+  };
+  /** The route stops of a UI call's match: the proxy route it passes through (if any), then the matched route. */
+  const routeStopsOf = (target: RouteTarget, from: ChainStop | undefined): ChainStop[] => {
+    if (!target.via) return [reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), from)];
+    const via = reachedFrom(ctx, routeStop(ws, target.via, hop("exact")), from);
+    return [via, reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason ?? "proxied by this route")), via)];
+  };
   const uiTargets = links.ui.flatMap((l) => routeTargetsOf(l).map((t) => t.route));
   const keys = chainRouteKeys([...links.backend.map((b) => b.route), ...uiTargets]);
   const keyOf = (er: EffectiveRoute) => keys.get(routeIdentity(er)) ?? routeKey(er);
-  const backendByIdentity = new Map<string, BackendLink>();
-  for (const b of links.backend) if (!backendByIdentity.has(routeIdentity(b.route))) backendByIdentity.set(routeIdentity(b.route), b);
+  const ctx: Ctx = {
+    ws, symbolLine, pairs, consumers, backends, parents: new WeakMap(),
+    routeChainId: (er) => chainId(`route:${keyOf(er)}`, keyOf(er)), chain: { expanded: new Set(), stops: 0 }, continued: new Set(),
+  };
+  const backendByIdentity = backends;
   const byId = new Map<string, Chain>();
   const add = (c: Chain) => {
     if (byId.has(c.id)) return;
@@ -597,10 +697,13 @@ export function buildChainsAndLinks(
       const backend = backendByIdentity.get(routeIdentity(target.route));
       for (const page of uiLink.pages) {
         const entry = `page:${uiLink.repo}:${page.page.route}`;
+        startChain(ctx);
         const ui = uiStops(ctx, uiLink, page);
-        const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
-        const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
+        const routes = routeStopsOf(target, ui.at(-1));
+        const route = routes.at(-1)!;
+        const stops = [...ui, ...routes, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
         pageRoutes.add(routeIdentity(target.route));
+        if (target.via) pageRoutes.add(routeIdentity(target.via));
         const chain = makeChain(entry, rKey, stops, (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u)));
         if (!byId.has(chain.id)) inPageChain.add(pairKey(uiLink, target));
         add(chain);
@@ -619,10 +722,13 @@ export function buildChainsAndLinks(
       if (uiLink.pages.length === 0
         && !unreached.has(uiReachKey({ repo: uiLink.repo, file: at.file, line: at.line, method: uiLink.call.method, path: uiLink.call.path }))) continue;
       const backend = backendByIdentity.get(routeIdentity(target.route));
+      startChain(ctx);
       const ui = uiStops(ctx, uiLink, undefined);
-      const route = reachedFrom(ctx, routeStop(ws, target.route, hop(target.confidence, target.reason)), ui.at(-1));
-      const stops = [...ui, route, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
+      const routes = routeStopsOf(target, ui.at(-1));
+      const route = routes.at(-1)!;
+      const stops = [...ui, ...routes, ...(backend ? backendStops(ctx, backend, hop(target.confidence), route) : [])];
       pageRoutes.add(routeIdentity(target.route));
+      if (target.via) pageRoutes.add(routeIdentity(target.via));
       add(makeChain(`call:${uiLink.repo}:${at.file}#${at.symbol}`, keyOf(target.route), stops,
         (backend?.unresolved ?? []).map((u) => toUnresolved(backend!.repo, u))));
     }
@@ -646,31 +752,53 @@ export function buildChainsAndLinks(
         }
         continue;
       }
+      startChain(ctx);
       add(makeChain(entry, "", uiStops(ctx, uiLink, page), [u]));
     }
   }
 
-  for (const b of links.backend) {
-    if (pageRoutes.has(routeIdentity(b.route))) continue;
+  const routeChain = (b: BackendLink) => {
     const rKey = keyOf(b.route);
     const entry = `route:${rKey}`;
     const routeHop = b.route.mountsKnown ? hop("exact") : hop("guess", "mount prefix unknown");
+    startChain(ctx);
     const route = routeStop(ws, b.route, routeHop);
     const stops = [route, ...backendStops(ctx, b, routeHop, route)];
     add(makeChain(entry, rKey, stops, b.unresolved.map((u) => toUnresolved(b.repo, u))));
+  };
+  const routeChained = new Set<string>();
+  for (const b of links.backend) {
+    if (pageRoutes.has(routeIdentity(b.route))) continue;
+    routeChained.add(routeIdentity(b.route));
+    routeChain(b);
   }
 
   for (const c of links.consumers) {
     const entry = `consumer:${c.repo}:${c.consume.queue}#${c.handler.file}#${c.handler.symbol}`;
+    startChain(ctx);
     const stops = consumerStops(ctx, c, hop("exact"), { skip: queueKey(c.repo, c.consume) });
     add(makeChain(entry, "", stops, c.unresolved.map((u) => toUnresolved(c.repo, u))));
   }
 
-  const manualLinks: ManualLinkStatus[] = rawLinks.manual.map((l, i) => {
-    if (!l.resolved) return { from: l.from, to: l.to, status: "broken", ...(l.reason !== undefined ? { reason: l.reason } : {}) };
-    if (used.has(i)) return { from: l.from, to: l.to, status: "used" };
+  // Every route a `continues` names gets its own `route:` chain (a route that pages call has none so far).
+  // Building one may name further routes, so repeat until none is left; in backend order, so it is stable.
+  for (let pending = true; pending;) {
+    pending = false;
+    for (const b of links.backend) {
+      const id = routeIdentity(b.route);
+      if (!ctx.continued.has(id) || routeChained.has(id)) continue;
+      routeChained.add(id);
+      routeChain(b);
+      pending = true;
+    }
+  }
+
+  const manualLinks: ManualLinkStatus[] = rawLinks.manual.map((l, i): ManualLinkStatus => {
+    const src = l.source !== undefined ? { source: l.source } : {};
+    if (!l.resolved) return { from: l.from, to: l.to, status: "broken", ...(l.reason !== undefined ? { reason: l.reason } : {}), ...src };
+    if (used.has(i)) return { from: l.from, to: l.to, status: "used", ...src };
     const reason = broken.get(i);
-    return reason !== undefined ? { from: l.from, to: l.to, status: "broken", reason } : { from: l.from, to: l.to, status: "unused" };
+    return reason !== undefined ? { from: l.from, to: l.to, status: "broken", reason, ...src } : { from: l.from, to: l.to, status: "unused", ...src };
   });
   return { chains: [...byId.values()], manualLinks };
 }
@@ -684,10 +812,13 @@ export function sortChains(chains: Chain[]): Chain[] {
  * `manualLinks` only when non-empty (a workspace with no `links` keeps its file unchanged). */
 export function writeChains(
   wsRoot: string, chains: Chain[], uiReach?: UiReachFact[], manualLinks?: ManualLinkStatus[], external?: ExternalCallFact[],
+  unresolvedBases?: UnresolvedBase[], wrapperCalls?: NonNullable<ChainsFile["wrapperCalls"]>,
 ): boolean {
   const file: ChainsFile = {
     version: 1, chains, ...(uiReach ? { uiReach } : {}), ...(manualLinks && manualLinks.length > 0 ? { manualLinks } : {}),
     ...(external && external.length > 0 ? { external } : {}),
+    ...(unresolvedBases && unresolvedBases.length > 0 ? { unresolvedBases } : {}),
+    ...(wrapperCalls && wrapperCalls.length > 0 ? { wrapperCalls } : {}),
   };
   return writeJsonIfChanged(join(wsRoot, CODELOOM_DIR, FILES.chains), file);
 }

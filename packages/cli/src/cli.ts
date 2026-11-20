@@ -1,17 +1,20 @@
 import { Command, CommanderError } from "commander";
 import { findClaude, runClaudeHeadless } from "./claude/headless.js";
 import { runCheck } from "./commands/check.js";
-import { runDashboard } from "./commands/dashboard.js";
+import { openBrowser, runDashboard } from "./commands/dashboard.js";
 import { CodeloomError, dataError } from "./errors.js";
 import { formatDoctor, runDoctor } from "./commands/doctor.js";
 import { codeloomBin, formatInit, runInit } from "./commands/init.js";
 import { effectiveYes, formatInitWizard, readlineAsk, runInitWizard } from "./commands/init-wizard.js";
-import { formatIndexSummary, runIndex } from "./commands/index-cmd.js";
+import { formatIndexSummary, formatLinkSummary, runIndex, runLink } from "./commands/index-cmd.js";
+import { runAskCommand, runGaps, spawnInherit } from "./commands/gaps.js";
 import { isInteractive, parseReviewFormat, runReviewCommand, terminalConfirm } from "./commands/review.js";
+import { runPrCommand } from "./commands/pr.js";
 import { runServeCommand } from "./commands/serve.js";
 import { parseMaxSize, parsePrNumber, runSnapshot, runSnapshotSite } from "./commands/snapshot.js";
 import { formatViewsList, runViewsReset } from "./commands/views.js";
 import { VERSION } from "./version.js";
+import { serveStaticSite } from "./web/static-site.js";
 
 export { VERSION };
 
@@ -58,23 +61,50 @@ export function buildProgram(): Command {
 
   program
     .command("index")
-    .description("Index every repo in this workspace (only changed files are re-parsed)")
+    .description("Index this repo and link it with the other repos of its group, or every repo of a workspace folder (only changed files are re-parsed)")
     .option("--quiet", "print nothing on success")
-    .action(async (opts: { quiet?: boolean }) => {
-      const result = await runIndex(process.cwd());
+    .option("--group <name>", "the group this repo joins (default: its git remote's host/owner, else its parent folder's name)")
+    .action(async (opts: { quiet?: boolean; group?: string }) => {
+      const result = await runIndex(process.cwd(), opts.group !== undefined ? { group: opts.group } : {});
       if (!opts.quiet) console.log(formatIndexSummary(result));
+    });
+
+  program
+    .command("link")
+    .description("Link the map again from every repo's saved map, parsing nothing (after editing answers.json: a group's is in ~/.codeloom/groups/<group>-<hash>/.codeloom/, a workspace folder's in its .codeloom/)")
+    .action(() => {
+      console.log(formatLinkSummary(runLink(process.cwd())));
+    });
+
+  program
+    .command("gaps")
+    .description("List what codeloom could not settle about the map, as short questions, the ones touching most journeys first")
+    .option("--json", "print the list as JSON (what the map_gaps MCP tool returns)")
+    .action((opts: { json?: boolean }) => {
+      console.log(runGaps(process.cwd(), opts));
+    });
+
+  program
+    .command("ask")
+    .description("Go through the open questions with Claude Code: asks before starting it (the map-interview prompt), else prints how")
+    .action(async () => {
+      process.exitCode = await runAskCommand(process.cwd(), {
+        claude: findClaude(), interactive: isInteractive(), confirm: terminalConfirm, spawn: spawnInherit, print: (t) => console.log(t),
+      });
     });
 
   program
     .command("check")
     .description("Report how complete the journey map is")
-    .option("--json", "print the report as JSON")
+    .option("--json", "print the report as JSON (at most 200 items of each kind; see --all)")
+    .option("--verbose", "list every info-only item (calls that could not be resolved, calls to other services) instead of counts and 5 examples")
+    .option("--all", "with --json: every item of every kind")
     .option("--fail-under <percent>", "exit 1 when the complete percentage is below this")
     .option(
       "--traces",
       'compare the map with runtime traces from "traces" in codeloom.workspace.json (an otlp-file path or a Tempo url)',
     )
-    .action(async (opts: { json?: boolean; failUnder?: string; traces?: boolean }) => {
+    .action(async (opts: { json?: boolean; failUnder?: string; traces?: boolean; verbose?: boolean; all?: boolean }) => {
       const { output, exitCode } = await runCheck(process.cwd(), opts);
       console.log(output);
       process.exitCode = exitCode;
@@ -98,14 +128,52 @@ export function buildProgram(): Command {
     });
 
   program
+    .command("pr")
+    .description("On a PR branch: index, build the PR review, let Claude check it if you say so, and open one page that shows what the PR does (also prints the block for the PR description)")
+    .option("--base <ref>", 'the ref to compare against (default: origin/main, else main, else master)')
+    .option("--repo <id>", "in a folder of separate repos: the repo the pull request is in")
+    .option("--check", "let Claude check the PR now, without asking (runs your Claude Code, allowed only save_pr_review)")
+    .option("--recheck", "check again even though Claude already saved a review of this head, replacing it (runs without asking, like --check)")
+    .option("--no-open", "print the page's URL but do not open a browser")
+    .option("--port <port>", "port for the local page (default: a free one)")
+    .option("--out <dir>", "folder to write the page into (default: .codeloom/pr/<short head>/ in the workspace folder, or in a group's data folder ~/.codeloom/groups/<group>-<hash>/: never inside your repo)")
+    .action(async (opts: { base?: string; repo?: string; check?: boolean; recheck?: boolean; open: boolean; port?: string; out?: string }) => {
+      const port = parsePort(opts.port);
+      const result = await runPrCommand(
+        process.cwd(),
+        { base: opts.base, repo: opts.repo, check: opts.check, recheck: opts.recheck, open: opts.open, port, out: opts.out },
+        {
+          claude: findClaude(),
+          run: runClaudeHeadless,
+          interactive: isInteractive(),
+          confirm: terminalConfirm,
+          print: (t) => console.log(t),
+          warn: (l) => console.error(l),
+          index: (start) => runIndex(start),
+          open: openBrowser,
+          serve: (dir, p) => serveStaticSite(dir, { port: p }),
+        },
+      );
+      if (result.url === undefined) return;
+      // Stay up until Ctrl+C (the open server keeps the process alive), then close and exit 0.
+      const signals = ["SIGINT", "SIGTERM"] as const;
+      const onSignal = () => {
+        for (const sig of signals) process.off(sig, onSignal);
+        result.close().finally(() => process.exit(0));
+      };
+      for (const sig of signals) process.on(sig, onSignal);
+    });
+
+  program
     .command("snapshot")
     .description("Write a hosted PR snapshot's data/*.json for merge-base(<ref>, HEAD)..HEAD, and, unless --data-only, the dashboard site + review.md next to it")
     .requiredOption("--base <ref>", 'the ref to compare against, e.g. "origin/main"')
     .requiredOption("--out <dir>", "folder to write the snapshot into")
+    .option("--repo <id>", "in a folder of separate repos: the repo the pull request is in (only its history is diffed)")
     .option("--max-size <size>", 'size cap for the snapshot, e.g. "25MB" (default 25MB)')
     .option("--data-only", "write only data/*.json: no dashboard assets, no review.md (the untrusted build step)")
-    .action(async (opts: { base: string; out: string; maxSize?: string; dataOnly?: boolean }) => {
-      const result = await runSnapshot(process.cwd(), { base: opts.base, out: opts.out, maxBytes: parseMaxSize(opts.maxSize), dataOnly: opts.dataOnly });
+    .action(async (opts: { base: string; out: string; repo?: string; maxSize?: string; dataOnly?: boolean }) => {
+      const result = await runSnapshot(process.cwd(), { base: opts.base, out: opts.out, repo: opts.repo, maxBytes: parseMaxSize(opts.maxSize), dataOnly: opts.dataOnly });
       process.exitCode = result.exitCode;
     });
 

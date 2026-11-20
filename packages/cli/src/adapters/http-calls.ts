@@ -368,7 +368,7 @@ export function detectReExports(file: ParsedFile): ReExportDraft[] {
 }
 
 /** True when `name` is re-declared (a parameter, a variable, a function) in a function or block around `node`. */
-function shadowed(node: ts.Node, name: string): boolean {
+export function shadowed(node: ts.Node, name: string): boolean {
   const declares = (n: ts.BindingName): boolean =>
     ts.isIdentifier(n) ? n.text === name : n.elements.some((e) => !ts.isOmittedExpression(e) && declares(e.name));
   for (let cur = node.parent; cur && !ts.isSourceFile(cur); cur = cur.parent) {
@@ -598,7 +598,7 @@ function assignmentTargets(target: ts.Expression, out: Set<string>): void {
  * nested function (a closure over the parameter can still mutate it before the factory call returns) —
  * review fix: a reassigned/incremented parameter makes the factory's result depend on more than just the
  * call-site argument, so it must never be folded. */
-function isMutated(fn: ts.FunctionLikeDeclaration, name: string): boolean {
+export function isMutated(fn: ts.FunctionLikeDeclaration, name: string): boolean {
   const body = fn.body;
   if (!body) return false;
   let mutated = false;

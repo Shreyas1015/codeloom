@@ -8,12 +8,18 @@ import { join } from "node:path";
 import { CodeloomError } from "../errors.js";
 import { parseNodeRef } from "../mcp/state.js";
 import { buildReview } from "../review/build.js";
+import { loadPrReview } from "../review/saved.js";
+import { buildPrSummary, checkPrSummary } from "../review/summary.js";
+import type { Review } from "../review/types.js";
 import { readSpecs } from "../store/specs.js";
 import { compare } from "../util.js";
 import { API_ROUTES, CODE_MAX_BYTES, HttpError, matchRoute, repoFile } from "../web/api.js";
 import { loadWorkspace } from "../workspace/repos.js";
 import { VERSION } from "../version.js";
 import { snapshotKey } from "./key.js";
+
+/** data/pr-summary.json: the PR summary (review/summary.ts) — the dashboard reads it as `/api/pr-summary`. */
+export const PR_SUMMARY_KEY = "pr-summary";
 
 /** Default `--max-size` (PR review maps constraints). */
 export const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
@@ -27,6 +33,16 @@ export interface WriteSnapshotOptions {
   maxBytes?: number;
   /** Default `() => new Date()`; override for deterministic `builtAt` in tests. */
   now?: () => Date;
+  /** `--repo <id>`: snapshot this repo's PR in a folder of separate repos (review/build.ts pickTarget). */
+  repoId?: string;
+  /** Local snapshots (`codeloom snapshot` without --data-only, `codeloom pr`): pick the history to diff as
+   * `codeloom review` does — the repo `start` is inside, or the only one. Otherwise (the hosted build step) the
+   * workspace root must be the one git repo holding every repo, unless `repoId` is given. */
+  anyHistory?: boolean;
+  /** An already-built Review of this same diff (`codeloom pr` builds it first, to check it); built here when absent. */
+  review?: Review;
+  /** One-line warnings (an unreadable saved review). */
+  warn?: (line: string) => void;
 }
 
 /** `data/manifest.json`'s shape (design spec §3). `pr`/`repoSlug` are filled in later by `snapshot-site`. */
@@ -153,9 +169,20 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const builtAt = (opts.now ? opts.now() : new Date()).toISOString();
 
-  // Folders of separate repos (`--repo`) are a `codeloom review` feature only: a snapshot still needs the
-  // workspace root to be the one git repo, wherever inside it this runs.
-  const review = buildReview(start, opts.baseRef, { wholeWorkspaceOnly: true });
+  // A folder of separate repos needs `--repo` (or, locally, the cwd inside one repo); the hosted build step keeps
+  // 0.4's rule otherwise: the workspace root is the one git repo, wherever inside it this runs.
+  const review =
+    opts.review ??
+    buildReview(start, opts.baseRef, opts.repoId !== undefined ? { repoId: opts.repoId } : opts.anyHistory ? {} : { wholeWorkspaceOnly: true });
+  // The PR summary the This PR page opens on: Claude's saved review of this head when there is one, else the draft.
+  // It must pass the same check the dashboard data is held to (a hand-edited saved review could name something the
+  // review does not have); if not, the snapshot goes without it — with a warning — rather than failing.
+  const summary = buildPrSummary(review, loadPrReview(start, review.head, opts.warn));
+  const summaryOk = checkPrSummary(JSON.parse(JSON.stringify(summary)), review).ok;
+  if (!summaryOk) {
+    opts.warn?.("codeloom: the PR summary did not pass its check (a saved review names something this diff does not have); writing the snapshot without pr-summary.json.");
+  }
+  const summaryJson = summaryOk ? JSON.stringify(summary) : "";
   const ws = loadWorkspace(start);
   const repoIds = [...ws.repos.map((r) => r.id)].sort(compare);
 
@@ -243,6 +270,7 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   const alwaysBytes = alwaysEntries.reduce((n, e) => n + e.bytes, 0);
   const reviewJson = JSON.stringify(review);
   const reviewBytes = Buffer.byteLength(reviewJson, "utf8");
+  const summaryBytes = Buffer.byteLength(summaryJson, "utf8");
 
   const dataDir = join(opts.outDir, "data");
   mkdirSync(dataDir, { recursive: true });
@@ -270,7 +298,11 @@ export async function writeSnapshotData(start: string, opts: WriteSnapshotOption
   put("review", reviewJson);
   const written = new Set<string>(alwaysEntries.map((e) => e.key));
   written.add("review");
-  const total0 = alwaysBytes + reviewBytes;
+  if (summaryOk) {
+    put(PR_SUMMARY_KEY, summaryJson);
+    written.add(PR_SUMMARY_KEY);
+  }
+  const total0 = alwaysBytes + reviewBytes + summaryBytes;
 
   // Map folders: every folder on the path to a changed file (review.files[], the whitelisted field).
   const folderCandidates = new Map<string, { repo: string; dir: string }>();

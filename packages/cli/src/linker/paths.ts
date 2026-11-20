@@ -80,8 +80,12 @@ function matchSegments(call: Segment[], route: Segment[]): SegMatch | null {
 }
 
 export function matchPath(callPath: string, routePath: string): PathMatch | null {
-  const m = matchSegments(parsePath(callPath), parsePath(routePath));
+  const call = parsePath(callPath);
+  const m = matchSegments(call, parsePath(routePath));
   if (!m) return null;
+  // 0.6: a guess (the call's variables standing for the route's literals) needs at least one literal segment the
+  // two share: `/:rbacPath/:roleId/permissions` is no match for `/auth/user/:id`.
+  if (m.literals === 0 && m.confidence === "guess") return null;
   return m.confidence === "guess" ? { ...m, reason: "call segment is a variable" } : m;
 }
 
@@ -105,6 +109,12 @@ export interface RouteCandidate<T> {
   method: HttpMethod;
   path: string;
   mountsKnown: boolean;
+  /** The repo serving the route: a tie between two repos' equally specific routes is no match (0.6). */
+  repo?: string;
+  /** The path without (the leading segments of) a prefix that a group in another file gave it
+   * (`Route.registeredPrefix`), fewest segments stripped first: a call through a base that carries that prefix
+   * (`${API_URL}/customers` with API_URL ending in /api) shows only the rest. */
+  altPaths?: string[];
 }
 
 /** Equal-rank tie-break (radix-router style, left to right): the route whose literal segment equals the
@@ -128,6 +138,24 @@ function leftmostLiteralWinner(callPath: string, routePaths: string[]): number |
 }
 
 export function pickRoute<T>(
+  method: HttpMethod,
+  callPath: string,
+  candidates: RouteCandidate<T>[],
+): { item: T; match: PathMatch } | null {
+  const full = pickByPath(method, callPath, candidates);
+  const depth = Math.max(0, ...candidates.map((c) => c.altPaths?.length ?? 0));
+  if (full || depth === 0) return full;
+  // Nothing matches the full paths: try the routes whose prefix came from another file's group without it,
+  // one more leading segment stripped per pass.
+  for (let i = 0; i < depth; i++) {
+    const alt = candidates.flatMap((c) => (c.altPaths?.[i] !== undefined ? [{ ...c, path: c.altPaths[i]!, altPaths: undefined }] : []));
+    const picked = pickByPath(method, callPath, alt);
+    if (picked) return picked;
+  }
+  return null;
+}
+
+function pickByPath<T>(
   method: HttpMethod,
   callPath: string,
   candidates: RouteCandidate<T>[],
@@ -159,6 +187,8 @@ export function pickRoute<T>(
           confidence: worse(w.match.confidence, "param"), literals: w.match.literals, reason: "literal segment preferred over a parameter",
         } };
       }
+      // Two repos serving it equally well: which one gets the call is a question (map gaps), never a guess.
+      if (new Set(tied.map((t) => t.candidate.repo)).size > 1) return null;
       return { item: best.candidate.item, match: { confidence: "guess", literals: best.match.literals, reason: "tie between equally specific routes" } };
     }
     if (best.match.confidence === "guess" && known.length > 1) return null;

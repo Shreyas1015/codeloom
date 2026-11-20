@@ -5,6 +5,8 @@ import { completePercent } from "./report.js";
 interface Group {
   label: string;
   match: (i: CheckItem) => boolean;
+  /** Info only (never broken): summarised in plain text unless --verbose. */
+  info?: true;
   /** Order within the group (default: the items' own order). */
   order?: (a: CheckItem, b: CheckItem) => number;
 }
@@ -18,18 +20,20 @@ const GROUPS: Group[] = [
   { label: "Routes or consumers that reach no database table or queue", match: (i) => i.kind === "no-store" },
   { label: "Calls not reached from any page", match: (i) => i.kind === "ui-unreached" },
   { label: "URLs that could not be read", match: (i) => i.kind === "unresolved-url" },
-  { label: "Routes with no UI caller", match: (i) => i.kind === "route-no-caller" },
+  { label: "Routes with no caller", match: (i) => i.kind === "route-no-caller" },
   { label: "Hops matched only by a guess", match: (i) => i.kind === "guess-link" },
   {
     label: "Calls that could not be resolved, info only — they do not affect completeness",
     match: (i) => i.kind === "unmatched-call",
+    info: true,
   },
   { label: "Manual links that could not be resolved", match: (i) => i.kind === "manual-link-broken" },
-  { label: "Manual links that match no chain, info only", match: (i) => i.kind === "manual-link-unused" },
+  { label: "Manual links that match no chain, info only", match: (i) => i.kind === "manual-link-unused", info: true },
   {
     // Grouped by service: every detail starts "calls <name>:", so ordering by detail keeps a service's calls together.
     label: "Calls to other services, info only — not broken",
     match: (i) => i.kind === "external-call",
+    info: true,
     order: (a, b) => compare(a.detail, b.detail) || compare(a.repo, b.repo) || compare(a.file, b.file) || a.line - b.line,
   },
 ];
@@ -51,10 +55,12 @@ function summaryLine(r: CheckReport): string {
   return `${chains} journey${chains === 1 ? "" : "s"}: ${parts.join(", ")}`;
 }
 
-/** "routes with a UI caller: x/y" — only when the workspace has routes. */
+/** "3/5 routes have a caller (2 from UI, 1 from services)" — only when the workspace has routes. */
 function routesLine(r: CheckReport): string | undefined {
   const { routes, routesWithUiCaller } = r.summary;
-  return routes > 0 ? `routes with a UI caller: ${routesWithUiCaller}/${routes}` : undefined;
+  const fromServices = r.summary.routesWithServiceCaller ?? 0;
+  if (routes === 0) return undefined;
+  return `${routesWithUiCaller + fromServices}/${routes} routes have a caller (${routesWithUiCaller} from UI, ${fromServices} from services)`;
 }
 
 /** The ratio `--fail-under` uses: complete over the journeys that start in the UI. */
@@ -80,6 +86,16 @@ function externalLine(r: CheckReport): string | undefined {
   return n === 0 ? undefined : plural(n, "call to another service", "calls to other services");
 }
 
+/** "queues: demo-api 2 published; demo-billing 2 published, 5 consumed" — only when some repo uses a queue. */
+function queuesLine(r: CheckReport): string | undefined {
+  if (!r.queues || r.queues.length === 0) return undefined;
+  const parts = r.queues.map((q) => {
+    const ops = [q.publish > 0 ? `${q.publish} published` : "", q.consume > 0 ? `${q.consume} consumed` : ""].filter(Boolean);
+    return `${q.repo} ${ops.join(", ")}`;
+  });
+  return `queues: ${parts.join("; ")}`;
+}
+
 /** The `--traces` section: one summary line, then each non-empty group. */
 function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
   if ("skipped" in t) return [`Traces: skipped — ${t.skipped}`];
@@ -103,14 +119,28 @@ function tracesLines(t: NonNullable<CheckReport["traces"]>): string[] {
   return lines;
 }
 
-export function formatCheckText(r: CheckReport): string {
-  const extra = [routesLine(r), unreadableUrlLine(r), externalLine(r)].filter((l): l is string => l !== undefined);
+/** Examples an info-only group shows in plain text (without --verbose). */
+const INFO_EXAMPLES = 5;
+/** Items of one kind `--json` keeps (without --all). */
+export const JSON_ITEMS_PER_KIND = 200;
+
+export function formatCheckText(r: CheckReport, opts: { verbose?: boolean } = {}): string {
+  const extra = [routesLine(r), unreadableUrlLine(r), externalLine(r), queuesLine(r)].filter((l): l is string => l !== undefined);
   const lines = [summaryLine(r), ...extra, completeLine(r), ""];
-  for (const { label, match, order } of GROUPS) {
+  for (const { label, match, order, info } of GROUPS) {
     const group = order ? r.items.filter(match).sort(order) : r.items.filter(match);
     if (group.length === 0) continue;
     lines.push(`${label} (${group.length}):`);
-    for (const item of group) lines.push(itemLine(item));
+    if (info && !opts.verbose && group.length > INFO_EXAMPLES) {
+      // Info only, never broken: how many per repo, and a few examples.
+      const byRepo = new Map<string, number>();
+      for (const item of group) byRepo.set(item.repo, (byRepo.get(item.repo) ?? 0) + 1);
+      lines.push(`  ${[...byRepo.entries()].sort(([a, x], [b, y]) => y - x || compare(a, b)).map(([repo, n]) => `${repo}: ${n}`).join(", ")}`);
+      for (const item of group.slice(0, INFO_EXAMPLES)) lines.push(itemLine(item));
+      lines.push(`  … ${group.length - INFO_EXAMPLES} more: "codeloom check --verbose" lists them all`);
+    } else {
+      for (const item of group) lines.push(itemLine(item));
+    }
     lines.push("");
   }
   if (r.items.length === 0) lines.push("No issues found.", "");
@@ -118,6 +148,18 @@ export function formatCheckText(r: CheckReport): string {
   return lines.join("\n").trimEnd();
 }
 
-export function formatCheckJson(r: CheckReport): string {
-  return JSON.stringify(r, null, 2);
+/** The report as JSON. Without `all`, each kind keeps its first JSON_ITEMS_PER_KIND items and `truncated` counts,
+ * per kind, the ones left out (the summary's counts are always the full ones). */
+export function formatCheckJson(r: CheckReport, opts: { all?: boolean } = {}): string {
+  if (opts.all) return JSON.stringify(r, null, 2);
+  const seen = new Map<string, number>();
+  const truncated: Record<string, number> = {};
+  const items = r.items.filter((i) => {
+    const n = (seen.get(i.kind) ?? 0) + 1;
+    seen.set(i.kind, n);
+    if (n <= JSON_ITEMS_PER_KIND) return true;
+    truncated[i.kind] = (truncated[i.kind] ?? 0) + 1;
+    return false;
+  });
+  return JSON.stringify(Object.keys(truncated).length > 0 ? { ...r, items, truncated } : r, null, 2);
 }

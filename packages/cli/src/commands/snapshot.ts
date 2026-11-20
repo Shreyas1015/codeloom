@@ -36,9 +36,13 @@ export interface SnapshotOptions {
   maxBytes?: number;
   /** Write only data/*.json — for the untrusted build step (no dashboard assets, no review.md). */
   dataOnly?: boolean;
+  /** `--repo <id>`: in a folder of separate repos, the repo the pull request is in. Without it, a local snapshot
+   * picks the history as `codeloom review` does; `--data-only` (the hosted build step) needs the workspace root to
+   * be the one git repo. */
+  repo?: string;
 }
 
-/** `codeloom snapshot --base <ref> --out <dir> [--max-size <size>] [--data-only]`: writes
+/** `codeloom snapshot --base <ref> --out <dir> [--repo <id>] [--max-size <size>] [--data-only]`: writes
  * `<out>/data/*.json` (writeSnapshotData). Unless `--data-only`, also builds the site next to it
  * (buildSnapshotSite) and writes `<out>/review.md` — a trusted, local call: `expectedHead` is this
  * same run's own manifest.head, not a value read back from anything untrusted.
@@ -47,13 +51,22 @@ export interface SnapshotOptions {
  * outright (exit 2) rather than writing a stray data/ folder into it. */
 export async function runSnapshot(start: string, opts: SnapshotOptions): Promise<{ exitCode: number }> {
   assertOutDirUsable(opts.out);
-  const manifest = await writeSnapshotData(start, { baseRef: opts.base, outDir: opts.out, maxBytes: opts.maxBytes });
+  const manifest = await writeSnapshotData(start, {
+    baseRef: opts.base,
+    outDir: opts.out,
+    maxBytes: opts.maxBytes,
+    ...(opts.repo !== undefined ? { repoId: opts.repo } : {}),
+    anyHistory: !opts.dataOnly,
+    warn: (line) => console.error(line),
+  });
   if (opts.dataOnly) return { exitCode: 0 };
   const result = buildSnapshotSite({
     dataDir: join(opts.out, "data"),
     outDir: opts.out,
     expectedHead: manifest.head,
     maxBytes: opts.maxBytes,
+    // This same run just wrote the data: its summary (Claude's checked review, when saved) is kept.
+    summary: "keep",
   });
   writeFileSync(join(opts.out, "review.md"), result.reviewMd);
   return { exitCode: 0 };

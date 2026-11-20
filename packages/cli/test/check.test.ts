@@ -115,7 +115,7 @@ describe("buildCheckReport", () => {
     );
     const report = buildCheckReport([], fakeWorkspace([api]));
     expect(report.items).toEqual([
-      { kind: "route-no-caller", repo: "api", file: "start/routes.ts", line: 10, symbol: "CustomersController.destroy", detail: "DELETE /customers/:id has no UI caller" },
+      { kind: "route-no-caller", repo: "api", file: "start/routes.ts", line: 10, symbol: "CustomersController.destroy", detail: "DELETE /customers/:id has no caller" },
     ]);
     expect(report.summary.uncalledRoutes).toBe(1);
   });
@@ -150,7 +150,7 @@ describe("buildCheckReport", () => {
     });
     const report = buildCheckReport([chain], fakeWorkspace([api]));
     expect(report.items.filter((i) => i.kind === "route-no-caller")).toEqual([
-      { kind: "route-no-caller", repo: "api", file: "src/b.ts", line: 4, symbol: "getB", detail: "GET /:id has no UI caller" },
+      { kind: "route-no-caller", repo: "api", file: "src/b.ts", line: 4, symbol: "getB", detail: "GET /:id has no caller" },
     ]);
   });
 
@@ -362,13 +362,14 @@ describe("formatCheckText", () => {
       version: 1 as const,
       summary: S({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 1, uncalledRoutes: 1, byConfidence: { exact: 1, param: 0, guess: 0 } }),
       items: [
-        { kind: "route-no-caller" as const, repo: "api", file: "r.ts", line: 1, symbol: "h", detail: "GET /x has no UI caller" },
+        { kind: "route-no-caller" as const, repo: "api", file: "r.ts", line: 1, symbol: "h", detail: "GET /x has no caller" },
         { kind: "unmatched-call" as const, repo: "api", file: "c.ts", line: 2, symbol: "C.s", detail: 'could not resolve "res.json(...)"' },
       ],
     };
     const text = formatCheckText(report);
     expect(text).toContain("Calls that could not be resolved, info only — they do not affect completeness (1):");
-    expect(text.indexOf("Routes with no UI caller")).toBeLessThan(text.indexOf("Calls that could not be resolved"));
+    expect(text).toContain("Routes with no caller (1):");
+    expect(text.indexOf("Routes with no caller")).toBeLessThan(text.indexOf("Calls that could not be resolved"));
     expect(text).not.toContain("UI calls that match no route");
   });
 });
@@ -447,8 +448,8 @@ describe("runCheck", () => {
     // Registry "Fixture changes" snapshot: no guess links; the pay route and /health have no UI caller.
     expect(report.items.filter((i) => i.kind === "guess-link")).toEqual([]);
     expect(report.items.filter((i) => i.kind === "route-no-caller").map((i) => i.detail)).toEqual([
-      "POST /billing/invoices/:id/pay has no UI caller",
-      "GET /health has no UI caller",
+      "POST /billing/invoices/:id/pay has no caller",
+      "GET /health has no caller",
     ]);
     // H3: the three page chains are complete; the pay route and the emails consumer reach a store but no
     // UI calls them (API → DB only — before H3 they counted as complete, 5 in all). /health and the inline
@@ -456,7 +457,7 @@ describe("runCheck", () => {
     // never counted as broken.
     const lines = output.split("\n");
     expect(lines[0]).toBe("7 journeys: 3 complete UI → API → DB, 2 API → DB only (no UI caller), 2 missing the DB step");
-    expect(lines).toContain("routes with a UI caller: 3/5");
+    expect(lines).toContain("3/5 routes have a caller (3 from UI, 0 from services)");
     expect(lines).toContain("complete: 100% of journeys that start in the UI (3/3)");
     expect(report.summary).toMatchObject({ complete: 3, apiOnly: 2, missingDb: 2, brokenUiApi: 0, uiChains: 3, routes: 5, routesWithUiCaller: 3 });
   });
@@ -650,7 +651,7 @@ describe("honest completeness (H3): complete needs a UI stop", () => {
     expect(belowFailUnder(report, 50)).toBe(false);
     const lines = formatCheckText(report).split("\n");
     expect(lines[0]).toBe("3 journeys: 1 complete UI → API → DB, 1 API → DB only (no UI caller), 1 missing the DB step");
-    expect(lines[1]).toBe("routes with a UI caller: 1/2");
+    expect(lines[1]).toBe("1/2 routes have a caller (1 from UI, 0 from services)");
     expect(lines).toContain("complete: 50% of journeys that start in the UI (1/2)");
   });
 
@@ -722,5 +723,39 @@ describe("isBuiltinCallee (H6)", () => {
   it("reads the callee only from the linker's own reason wording", () => {
     expect(calleeOf('could not resolve "console.log(...)"')).toBe("console.log");
     expect(calleeOf("unresolved call: obj.m()")).toBeUndefined();
+  });
+});
+
+describe("check output stays readable on a big map (0.6 Task E, acceptance run 2)", () => {
+  const many = (n: number, kind: CheckItem["kind"], repo = "demo-api") => Array.from({ length: n }, (_, i) => ({
+    kind, repo: i % 3 === 0 ? "demo-billing" : repo, file: `src/f${i}.ts`, line: i + 1, symbol: `fn${i}`,
+    detail: kind === "unmatched-call" ? `could not resolve "x${i}(...)"` : `GET /r${i} has no caller`,
+  }));
+  const report = (): CheckReport => ({
+    version: 1,
+    summary: S({ chains: 1, complete: 1, missingDb: 0, brokenUiApi: 0, unresolvedCalls: 0, uncalledRoutes: 0, byConfidence: { exact: 1, param: 0, guess: 0 } }),
+    items: [...many(3000, "unmatched-call"), ...many(4, "route-no-caller")],
+  });
+
+  it("plain text summarises info-only items by repo with 5 examples; --verbose lists them all", () => {
+    const text = formatCheckText(report());
+    expect(text).toContain("Calls that could not be resolved, info only — they do not affect completeness (3000):");
+    expect(text).toContain("  demo-api: 2000, demo-billing: 1000");
+    expect(text.split("\n").filter((l) => l.includes('could not resolve "x')).length).toBe(5);
+    expect(text).toContain('… 2995 more: "codeloom check --verbose" lists them all');
+    expect(text).toContain("Routes with no caller (4):"); // not info only: listed in full
+    expect(text.length).toBeLessThan(5_000);
+    const verbose = formatCheckText(report(), { verbose: true });
+    expect(verbose.split("\n").filter((l) => l.includes('could not resolve "x')).length).toBe(3000);
+  });
+
+  it("--json caps each kind's items with a truncated count; --all keeps everything", () => {
+    const capped = JSON.parse(formatCheckJson(report())) as CheckReport & { truncated?: Record<string, number> };
+    expect(capped.items.filter((i) => i.kind === "unmatched-call")).toHaveLength(200);
+    expect(capped.items.filter((i) => i.kind === "route-no-caller")).toHaveLength(4);
+    expect(capped.truncated).toEqual({ "unmatched-call": 2800 });
+    const all = JSON.parse(formatCheckJson(report(), { all: true })) as CheckReport & { truncated?: unknown };
+    expect(all.items).toHaveLength(3004);
+    expect(all.truncated).toBeUndefined();
   });
 });

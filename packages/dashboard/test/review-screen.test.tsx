@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "@/App";
 import { detectSnapshot } from "@/api/static";
-import type { Overview, Review, ReviewNodeChange } from "@/api/types";
+import type { Overview, PrSummary, Review, ReviewNodeChange } from "@/api/types";
 import { createAppRouter } from "@/router";
 
 function json(body: unknown, status = 200) {
@@ -132,7 +132,9 @@ const WHOLE_FILE_TEXT = Array.from({ length: 60 }, (_, i) => `// controller line
 /** Stubs `fetch` for every `./data/*.json` request the Review screen and its panel make, detects the
  * snapshot from the same stub (so `isSnapshot()` is true by the time `createAppRouter` runs), and returns
  * the mock for assertions on what was requested. */
-async function enterSnapshot(opts: { pr?: number | undefined; repoSlug?: string | undefined; review?: Review } = {}): Promise<ReturnType<typeof vi.fn>> {
+async function enterSnapshot(
+  opts: { pr?: number | undefined; repoSlug?: string | undefined; review?: Review; summary?: PrSummary } = {},
+): Promise<ReturnType<typeof vi.fn>> {
   const manifest = {
     version: 1,
     codeloom: "0.4.0",
@@ -150,6 +152,7 @@ async function enterSnapshot(opts: { pr?: number | undefined; repoSlug?: string 
     if (url === "./data/manifest.json") return json(manifest);
     if (url === "./data/overview.json") return json(OVERVIEW);
     if (url === "./data/review.json") return json(opts.review ?? REVIEW);
+    if (url === "./data/pr-summary.json" && opts.summary) return json(opts.summary);
     if (url === "./data/files~api~app~controllers~customers_controller.ts.json") {
       return json({ file: "app/controllers/customers_controller.ts", text: WHOLE_FILE_TEXT });
     }
@@ -369,5 +372,157 @@ describe("Review screen", () => {
     renderAt("/review");
     expect(await screen.findByTestId("screen-home")).toBeInTheDocument();
     expect(screen.queryByTestId("screen-review")).not.toBeInTheDocument();
+  });
+
+  describe("the PR summary at the top (data/pr-summary.json)", () => {
+    const NO_MORE = { whereItMatters: 0, writes: 0, readsOnly: 0, beforeDeploying: 0, beforeDeployingAdded: 0, codeToCheck: 0, codeToCheckAdded: 0 };
+    const GST_REF = "api::function:lib/gst.ts:isValidGstin";
+    const GST_NODE: ReviewNodeChange = {
+      ref: GST_REF,
+      repo: "api",
+      file: "lib/gst.ts",
+      symbol: "isValidGstin",
+      before: null,
+      after: { start: 1, end: 3, text: "export function isValidGstin(v: string) {\n  return /^[0-9A-Z]{15}$/.test(v);\n}" },
+      hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 3, lines: ["+export function isValidGstin(v: string) {", "+  return /^[0-9A-Z]{15}$/.test(v);", "+}"] }],
+      added: 3,
+      removed: 0,
+      journeys: [],
+    };
+    const CHECKED: PrSummary = {
+      version: 1,
+      status: "checked",
+      head: REVIEW.head,
+      base: REVIEW.base,
+      repoId: "api",
+      checkedAt: "2026-11-16T10:00:00.000Z",
+      whatItDoes: "Creating a customer now checks the GST number before saving.",
+      whereItMatters: [{ name: "/customers/new", why: "the new-customer form" }],
+      writes: [
+        { name: "customers", detected: true, notes: ["one new row"] },
+        { name: "audit", detected: false, notes: [] },
+      ],
+      readsOnly: ["gst_rates"],
+      beforeDeploying: [
+        { file: "api/database/migrations/1_add_gstin.ts", kind: "migration", detected: true, notes: ["run it before the deploy"] },
+        { detected: false, notes: ["set GST_API_KEY"] },
+      ],
+      codeToCheck: [
+        { name: "CustomerService.create", detected: true, change: "changed", added: 4, removed: 1, file: "api/app/services/customer_service.ts", ref: CREATE_REF, notes: ["the new GST check"] },
+        { name: "isValidGstin", detected: true, change: "new", added: 3, removed: 0, file: "api/lib/gst.ts", ref: GST_REF, notes: [] },
+        { name: "CustomersController.store", detected: false, notes: ["passes the GST number through"] },
+      ],
+      notes: ["The docs change is only wording."],
+      more: NO_MORE,
+    };
+    const DRAFT: PrSummary = {
+      version: 1,
+      status: "draft",
+      head: REVIEW.head,
+      base: REVIEW.base,
+      repoId: "api",
+      whereItMatters: [{ name: "POST /api/customers", kind: "route", journey: "Create customer", repo: "api" }],
+      writes: [{ name: "customers", detected: true, notes: [] }],
+      readsOnly: [],
+      beforeDeploying: [],
+      codeToCheck: [{ name: "CustomerService.create", detected: true, change: "changed", added: 4, removed: 1, file: "api/app/services/customer_service.ts", ref: CREATE_REF, notes: [] }],
+      more: { ...NO_MORE, codeToCheck: 2 },
+    };
+    const WITH_GST: Review = { ...REVIEW, nodes: [CREATE_NODE, GST_NODE] };
+
+    it("checked: the status line, What it does, Where it matters, writes, Before deploying, Code to check and Notes", async () => {
+      await enterSnapshot({ review: WITH_GST, summary: CHECKED });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      expect(within(summary).getByText("Checked by Claude 2026-11-16")).toBeInTheDocument();
+      expect(within(summary).getByText("Creating a customer now checks the GST number before saving.")).toBeInTheDocument();
+      expect(within(summary).getByRole("list", { name: "Where it matters" })).toHaveTextContent("/customers/new — the new-customer form");
+      const writes = within(summary).getByRole("list", { name: "What it writes" });
+      expect(within(writes).getAllByRole("listitem")[0]).toHaveTextContent("customers Claude: one new row");
+      expect(within(writes).getAllByRole("listitem")[1]).toHaveTextContent("audit added by Claude");
+      expect(summary).toHaveTextContent("Reads only: gst_rates");
+      const deploy = within(summary).getByRole("note", { name: "Before deploying" });
+      expect(deploy).toHaveTextContent("Migration: api/database/migrations/1_add_gstin.ts");
+      expect(deploy).toHaveTextContent("Claude: run it before the deploy");
+      expect(deploy).toHaveTextContent("set GST_API_KEY");
+      const code = within(summary).getByRole("list", { name: "Code to check" });
+      const items = within(code).getAllByRole("listitem");
+      expect(items[0]).toHaveTextContent("CustomerService.create");
+      expect(items[0]).toHaveTextContent("changed, +4 −1");
+      expect(items[0]).toHaveTextContent("Claude: the new GST check");
+      // a function Claude added has no diff here: text, not a button
+      expect(items[2]).toHaveTextContent("CustomersController.store");
+      expect(within(items[2]!).queryByRole("button")).toBeNull();
+      expect(within(summary).getByText("The docs change is only wording.")).toBeInTheDocument();
+    });
+
+    it("sits above the counts, journeys and files", async () => {
+      await enterSnapshot({ summary: CHECKED });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      const totals = screen.getByRole("list", { name: "PR totals" });
+      expect(summary.compareDocumentPosition(totals) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("draft: says it is not checked and how to have Claude explain it; +N more", async () => {
+      await enterSnapshot({ summary: DRAFT });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      expect(summary).toHaveTextContent("Draft by codeloom — not checked. Run codeloom pr --check to let Claude explain this PR.");
+      expect(summary).not.toHaveTextContent("Checked by Claude");
+      expect(within(summary).getByRole("list", { name: "Where it matters" })).toHaveTextContent("Create customer — route POST /api/customers");
+      expect(within(summary).getByRole("list", { name: "Code to check" })).toHaveTextContent("+2 more");
+      expect(within(summary).queryByRole("note", { name: "Before deploying" })).toBeNull();
+    });
+
+    it("writes other services make further along are on a line of their own (0.6)", async () => {
+      await enterSnapshot({ summary: { ...DRAFT, furtherAlong: [{ repo: "billing", names: ["invoice.created", "invoices"] }] } });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      expect(within(summary).getByRole("list", { name: "What it writes" })).toHaveTextContent("customers");
+      expect(summary).toHaveTextContent("Further along (other services): billing: invoice.created, invoices");
+    });
+
+    it("a Code to check function opens its diff in the code panel", async () => {
+      await enterSnapshot({ review: WITH_GST, summary: CHECKED });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      await userEvent.click(within(summary).getByRole("button", { name: /^CustomerService\.create/ }));
+      const panel = await screen.findByRole("complementary", { name: "Code panel" });
+      expect(within(panel).getByRole("tab", { name: "Change", selected: true })).toBeInTheDocument();
+      expect(within(panel).getAllByRole("insertion")).toHaveLength(4);
+      // the stop on the selected journey's lanes is selected too
+      expect(screen.getByRole("button", { name: "Stop 5: CustomerService.create" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("a changed function on no chain still opens its diff", async () => {
+      await enterSnapshot({ review: WITH_GST, summary: CHECKED });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      await userEvent.click(within(summary).getByRole("button", { name: /^isValidGstin/ }));
+      const panel = await screen.findByRole("complementary", { name: "Code panel" });
+      expect(within(panel).getByRole("heading", { level: 2 })).toHaveTextContent("isValidGstin");
+      expect(within(panel).getByRole("tab", { name: "Change", selected: true })).toBeInTheDocument();
+      expect(within(panel).getAllByRole("insertion")).toHaveLength(3);
+    });
+
+    it("renders everything as text: markup and markdown in Claude's words stay plain text", async () => {
+      const evil = '<img src=x onerror="alert(1)"> **bold** [link](javascript:alert(1))';
+      await enterSnapshot({ summary: { ...CHECKED, whatItDoes: evil, notes: [evil] } });
+      renderAt("/review");
+      const summary = await screen.findByRole("region", { name: "What this PR does" });
+      expect(summary.querySelector("img")).toBeNull();
+      expect(summary.querySelector("a")).toBeNull();
+      expect(summary.querySelector("strong")).toBeNull();
+      expect(summary.textContent).toContain('<img src=x onerror="alert(1)"> **bold** [link](javascript:alert(1))');
+    });
+
+    it("no pr-summary.json (an older snapshot): no summary, the screen works as before", async () => {
+      await enterSnapshot();
+      renderAt("/review");
+      await opened();
+      expect(screen.queryByRole("region", { name: "What this PR does" })).toBeNull();
+      expect(screen.getByRole("list", { name: "PR totals" })).toBeInTheDocument();
+    });
   });
 });

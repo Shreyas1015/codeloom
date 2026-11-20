@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useId } from "react";
 import type { ChainView } from "@/api/types";
 import { ConfidenceLine } from "@/components/gallery/ConfidenceLine";
@@ -71,6 +72,17 @@ function ChainCard({ chain, nums, selected, onSelect }: { chain: ChainView; nums
                 <span className="min-w-0 truncate text-[13.5px] font-semibold">{title}</span>
                 <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{fileLine(s.file, s.line)}</span>
               </button>
+              {s.continues ? (
+                <p className="pl-9 text-xs text-muted-foreground">
+                  <Link
+                    to="/journeys/$id"
+                    params={{ id: s.continues.chain }}
+                    className="rounded-sm font-semibold text-primary underline underline-offset-3 outline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+                  >
+                    {`Continues in ${s.continues.journey ?? s.continues.name}`}
+                  </Link>
+                </p>
+              ) : null}
               {fromStop !== undefined ? (
                 <p className={cn("pl-9 text-xs", s.confidence === "guess" ? "text-foreground" : "text-muted-foreground")}>
                   {`From stop ${fromStop} · ${HOP_WORD[s.confidence]}${s.reason ? `. ${s.reason}` : ""}`}

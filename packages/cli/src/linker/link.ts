@@ -1,18 +1,22 @@
 import { symbolAt } from "./code-index.js";
 import type { CallSite, FileCodeIndex } from "./code-index.js";
 import type { CallResolver, SymbolRef, WalkStep } from "./resolve-calls.js";
-import { walkCallers, walkCalls } from "./resolve-calls.js";
+import { isTestFile, walkCallers, walkCalls } from "./resolve-calls.js";
 import { joinPaths, pickRoute, worse } from "./paths.js";
 import type { RouteCandidate } from "./paths.js";
 import { effectiveRoutes } from "./mounts.js";
-import type { EffectiveRoute } from "./mounts.js";
+import { type EffectiveRoute, routeCandidate } from "./mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import type { Confidence, DbAccess, ExternalService, HttpCall, HttpClient, HttpMethod, Loc, ProxyRule, QueueOp, RepoRef, UiPage, UiReachFact } from "../store/schemas.js";
+import type {
+  Confidence, DbAccess, ExternalService, HttpCall, HttpClient, HttpMethod, Loc, ProxyRule, QueueOp, RepoRef, Route, RouteForward, UiPage, UiReachFact,
+} from "../store/schemas.js";
 import { HttpMethodSchema } from "../store/schemas.js";
 import { compare } from "../util.js";
 import { absoluteHost } from "../adapters/ast.js";
 import { wrapperCalls } from "./wrappers.js";
 import type { LinkedCall } from "./wrappers.js";
+import { baseFromExpr, type BaseMatch, type CallBase, isInternalHost as looksInternal, matchBase, type NamedRepo } from "./hints.js";
+import type { UnresolvedBase } from "../store/schemas.js";
 
 export interface LinkInput {
   ws: WorkspaceData;
@@ -43,6 +47,9 @@ export interface RouteTarget {
   route: EffectiveRoute;
   confidence: Confidence;
   reason?: string;
+  /** 0.6 §2: a proxied match through a Next.js catch-all route read as a proxy rule — that route (the call's own
+   * match), which the chain passes through on its way to `route`. */
+  via?: EffectiveRoute;
 }
 
 export interface UiLink {
@@ -164,7 +171,7 @@ function isInternalHost(host: string, known: Set<string>): boolean {
   return LOOPBACK_HOSTS.has(hostname) || known.has(host) || known.has(hostname);
 }
 
-const ENV_VAR_RE = /(?:process\.env|import\.meta\.env)\.(\w+)/;
+export const ENV_VAR_RE = /(?:process\.env|import\.meta\.env)\.(\w+)/;
 
 /** Text of whatever base expression a call carries, or its client's, to match against `apiBase` hints. */
 function baseHintText(call: HttpCall, clients: HttpClient[]): string {
@@ -180,6 +187,8 @@ function baseHintText(call: HttpCall, clients: HttpClient[]): string {
  * "api"; else guess (every candidate is returned, unhinted). */
 export function chooseBackend(
   call: HttpCall, clients: HttpClient[], backends: RepoData[],
+  /** 0.6 §2: the one repo the call's base names (see baseHint), used after the workspace file's apiBase. */
+  named?: string,
 ): { repos: RepoData[]; hinted: boolean } {
   if (backends.length <= 1) return { repos: backends, hinted: false };
   const hintText = baseHintText(call, clients);
@@ -189,6 +198,7 @@ export function chooseBackend(
     return bases.some((h) => h !== "" && (h === envVar || hintText.includes(h)));
   });
   if (byApiBase.length === 1) return { repos: byApiBase, hinted: true };
+  if (named !== undefined) return { repos: backends.filter((b) => b.ref.id === named), hinted: true };
   const byRole = backends.filter((b) => b.ref.role === "api");
   if (byRole.length === 1) return { repos: byRole, hinted: true };
   return { repos: backends, hinted: false };
@@ -203,10 +213,41 @@ export function chooseBackend(
  * prepended) is safer than a same-named client that happens to belong to an unrelated file. This is a
  * narrow, local fix (one lookup site); every other `clients.find(c => c.name === ...)` in this module
  * keeps the project's existing by-name-only convention. */
-function clientFor(call: HttpCall, clients: HttpClient[]): HttpClient | undefined {
+export function clientFor(call: HttpCall, clients: HttpClient[]): HttpClient | undefined {
   const named = clients.filter((c) => c.name === call.client);
   if (named.length <= 1) return named[0];
   return named.find((c) => c.file === call.at.file);
+}
+
+/** Where a call's base comes from (0.6 §5): the name the linker's hints read (an env var or config key, a host, an
+ * identifier — see destinationOf), else the base expression's full text. A relative URL has none, unless
+ * `relative` (a backend's call: its base was set where codeloom cannot see, so the URL's client stands for it —
+ * the same name the linker records as an unresolved "relative" base). Answers, gaps and unresolvedBases all key a
+ * base by this text. */
+export function callBase(
+  call: LinkedCall, clients: HttpClient[], opts: { relative?: boolean } = {},
+): { base: string; kind: "env" | "host" | "name" | "expr" | "relative" } | undefined {
+  const dest = destinationOf(call, clients);
+  switch (dest.kind) {
+    case "base": return { base: dest.base.text, kind: dest.base.kind as "env" | "host" | "name" };
+    case "loopback": return { base: dest.host, kind: "host" };
+    case "opaque": return dest.expr === "" ? undefined : { base: dest.expr, kind: "expr" };
+    case "relative": return opts.relative ? { base: call.client || "fetch", kind: "relative" } : undefined;
+  }
+}
+
+/** What the user answered about a call base (0.6 §5, answers.json): calls through `base` made by repo `from`
+ * (every repo when absent) go to repo `repo`, or to another service named `external`. */
+export interface AnswerHint { from?: string; base: string; repo?: string; external?: string }
+
+/** The hint for `call` made by repo `caller`: one for that repo first, then one for every repo. */
+export function hintFor(
+  hints: AnswerHint[], caller: string, call: LinkedCall, clients: HttpClient[], opts: { relative?: boolean } = {},
+): AnswerHint | undefined {
+  if (hints.length === 0) return undefined;
+  const b = callBase(call, clients, opts);
+  if (b === undefined) return undefined;
+  return hints.find((h) => h.from === caller && h.base === b.base) ?? hints.find((h) => h.from === undefined && h.base === b.base);
 }
 
 /** Call path after a known axios/ky instance's literal baseURL is prepended. */
@@ -251,16 +292,115 @@ function isOwnEnvBase(envVar: string, repos: RepoData[]): boolean {
   return repos.some((r) => (r.ref.apiBase ?? []).includes(envVar));
 }
 
+// ---------------------------------------------------------------------------------------------------
+// 0.6 §2: base hints. A call's base (env var, host, identifier) names the repo it goes to.
+// ---------------------------------------------------------------------------------------------------
+
+/** Where a call goes, as far as its own URL and its client say: a relative URL (this origin / this service), a
+ * loopback host, a named base, or a base expression whose name cannot be read (`getBase()`). */
+export type Destination =
+  | { kind: "relative" }
+  | { kind: "loopback"; host: string }
+  | { kind: "base"; base: CallBase }
+  | { kind: "opaque"; expr: string };
+
+function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host.replace(/:\d+$/, ""));
+}
+
+function hostDestination(host: string): Destination {
+  return isLoopbackHost(host) ? { kind: "loopback", host } : { kind: "base", base: { kind: "host", text: host } };
+}
+
+function exprDestination(expr: string): Destination {
+  const base = baseFromExpr(expr);
+  return base ? { kind: "base", base } : { kind: "opaque", expr: expr.trim() };
+}
+
+/** The call's own absolute host wins, then its stripped base expression, then its client's base. */
+export function destinationOf(call: LinkedCall, clients: HttpClient[]): Destination {
+  const own = ownHostOf(call);
+  if (own !== undefined) return hostDestination(own);
+  if (call.base !== undefined) return exprDestination(call.base);
+  const client = clientFor(call, clients);
+  if (client?.baseHost !== undefined) return hostDestination(client.baseHost);
+  if (client?.baseExpr !== undefined) return exprDestination(client.baseExpr);
+  return { kind: "relative" };
+}
+
+/** Every repo that serves routes, with the names hints match it by: its id, plus what the linker read (package,
+ * folder, remote). A repo with no routes is never what an HTTP base points at, so it is no candidate. */
+export function namedRepos(repos: RepoData[]): NamedRepo[] {
+  return repos.filter((r) => r.endpoints.routes.length > 0).map((r) => ({ id: r.ref.id, names: [r.ref.id, ...(r.names ?? [])] }));
+}
+
+/** Does a workspace file `apiBase` entry name this base? Env var / identifier by name, host with or without port. */
+function apiBaseNames(entry: string, base: CallBase): boolean {
+  const e = (absoluteHost(entry) ?? entry.trim()).toLowerCase();
+  const text = base.text.toLowerCase();
+  return e !== "" && (e === text || (base.kind === "host" && e === text.replace(/:\d+$/, "")));
+}
+
+/** Repos whose `apiBase` names this base (the workspace file's own answer; hints never override it). */
+function configuredRepos(base: CallBase, repos: RepoData[]): RepoData[] {
+  return repos.filter((r) => (r.ref.apiBase ?? []).some((entry) => apiBaseNames(entry, base)));
+}
+
+/** A call's named base and the repos its name matches (0.6 §2). `trusted`: the name may decide where the call
+ * goes — false for a public-looking host (`billing.vendor.com`), whose match is only ever reported. */
+export interface BaseHint { base: CallBase; match: BaseMatch; trusted?: boolean }
+
+/** A hint whose name decides the target: `one` repo, or the `candidates` an ambiguous name leaves. */
+function trustedRepos(hint: BaseHint | undefined): { one?: string; candidates?: string[] } {
+  if (!hint || hint.trusted === false) return {};
+  if (hint.match.kind === "one") return { one: hint.match.repo };
+  if (hint.match.kind === "ambiguous") return { candidates: hint.match.candidates };
+  return {};
+}
+
+/** For an ambiguous base: the one candidate repo with an exact or param route for the call, if exactly one has. */
+function pickAmong(
+  candidates: string[], method: HttpMethod, path: string, candidatesByRepo: Map<string, RouteCandidate<EffectiveRoute>[]>,
+): RouteTarget | undefined {
+  const found = candidates.flatMap((id) => {
+    const picked = pickRoute(method, path, candidatesByRepo.get(id) ?? []);
+    return picked && picked.match.confidence !== "guess" ? [picked] : [];
+  });
+  if (found.length !== 1) return undefined;
+  const p = found[0]!;
+  return { kind: "route", route: p.item, confidence: p.match.confidence, ...(p.match.reason !== undefined ? { reason: p.match.reason } : {}) };
+}
+
+interface HintCtx { repos: RepoData[]; external: ExternalService[]; named: NamedRepo[] }
+
+/** The hint a call's base gives, unless the workspace file already settles that base (an `apiBase` or
+ * `external` entry naming it), or the call has no named base. */
+function baseHint(call: LinkedCall, clients: HttpClient[], ctx: HintCtx): BaseHint | undefined {
+  const dest = destinationOf(call, clients);
+  if (dest.kind !== "base") return undefined;
+  if (externalNameFor(dest.base.text, ctx.external) !== undefined || configuredRepos(dest.base, ctx.repos).length > 0) return undefined;
+  const trusted = dest.base.kind !== "host" || looksInternal(dest.base.text);
+  return { base: dest.base, match: matchBase(dest.base, ctx.named), ...(trusted ? {} : { trusted: false }) };
+}
+
+function ambiguousReason(hint: BaseHint & { match: { kind: "ambiguous" } }): string {
+  return `base ${hint.base.text} could be ${hint.match.candidates.join(" or ")}`;
+}
+
 /** Other-service calls (spec §3): a call whose base the workspace file's `external` list names is that
  * service's, before any route matching. An env var base that no repo's apiBase names is another
  * service's only when the call also matches no route (never drops a route) and some repo declares an
  * apiBase (otherwise there is nothing to tell other services from our own backend). */
 function resolveTarget(
   call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
-  knownHosts: Set<string>, ctx: { repos: RepoData[]; external: ExternalService[] },
+  knownHosts: Set<string>, ctx: HintCtx, answer?: AnswerHint,
 ): UiLink["target"] {
-  const found = resolveRouteTarget(call, clients, allBackends, effectiveByRepo, knownHosts, ctx);
-  if (found.kind !== "unresolved" || call.kind === "unknown") return found;
+  // 0.6 §5: the user's answer about this caller's base wins over everything codeloom reads.
+  if (answer?.external !== undefined) return { kind: "external", base: answer.base, name: answer.external };
+  if (answer?.repo !== undefined) return resolveHinted(call, clients, allBackends, effectiveByRepo, answer.repo);
+  const hint = baseHint(call, clients, ctx);
+  const found = resolveRouteTarget(call, clients, allBackends, effectiveByRepo, knownHosts, ctx, hint);
+  if (found.kind !== "unresolved" || call.kind === "unknown" || trustedRepos(hint).candidates) return found;
   const env = envBaseOf(call, clients);
   if (env === undefined || isOwnEnvBase(env, ctx.repos)) return found;
   if (!ctx.repos.some((r) => (r.ref.apiBase ?? []).length > 0)) return found;
@@ -269,34 +409,60 @@ function resolveTarget(
 
 function resolveRouteTarget(
   call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>,
-  knownHosts: Set<string>, ctx: { repos: RepoData[]; external: ExternalService[] },
+  knownHosts: Set<string>, ctx: HintCtx, hint: BaseHint | undefined,
 ): UiLink["target"] {
   if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
   const declaredBase = envBaseOf(call, clients) ?? ownHostOf(call) ?? clients.find((c) => c.name === call.client)?.baseHost;
   const declaredName = declaredBase === undefined ? undefined : externalNameFor(declaredBase, ctx.external);
   if (declaredBase !== undefined && declaredName !== undefined) return { kind: "external", base: declaredBase, name: declaredName };
-  const external = externalHost(call, clients, knownHosts);
-  if (external !== undefined) return { kind: "external", base: external };
+  // 0.6 §2: a trusted base naming exactly one repo narrows the match to that repo — even an internal-looking
+  // host that would otherwise count as a third party's. One naming two or more links only when exactly one of
+  // them has an exact or param route for the call; otherwise nothing (never guessed).
+  const { one: named, candidates } = trustedRepos(hint);
   const ownHost = ownHostOf(call);
-  if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };
   // An absolute URL on the call itself overrides any client baseURL (axios/ky semantics).
   const path = ownHost !== undefined ? call.path : callPathWithClient(call, clients);
+  if (candidates) {
+    const among = pickAmong(candidates, call.method, path, routeCandidatesByRepo(effectiveByRepo));
+    return among ?? { kind: "unresolved", reason: ambiguousReason(hint as BaseHint & { match: { kind: "ambiguous" } }) };
+  }
+  const external = externalHost(call, clients, knownHosts);
+  if (external !== undefined && named === undefined) return { kind: "external", base: external };
+  if (allBackends.length === 0) return { kind: "unresolved", reason: "no matching route" };
   // chooseBackend only narrows the candidate pool (e.g. to avoid matching the wrong repo's same-named
   // route); it is NOT itself a confidence signal. pickRoute already produces "guess" on a genuine tie
   // (two backends whose best candidate is equally specific), which is the only real ambiguity — a
   // repo set that merely wasn't *hinted* is not ambiguous when the paths themselves don't collide
   // (demo-shop's "api" and "billing" never share a route, so every call there resolves "exact").
   const pick = (repos: RepoData[]) => pickRoute(call.method, path, repos.flatMap((b) =>
-    (effectiveByRepo.get(b.ref.id) ?? []).map((er): RouteCandidate<EffectiveRoute> => ({
-      item: er, method: er.route.method, path: er.effectivePath, mountsKnown: er.mountsKnown,
-    })),
+    (effectiveByRepo.get(b.ref.id) ?? []).map(routeCandidate),
   ));
-  const { repos: backends, hinted } = chooseBackend(call, clients, allBackends);
+  const { repos: backends, hinted } = chooseBackend(call, clients, allBackends, named);
   const picked = pick(backends);
   if (picked) return { kind: "route", route: picked.item, confidence: picked.match.confidence, reason: picked.match.reason };
+  // A host naming a repo that has no such route stays the other service it always was.
+  if (external !== undefined) return { kind: "external", base: external };
   // A hint (apiBase / role "api") that leads nowhere is weaker evidence than a route that really
   // exists elsewhere: retry over every backend, but only ever as a guess.
   const fallback = hinted ? pick(allBackends) : null;
+  if (fallback) return { kind: "route", route: fallback.item, confidence: "guess", reason: "matched outside the hinted backends" };
+  return { kind: "unresolved", reason: "no matching route" };
+}
+
+/** A call the user placed (an `env` answer: its base goes to `repo`): matched against that repo's routes only;
+ * when none matches, against every backend, but only ever as a guess ("matched outside the hinted backends",
+ * which map_gaps then asks about); else unresolved. Never another service, never another repo for sure. */
+function resolveHinted(
+  call: LinkedCall, clients: HttpClient[], allBackends: RepoData[], effectiveByRepo: Map<string, EffectiveRoute[]>, repo: string,
+): UiLink["target"] {
+  if (call.kind === "unknown") return { kind: "unresolved", reason: "url has no literal text" };
+  const path = ownHostOf(call) !== undefined ? call.path : callPathWithClient(call, clients);
+  const pick = (repos: RepoData[]) => pickRoute(call.method, path, repos.flatMap((b) =>
+    (effectiveByRepo.get(b.ref.id) ?? []).map(routeCandidate),
+  ));
+  const picked = pick(allBackends.filter((b) => b.ref.id === repo));
+  if (picked) return { kind: "route", route: picked.item, confidence: picked.match.confidence, reason: picked.match.reason ?? ANSWERED };
+  const fallback = pick(allBackends);
   if (fallback) return { kind: "route", route: fallback.item, confidence: "guess", reason: "matched outside the hinted backends" };
   return { kind: "unresolved", reason: "no matching route" };
 }
@@ -325,9 +491,7 @@ export function proxyPathFor(callPath: string, proxy: Pick<ProxyRule, "from" | "
 export function routeCandidatesByRepo(effectiveByRepo: Map<string, EffectiveRoute[]>): Map<string, RouteCandidate<EffectiveRoute>[]> {
   const out = new Map<string, RouteCandidate<EffectiveRoute>[]>();
   for (const [id, routes] of effectiveByRepo) {
-    out.set(id, routes.map((er): RouteCandidate<EffectiveRoute> => ({
-      item: er, method: er.route.method, path: er.effectivePath, mountsKnown: er.mountsKnown,
-    })));
+    out.set(id, routes.map(routeCandidate));
   }
   return out;
 }
@@ -347,54 +511,326 @@ export function routeCandidatesByRepo(effectiveByRepo: Map<string, EffectiveRout
 export function resolveProxyTargets(
   call: LinkedCall, ref: RepoRef, clients: HttpClient[], candidatesByRepo: Map<string, RouteCandidate<EffectiveRoute>[]>,
   target: UiLink["target"],
+  /** 0.6 §2: proxy rules read from the repo's own code (see derivedProxies), tried after the workspace file's. */
+  derived: LinkProxy[] = [],
 ): RouteTarget[] {
   if (call.kind === "unknown" || target.kind === "external") return [];
   if (ownHostOf(call) !== undefined || call.base !== undefined) return [];
   const client = clientFor(call, clients);
   if (client?.baseHost !== undefined || client?.baseExpr !== undefined) return [];
   const effectivePath = callPathWithClient(call, clients);
-  let best: { proxy: ProxyRule; stripped: string } | undefined;
-  for (const proxy of ref.proxies ?? []) {
+  /** The call's own target is the catch-all route this rule was read from (one rule per method it exports). */
+  const isVia = (proxy: LinkProxy) => proxy.route !== undefined && target.kind === "route" && target.route.route.at.file === proxy.route.file
+    && target.route.route.at.line === proxy.route.line;
+  let best: { proxy: LinkProxy; stripped: string } | undefined;
+  for (const proxy of [...(ref.proxies ?? []), ...derived]) {
     const stripped = proxyPathFor(effectivePath, proxy);
     if (stripped === undefined) continue;
-    if (!best || normalizeProxyFrom(proxy.from).length > normalizeProxyFrom(best.proxy.from).length) best = { proxy, stripped };
+    const len = normalizeProxyFrom(proxy.from).length;
+    const bestLen = best ? normalizeProxyFrom(best.proxy.from).length : -1;
+    // Longest prefix wins; among equal ones the first (the workspace file's before code's), unless a later one to the
+    // same repo was read from the very route the call reaches.
+    if (len > bestLen || (best && len === bestLen && proxy.to === best.proxy.to && isVia(proxy) && !isVia(best.proxy))) {
+      best = { proxy, stripped };
+    }
   }
   if (!best) return [];
-  const picked = pickRoute(call.method, best.stripped, candidatesByRepo.get(best.proxy.to) ?? []);
-  return picked ? [{ kind: "route", route: picked.item, confidence: picked.match.confidence, ...(picked.match.reason !== undefined ? { reason: picked.match.reason } : {}) }] : [];
+  const forwarded = best.proxy.prefix !== undefined ? joinPaths(best.proxy.prefix, best.stripped) : best.stripped;
+  const picked = pickRoute(call.method, forwarded, candidatesByRepo.get(best.proxy.to) ?? []);
+  if (!picked) return [];
+  const via = isVia(best.proxy) ? (target as Extract<UiLink["target"], { kind: "route" }>).route : undefined;
+  return [{
+    kind: "route", route: picked.item, confidence: picked.match.confidence,
+    ...(picked.match.reason !== undefined ? { reason: picked.match.reason } : {}), ...(via ? { via } : {}),
+  }];
 }
+
+/** A proxy rule as the linker applies it: a workspace file rule, or one read from code (0.6 §2), which may
+ * put a literal `prefix` before the forwarded rest of the path (`/api/billing/x` → `/billing/x`). */
+export type LinkProxy = ProxyRule & {
+  prefix?: string;
+  /** A rule read from a Next.js catch-all route: where that route is registered. */
+  route?: { file: string; line: number };
+};
+
+/** What every part of linking shares, built once per link run. */
+interface LinkSetup {
+  effectiveByRepo: Map<string, EffectiveRoute[]>;
+  candidatesByRepo: Map<string, RouteCandidate<EffectiveRoute>[]>;
+  knownHosts: Set<string>;
+  hints: HintCtx;
+  /** Proxy rules read from each repo's own Next.js catch-all routes (see derivedProxies). */
+  derived: Map<string, LinkProxy[]>;
+  /** callKey of every call such a route forwards with: the proxy itself, never a service call. */
+  forwarders: Set<string>;
+  /** Each repo's HTTP calls (see linkedCalls), read once. */
+  calls: Map<string, LinkedCall[]>;
+  /** 0.6 §5: the user's answers about call bases (answers.json), applied before any hint. */
+  answers: AnswerHint[];
+}
+
+function callKey(repo: string, c: HttpCall): string {
+  return [repo, c.at.file, String(c.at.line), c.method, c.path].join("\0");
+}
+
+function linkSetup(input: LinkInput): LinkSetup {
+  const effectiveByRepo = new Map(input.ws.repos.map((r) => [r.ref.id, effectiveRoutes(r.endpoints)]));
+  const hints: HintCtx = { repos: input.ws.repos, external: input.ws.external ?? [], named: namedRepos(input.ws.repos) };
+  return {
+    effectiveByRepo, candidatesByRepo: routeCandidatesByRepo(effectiveByRepo), knownHosts: apiBaseHosts(input.ws.repos), hints,
+    ...derivedProxies(input.ws.repos, hints, input.ws.baseHints ?? []),
+    calls: new Map(input.ws.repos.map((r) => [r.ref.id, linkedCalls(input, r)])),
+    answers: input.ws.baseHints ?? [],
+  };
+}
+
+const SPLAT_TAIL_RE = /\/:[^/]+\*$/;
+const isDynamic = (seg: string) => seg.startsWith(":") || seg === "*";
+
+/** A catch-all route's forward (route.forwards, read across imports at index time) as the HTTP call it makes. */
+function forwardCall(route: Route, fw: RouteForward & { path: string }): HttpCall {
+  return {
+    method: route.method, path: fw.path, raw: fw.raw, resolved: true, client: "fetch", at: fw.at, kind: "template",
+    ...(fw.base !== undefined ? { base: fw.base } : {}),
+  };
+}
+
+/** A Next.js catch-all route that forwards (route.forwards) somewhere codeloom could not place: no readable base,
+ * or a base naming no single repo here. A question for the user (map/gaps.ts), answered with a `proxy` answer. */
+export interface UnplacedProxy {
+  repo: string;
+  /** The route's prefix (`/api/billing`). */
+  from: string;
+  routes: Route[];
+  forwards: RouteForward;
+  /** Why: no readable base; a base naming several repos (`candidates`); one naming none here; or a forwarded path
+   * codeloom cannot read (`path`: unreadable parts, or literal text after the catch-all). */
+  reason: "no-base" | "ambiguous" | "unknown" | "path";
+  /** The repos the base's name could mean (more than one), if any. */
+  candidates?: string[];
+}
+
+/** 0.6 §2: a Next.js catch-all API route (`app/api/billing/[...path]/route.ts`) whose handler forwards to a base
+ * naming exactly one other repo is a proxy rule for that repo, applied like a workspace file `proxies` entry:
+ * a UI call under the route's prefix also matches that repo's routes. The forwarding call is the one the indexer
+ * found by following the handler through the functions it calls, across imports (route.forwards); for an
+ * endpoints.json written before that, a forwarding call in the handler itself. The forwarded path is the call's
+ * literal path before its dynamic rest: none → the prefix is stripped; the route's own prefix → kept; any other →
+ * swapped for it. A route whose forwarding calls name no single repo, or end in literal text after the dynamic
+ * rest, gives no rule; when it has a route.forwards, it is `unplaced` (unless an answer or the workspace file
+ * already says where its prefix goes). The user's answer about a base (an `env` answer) places it too. */
+function derivedProxies(
+  repos: RepoData[], hints: HintCtx, answers: AnswerHint[] = [],
+): { derived: Map<string, LinkProxy[]>; forwarders: Set<string>; unplaced: UnplacedProxy[] } {
+  const derived = new Map<string, LinkProxy[]>();
+  const forwarders = new Set<string>();
+  const unplaced = new Map<string, UnplacedProxy>();
+  for (const repo of repos) {
+    const clients = repo.endpoints.httpClients;
+    for (const route of repo.endpoints.routes) {
+      if (route.framework !== "next-api" || !route.handlerFile || !SPLAT_TAIL_RE.test(route.path)) continue;
+      const from = route.path.replace(SPLAT_TAIL_RE, "") || "/";
+      const fw = route.forwards;
+      if (fw) {
+        // The forwarding call itself is the proxy, never a service call.
+        for (const c of repo.endpoints.httpCalls) if (c.at.file === fw.at.file && c.at.line === fw.at.line) forwarders.add(callKey(repo.ref.id, c));
+      }
+      const calls = fw
+        ? (fw.path !== undefined ? [forwardCall(route, fw as RouteForward & { path: string })] : [])
+        : repo.endpoints.httpCalls.filter((c) => c.at.file === route.handlerFile && c.at.symbol === route.handler && c.kind !== "unknown");
+      const rules: Array<{ call: HttpCall; rule: LinkProxy }> = [];
+      let candidates: string[] | undefined;
+      let pathUnreadable = fw !== undefined && fw.base !== undefined && fw.path === undefined;
+      for (const call of calls) {
+        const answer = hintFor(answers, repo.ref.id, call, clients);
+        if (answer?.external !== undefined) continue;
+        const dest = destinationOf(call, clients);
+        let to = answer?.repo;
+        if (to === undefined) {
+          if (dest.kind !== "base" || externalNameFor(dest.base.text, hints.external) !== undefined) continue;
+          const configured = configuredRepos(dest.base, hints.repos);
+          if (configured.length === 0 && dest.base.kind === "host" && !looksInternal(dest.base.text)) continue;
+          const match = configured.length > 0 ? undefined : matchBase(dest.base, hints.named);
+          to = configured.length === 1 ? configured[0]!.ref.id : match?.kind === "one" ? match.repo : undefined;
+          if (match?.kind === "ambiguous") candidates = match.candidates.filter((id) => id !== repo.ref.id);
+        }
+        if (to === undefined || to === repo.ref.id) continue;
+        const segs = call.path.split("/").filter(Boolean);
+        const k = segs.findIndex(isDynamic);
+        if (k === -1 || !segs.slice(k).every(isDynamic)) {
+          pathUnreadable = true;
+          continue;
+        }
+        const prefix = k === 0 ? "" : `/${segs.slice(0, k).join("/")}`;
+        const at = { route: { file: route.at.file, line: route.at.line } };
+        const rule: LinkProxy = prefix === "" ? { from, to, ...at } : prefix === from ? { from, to, stripPrefix: false, ...at } : { from, to, prefix, ...at };
+        rules.push({ call, rule });
+      }
+      const targets = new Set(rules.map((r) => JSON.stringify(r.rule)));
+      if (targets.size === 1) {
+        if (!fw) for (const r of rules) forwarders.add(callKey(repo.ref.id, r.call));
+        derived.set(repo.ref.id, [...(derived.get(repo.ref.id) ?? []), rules[0]!.rule]);
+        continue;
+      }
+      const answered = fw === undefined || calls.some((c) => hintFor(answers, repo.ref.id, c, clients)?.external !== undefined)
+        || (repo.ref.proxies ?? []).some((p) => proxyPathFor(from, p) !== undefined);
+      if (answered) continue;
+      const key = `${repo.ref.id}\0${from}`;
+      const seen = unplaced.get(key);
+      if (seen) seen.routes.push(route);
+      else {
+        const several = candidates && candidates.length > 1 ? candidates : undefined;
+        const reason = fw.base === undefined ? "no-base" : several ? "ambiguous" : pathUnreadable ? "path" : "unknown";
+        unplaced.set(key, { repo: repo.ref.id, from, routes: [route], forwards: fw, reason, ...(several ? { candidates: several } : {}) });
+      }
+    }
+  }
+  return { derived, forwarders, unplaced: [...unplaced.values()] };
+}
+
+/** The group's catch-all routes that forward somewhere codeloom could not place (see derivedProxies). */
+export function unplacedProxies(ws: Pick<WorkspaceData, "repos" | "external" | "baseHints">): UnplacedProxy[] {
+  const hints: HintCtx = { repos: ws.repos, external: ws.external ?? [], named: namedRepos(ws.repos) };
+  return derivedProxies(ws.repos, hints, ws.baseHints ?? []).unplaced;
+}
+
+export const FORWARDING = "a proxy route's own forwarding call";
 
 /** For each HttpCall: the UI pages that reach it, and the route (or external/unresolved) it targets. */
 export function linkUi(input: LinkInput): UiLink[] {
+  return linkUiWith(input, linkSetup(input));
+}
+
+function linkUiWith(input: LinkInput, setup: LinkSetup): UiLink[] {
   const allBackends = input.ws.repos.filter((r) => r.endpoints.routes.length > 0);
-  const effectiveByRepo = new Map(input.ws.repos.map((r) => [r.ref.id, effectiveRoutes(r.endpoints)]));
-  const proxyCandidatesByRepo = routeCandidatesByRepo(effectiveByRepo);
-  const knownHosts = apiBaseHosts(input.ws.repos);
-  const externalCtx = { repos: input.ws.repos, external: input.ws.external ?? [] };
+  const { effectiveByRepo, candidatesByRepo, knownHosts, hints } = setup;
   const links: UiLink[] = [];
   for (const repo of input.ws.repos) {
-    const resolver = input.resolvers.get(repo.ref.id);
-    // A wrapper call on a line where the adapter already sees an HTTP call (e.g. `api.get("/x")` on an
-    // object named like a client) is the same call: keep the adapter's.
-    // Keyed on file, line, method and path so a different call sharing the line is kept.
-    const key = (c: HttpCall) => `${c.at.file}:${c.at.line}:${c.method}:${c.path}`;
-    const seen = new Set(repo.endpoints.httpCalls.map(key));
-    const derived = resolver ? wrapperCalls(resolver, repo.endpoints.httpCalls).filter((c) => !seen.has(key(c))) : [];
-    const calls: LinkedCall[] = [...repo.endpoints.httpCalls, ...derived];
-    for (const call of calls) {
-      const target = resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts, externalCtx);
+    const answers = (input.ws.baseHints ?? []).filter((h) => h.from === undefined || h.from === repo.ref.id);
+    for (const call of setup.calls.get(repo.ref.id) ?? []) {
+      if (setup.forwarders.has(callKey(repo.ref.id, call))) {
+        // A proxy route's own forwarding call is the proxy (derivedProxies), never a call of its own to some route.
+        links.push({ repo: repo.ref.id, call, pages: reachingPages(input, repo.ref.id, call), target: { kind: "unresolved", reason: FORWARDING }, proxied: [] });
+        continue;
+      }
+      const answer = hintFor(answers, repo.ref.id, call, repo.endpoints.httpClients);
+      const target = resolveTarget(call, repo.endpoints.httpClients, allBackends, effectiveByRepo, knownHosts, hints, answer);
       links.push({
         repo: repo.ref.id,
         call,
         pages: reachingPages(input, repo.ref.id, call),
         target,
-        proxied: resolveProxyTargets(call, repo.ref, repo.endpoints.httpClients, proxyCandidatesByRepo, target),
+        proxied: resolveProxyTargets(call, repo.ref, repo.endpoints.httpClients, candidatesByRepo, target, setup.derived.get(repo.ref.id)),
       });
     }
   }
   links.sort((a, b) => compare(a.repo, b.repo) || compare(a.call.at.file, b.call.at.file) || a.call.at.line - b.call.at.line
     || compare(a.call.method, b.call.method) || compare(a.call.path, b.call.path));
   return links;
+}
+
+/** A repo's HTTP calls: the adapter's, plus those derived from calls to its HTTP wrappers. A wrapper call on a
+ * line where the adapter already sees an HTTP call (e.g. `api.get("/x")` on an object named like a client) is
+ * the same call: the adapter's is kept. Keyed on file, line, method and path so a different call sharing the
+ * line is kept. */
+function linkedCalls(input: LinkInput, repo: RepoData): LinkedCall[] {
+  const resolver = input.resolvers.get(repo.ref.id);
+  const key = (c: HttpCall) => `${c.at.file}:${c.at.line}:${c.method}:${c.path}`;
+  const seen = new Set(repo.endpoints.httpCalls.map(key));
+  // Calls through a wrapper made from test, e2e or mock files are never the system's (0.6).
+  const derived = resolver ? wrapperCalls(resolver, repo.endpoints.httpCalls).filter((c) => !seen.has(key(c)) && !isTestFile(c.at.file)) : [];
+  return [...repo.endpoints.httpCalls, ...derived];
+}
+
+// ---------------------------------------------------------------------------------------------------
+// 0.6 §3: service-to-service HTTP. A backend's outgoing call continues the chain into the route it reaches.
+// ---------------------------------------------------------------------------------------------------
+
+/** One outgoing call of a repo, with the route it reaches (`target`) or, when its base names no single repo,
+ * that base (`gap`, an unresolved base). Neither: it goes nowhere in the group (a third party, an unreadable
+ * base, a proxy's own forwarding call, no route matching). */
+export interface ServiceCall {
+  call: LinkedCall;
+  target?: RouteTarget;
+  gap?: BaseHint;
+}
+
+/** A service call a handler's walk reaches, like a store hit. */
+export interface ServiceHit {
+  call: LinkedCall;
+  target: RouteTarget;
+  viaPath: WalkStep[];
+}
+
+/** A service call with an unresolved base that a handler's walk reaches. */
+export interface ServiceGap {
+  repo: string;
+  call: LinkedCall;
+  gap: BaseHint;
+}
+
+const hasLiteralSegment = (path: string) => path.split("/").some((seg) => seg !== "" && !isDynamic(seg));
+
+/** Where a backend's call goes (precision first; a backend has no origin, so its base was set somewhere):
+ * - a base the workspace file names (`apiBase`) → those repos; one in `external` → nowhere;
+ * - a trusted named base (env var, config key, identifier, internal-looking host) → the one repo it names; one
+ *   naming several → the one candidate with an exact or param route, if exactly one has;
+ * - a gap (an unresolved base) when it cannot be settled: a relative URL (the base was set elsewhere:
+ *   `axios.defaults`, a DI module), a loopback host no `apiBase` names (listen ports are not recorded), an
+ *   unreadable base expression, a name matching no repo or several, a public-looking host naming a repo;
+ * - nowhere, silently: a public host naming no repo (a third party), a call with no literal path segment, a
+ *   proxy route's own forwarding call.
+ * Never another repo's route by a path guess alone. */
+function serviceTarget(repo: RepoData, call: LinkedCall, setup: LinkSetup): ServiceCall {
+  if (call.kind === "unknown" || setup.forwarders.has(callKey(repo.ref.id, call))) return { call };
+  const clients = repo.endpoints.httpClients;
+  const path = ownHostOf(call) !== undefined ? call.path : callPathWithClient(call, clients);
+  if (!hasLiteralSegment(path)) return { call };
+  // 0.6 §5: the user said where this repo's calls through this base go (a relative URL's client counts as its
+  // base here). Another service: nowhere, and no question. A repo: that repo's routes only, never a path guess
+  // elsewhere; none matching leaves the call where map_gaps asks about it again.
+  const answer = hintFor(setup.answers, repo.ref.id, call, clients, { relative: true });
+  if (answer?.external !== undefined) return { call };
+  if (answer?.repo !== undefined) {
+    const picked = toTarget(pickRoute(call.method, path, setup.candidatesByRepo.get(answer.repo) ?? []));
+    return picked ? { call, target: { ...picked, reason: picked.reason ?? ANSWERED } } : { call };
+  }
+  const dest = destinationOf(call, clients);
+  const gap = (base: CallBase, match: BaseMatch = { kind: "unknown" }, trusted = true): ServiceCall =>
+    ({ call, gap: { base, match, ...(trusted ? {} : { trusted: false }) } });
+  if (dest.kind === "opaque") return gap({ kind: "expr", text: dest.expr });
+  if (dest.kind === "relative") return gap({ kind: "relative", text: call.client || "fetch" });
+  const base: CallBase = dest.kind === "loopback" ? { kind: "host", text: dest.host } : dest.base;
+  if (externalNameFor(base.text, setup.hints.external) !== undefined) return { call };
+  const configured = configuredRepos(base, setup.hints.repos);
+  let target: RouteTarget | undefined;
+  if (configured.length > 0) {
+    target = toTarget(pickRoute(call.method, path, configured.flatMap((r) => setup.candidatesByRepo.get(r.ref.id) ?? [])));
+  } else {
+    if (dest.kind === "loopback") return gap(base);
+    const hint: BaseHint = { base, match: matchBase(base, setup.hints.named) };
+    const trusted = base.kind !== "host" || looksInternal(base.text);
+    if (!trusted) return hint.match.kind === "unknown" ? { call } : gap(base, hint.match, false);
+    if (hint.match.kind === "unknown") return gap(base);
+    target = hint.match.kind === "one"
+      ? toTarget(pickRoute(call.method, path, setup.candidatesByRepo.get(hint.match.repo) ?? []))
+      : pickAmong(hint.match.candidates, call.method, path, setup.candidatesByRepo);
+    if (!target && hint.match.kind === "ambiguous") return gap(base, hint.match);
+  }
+  return target ? { call, target } : { call };
+}
+
+function toTarget(picked: { item: EffectiveRoute; match: { confidence: Confidence; reason?: string } } | null): RouteTarget | undefined {
+  if (!picked) return undefined;
+  return { kind: "route", route: picked.item, confidence: picked.match.confidence, ...(picked.match.reason !== undefined ? { reason: picked.match.reason } : {}) };
+}
+
+/** Every repo's outgoing calls with where each goes (see serviceTarget). Store walks pick the ones a handler reaches. */
+function serviceCalls(input: LinkInput, setup: LinkSetup): Map<string, ServiceCall[]> {
+  return new Map(input.ws.repos.map((repo) => [
+    repo.ref.id,
+    (setup.calls.get(repo.ref.id) ?? []).map((call) => serviceTarget(repo, call, setup)).filter((s) => s.target !== undefined || s.gap !== undefined),
+  ]));
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -416,16 +852,25 @@ export interface BackendLink {
   handlerConfidence: Confidence;
   hits: StoreHit[];
   unresolved: Array<{ at: Loc; reason: string }>;
+  /** 0.6 §3: calls to another route of the group (or this repo's own, for a relative URL) the walk reaches. */
+  calls?: ServiceHit[];
+  /** 0.6 §2: reached calls whose base names no single repo. */
+  gaps?: ServiceGap[];
 }
 
 export interface ConsumerLink {
   repo: string; consume: QueueOp; handler: SymbolRef; hits: StoreHit[]; unresolved: Array<{ at: Loc; reason: string }>;
+  /** "exact" when the handler is the function the consume call hands over (by name, `this.x`, or an inline
+   * callback); "guess" when it could not be found and the walk starts at the enclosing function instead. */
+  handlerConfidence?: Confidence;
+  calls?: ServiceHit[];
+  gaps?: ServiceGap[];
 }
 
 /** A workspace `links` entry, validated. When resolved and `to` is a symbol, `target` is that symbol walked
  * like a handler (its calls -> store hits), so buildChains can continue a chain from it. */
 export interface ManualLink {
-  from: string; to: string; resolved: boolean; reason?: string;
+  from: string; to: string; resolved: boolean; reason?: string; source?: "answers";
   target?: { handler: SymbolRef; hits: StoreHit[]; unresolved: Array<{ at: Loc; reason: string }> };
 }
 
@@ -482,12 +927,25 @@ function handlerScope(input: LinkInput, r: EffectiveRoute): HandlerScope | null 
     };
   }
   const name = handlerSymbolName(idx, route.handler);
+  const scope = namedHandlerScope(input, r, idx, name);
+  // A handler whose controller another file may have re-namespaced (Route.handlerGuess) stays a guess.
+  return route.handlerGuess ? { ...scope, confidence: "guess" } : scope;
+}
+
+function namedHandlerScope(input: LinkInput, r: EffectiveRoute, idx: FileCodeIndex | undefined, name: string): HandlerScope {
+  const route = r.route as EffectiveRoute["route"] & { handlerFile: string };
+  const resolver = input.resolvers.get(r.repo);
   if (idx?.symbols.some((s) => s.name === name)) {
     return { ref: { repo: r.repo, file: route.handlerFile, symbol: name }, confidence: "exact" };
   }
   // Not declared in handlerFile under that name: maybe re-exported / aliased from there.
   const viaExport = resolver?.resolveExport(route.handlerFile, name);
   if (viaExport) return { ref: viaExport, confidence: "exact" };
+  // Adonis loads a controller module's default export, whatever the class calls itself
+  // (`"Admin/CustomersController.index"` -> `export default class AdminCustomersController`).
+  const method = route.framework === "adonis" ? /^[^.]+(\.[^.]+)$/.exec(name)?.[1] : undefined;
+  const viaDefault = method !== undefined ? resolver?.resolveExport(route.handlerFile, `default${method}`) : undefined;
+  if (viaDefault) return { ref: viaDefault, confidence: "exact" };
   return { ref: { repo: r.repo, file: route.handlerFile, symbol: name }, confidence: "guess" };
 }
 
@@ -607,7 +1065,9 @@ function hitLabel(h: StoreHit): string {
 
 /** Store hits reachable from the scope's start symbol (≤6 hops), nearest first. An access counts when
  * its enclosing symbol was visited, or (synthetic inline handler) when it sits inside the handler's lines. */
-function storeHits(resolver: CallResolver, repoId: string, scope: HandlerScope, access: DbAccess[], queues: QueueOp[]): { steps: WalkStep[]; hits: StoreHit[] } {
+function storeHits(
+  resolver: CallResolver, repoId: string, scope: HandlerScope, access: DbAccess[], queues: QueueOp[], services: ServiceCall[] = [],
+): { steps: WalkStep[]; hits: StoreHit[]; calls: ServiceHit[]; gaps: ServiceGap[] } {
   const steps = walkCalls(terminalStores(scopedResolver(resolver, scope), knownAtKeys(access, queues)), scope.ref, 6);
   const visited = new Set(steps.map((s) => stepKey(s.ref)));
   const startKey = stepKey(scope.ref);
@@ -627,11 +1087,27 @@ function storeHits(resolver: CallResolver, repoId: string, scope: HandlerScope, 
     if (viaPath) hits.push({ kind: "queue", op: q, viaPath });
   }
   hits.sort((a, b) => a.viaPath.length - b.viaPath.length || compare(hitLabel(a), hitLabel(b)));
-  return { steps, hits };
+  const calls: ServiceHit[] = [];
+  const gaps: ServiceGap[] = [];
+  for (const s of services) {
+    const viaPath = viaPathTo(s.call.at);
+    if (!viaPath) continue;
+    if (s.target) calls.push({ call: s.call, target: s.target, viaPath });
+    else if (s.gap) gaps.push({ repo: repoId, call: s.call, gap: s.gap });
+  }
+  const callLabel = (c: ServiceHit) => `${c.call.at.file}:${String(c.call.at.line).padStart(8, "0")}:${c.call.method} ${c.call.path}`;
+  calls.sort((a, b) => a.viaPath.length - b.viaPath.length || compare(callLabel(a), callLabel(b)));
+  return { steps, hits, calls, gaps };
 }
 
-/** Route -> handler -> walkCalls -> every DbAccess / publish QueueOp reached. */
-export function linkBackend(input: LinkInput): BackendLink[] {
+/** `calls` / `gaps` as optional link fields: present only when non-empty. */
+function serviceFields(calls: ServiceHit[], gaps: ServiceGap[]): { calls?: ServiceHit[]; gaps?: ServiceGap[] } {
+  return { ...(calls.length > 0 ? { calls } : {}), ...(gaps.length > 0 ? { gaps } : {}) };
+}
+
+/** Route -> handler -> walkCalls -> every DbAccess / publish QueueOp reached, and (0.6 §3, `services` given)
+ * every outgoing call that reaches a route. */
+export function linkBackend(input: LinkInput, services: Map<string, ServiceCall[]> = new Map()): BackendLink[] {
   const out: BackendLink[] = [];
   for (const repo of input.ws.repos) {
     const resolver = input.resolvers.get(repo.ref.id);
@@ -643,10 +1119,12 @@ export function linkBackend(input: LinkInput): BackendLink[] {
         out.push({ repo: repo.ref.id, route: er, handler: null, handlerConfidence: "guess", hits: [], unresolved: [] });
         continue;
       }
-      const { steps, hits } = storeHits(resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues);
+      const { steps, hits, calls, gaps } = storeHits(
+        resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues, services.get(repo.ref.id),
+      );
       out.push({
         repo: repo.ref.id, route: er, handler: scope.ref, handlerConfidence: scope.confidence,
-        hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt),
+        hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt), ...serviceFields(calls, gaps),
       });
     }
   }
@@ -676,11 +1154,55 @@ function opKey(repo: string, q: QueueOp): string {
   return `${repo}:${q.at.file}:${String(q.at.line).padStart(8, "0")}:${q.op}:${q.queue}`;
 }
 
+/** RabbitMQ's built-in exchanges, whose type needs no `assertExchange`. */
+const BUILT_IN_EXCHANGES: ReadonlyMap<string, string> = new Map([
+  ["amq.topic", "topic"], ["amq.direct", "direct"], ["amq.fanout", "fanout"], ["amq.headers", "headers"], ["amq.match", "headers"],
+]);
+
+/** "conflict": an exchange declared with two different types. */
+const CONFLICT = "conflict";
+
+/** Every exchange's type across the group: the built-in `amq.*` ones, and each `assertExchange` (in any repo).
+ * An exchange declared two different ways is a "conflict". */
+export function exchangeTypes(ws: WorkspaceData): Map<string, string> {
+  const seen = new Map<string, Set<string>>();
+  for (const r of ws.repos) {
+    for (const x of r.endpoints.exchanges ?? []) {
+      seen.set(x.name, new Set([...(seen.get(x.name) ?? []), x.type.toLowerCase()]));
+    }
+  }
+  const out = new Map(BUILT_IN_EXCHANGES);
+  for (const [name, types] of seen) out.set(name, types.size === 1 ? [...types][0]! : CONFLICT);
+  return out;
+}
+
+/** How a binding on an exchange of `type` matches a publish's routing key (0.6 §3), and how sure that is.
+ * fanout: every binding, whatever the key; direct: the same key only; topic: `*` / `#` patterns (a wildcard
+ * match is "param"); headers: the key is not used and headers are not read, so every binding is a guess.
+ * Never declared: the same key, and a key with `*` / `#` as a topic pattern ("param": the wildcard is itself the
+ * sign of a topic exchange). Declared two different ways: the same key only. */
+function bindingMatch(type: string | undefined, bindKey: string, pubKey: string): { confidence: Confidence; reason?: string } | null {
+  switch (type) {
+    case "fanout": return { confidence: "exact" };
+    case "headers": return { confidence: "guess", reason: "headers exchange: the headers a binding matches are not read" };
+    case "direct":
+    case CONFLICT:
+      return bindKey === pubKey ? { confidence: "exact" } : null;
+    default:
+      if (bindKey === pubKey) return { confidence: "exact" };
+      return /[*#]/.test(bindKey) && routingKeyMatches(bindKey, pubKey) ? { confidence: "param" } : null;
+  }
+}
+
+/** The hop reason of a link made from the user's answer (0.6 §5, answers.json). */
+export const ANSWERED = "from your answer";
+
 /** Memo (f): sendToQueue <-> consume on the same queue -> exact; exchange publish -> bind(exchange, key)
- * -> consume(bound queue) -> exact, or param when the binding key has a topic wildcard; no binding ->
- * consume on a queue named like the routing key or exchange -> guess. */
+ * -> consume(bound queue) by the exchange's type (see bindingMatch); no binding -> consume on a queue named
+ * like the routing key or exchange -> guess. Publisher and consumer may be in any repos of the group. */
 export function pairQueues(ws: WorkspaceData): QueuePair[] {
   const pairs = new Map<string, QueuePair>();
+  const types = exchangeTypes(ws);
   const consumers = ws.repos.flatMap((r) => r.endpoints.queues.filter((q) => q.op === "consume").map((q) => ({ repo: r.ref.id, q })));
   const binds = ws.repos.flatMap((r) => r.endpoints.queues.filter((q) => q.op === "bind").map((q) => ({ repo: r.ref.id, q })));
   const add = (from: string, publish: QueueOp, to: { repo: string; q: QueueOp }, confidence: Confidence, reason?: string) => {
@@ -696,16 +1218,31 @@ export function pairQueues(ws: WorkspaceData): QueuePair[] {
         for (const c of consumers.filter((c) => c.q.queue === publish.queue)) add(from.ref.id, publish, c, "exact");
         continue;
       }
-      const matches = binds.filter((b) => b.q.exchange === publish.exchange && routingKeyMatches(b.q.routingKey ?? "", publish.routingKey ?? ""));
+      const type = types.get(publish.exchange);
+      const matches = binds.flatMap((b) => {
+        if (b.q.exchange !== publish.exchange) return [];
+        const m = bindingMatch(type, b.q.routingKey ?? "", publish.routingKey ?? "");
+        return m ? [{ b, m }] : [];
+      });
       if (matches.length > 0) {
-        for (const b of matches) {
-          const confidence: Confidence = /[*#]/.test(b.q.routingKey ?? "") ? "param" : "exact";
-          for (const c of consumers.filter((c) => c.q.queue === b.q.queue)) add(from.ref.id, publish, c, confidence);
+        for (const { b, m } of matches) {
+          for (const c of consumers.filter((c) => c.q.queue === b.q.queue)) add(from.ref.id, publish, c, m.confidence, m.reason);
         }
         continue;
       }
       for (const c of consumers.filter((c) => c.q.queue === publish.routingKey || c.q.queue === publish.exchange)) {
         add(from.ref.id, publish, c, "guess", "no binding found; matched by exchange/routing-key heuristic");
+      }
+    }
+  }
+  // 0.6 §5 answers: the user said messages published as `publish` arrive on `consume` (a binding made where
+  // codeloom cannot see it). Exact, with the answer as the reason; a pair codeloom found itself is kept as is.
+  for (const alias of ws.queueAliases ?? []) {
+    for (const from of ws.repos) {
+      for (const publish of from.endpoints.queues.filter((q) => q.op === "publish" && q.queue === alias.publish)) {
+        for (const c of consumers.filter((c) => c.q.queue === alias.consume)) {
+          if (!pairs.has(`${opKey(from.ref.id, publish)}|${opKey(c.repo, c.q)}`)) add(from.ref.id, publish, c, "exact", ANSWERED);
+        }
       }
     }
   }
@@ -718,19 +1255,48 @@ function calleeProp(c: CallSite["callee"]): string | undefined {
   return c.kind === "ident" ? undefined : c.prop;
 }
 
-/** The consume callback's own symbol: `channel.consume("q", handleEmail)` -> whatever `handleEmail`
- * binds to in that file (local function or import). QueueOp records only the consume() call site, and a
- * callback passed by reference is never *called* there, so it is read from the call site's recorded
- * identifier arguments. Inline / unresolvable callback -> the consume() call's own enclosing symbol. */
-function consumeHandlerRef(resolver: CallResolver, repoId: string, q: QueueOp): SymbolRef {
-  const site = resolver.fileIndex(q.at.file)?.calls.find((s) => s.line === q.at.line && calleeProp(s.callee) === "consume");
-  const name = site?.refArgs?.find((a) => a.index === CONSUME_ARG)?.name;
-  const resolved = name !== undefined ? resolver.resolveName(q.at.file, name) : null;
-  return resolved ?? { repo: repoId, file: q.at.file, symbol: q.at.symbol };
+/** Does the call site record something at argument `index` (a function name, `this.x`, an inline function)? */
+function hasHandlerArg(site: CallSite, index: number): boolean {
+  return !!(site.refArgs?.some((a) => a.index === index) || site.thisArgs?.some((a) => a.index === index) || site.inlineArgs?.includes(index));
 }
 
-/** Every `consume` op -> its handler -> walkCalls -> store hits; each consumer starts its own chain. */
-export function linkConsumers(input: LinkInput): ConsumerLink[] {
+/** The consume callback's own symbol. QueueOp records only the consume call site, and a callback passed by
+ * reference is never *called* there, so it is read from that call site's recorded arguments: the argument at
+ * the op's `handlerArg` (a consume through a wrapper, whatever its method name), else argument 1 of a literal
+ * `consume(...)`. A function name -> whatever it binds to in that file (local function or import);
+ * `this.handleX` (or `this.handleX.bind(this)`) -> that method of the enclosing class; an inline callback ->
+ * the call's own enclosing symbol (the callback's code is inside it), exact. Anything else (no such call site,
+ * an argument that names no function) -> the enclosing symbol, but only as a guess: it is not the handler. */
+function consumeHandlerRef(resolver: CallResolver, repoId: string, q: QueueOp): { ref: SymbolRef; confidence: Confidence } {
+  // The adapter knew the handler exactly (a subclass method a base consume loop hands over to, or the callback
+  // inside a wrapper): taken as is.
+  if (q.handler) return { ref: { repo: repoId, file: q.handler.file, symbol: q.handler.symbol }, confidence: "exact" };
+  const fallback: SymbolRef = { repo: repoId, file: q.at.file, symbol: q.at.symbol };
+  const handlerArg = q.handlerArg;
+  const sites = (resolver.fileIndex(q.at.file)?.calls ?? []).filter((s) => s.line === q.at.line && s.kind === undefined);
+  let site: CallSite | undefined;
+  let index = CONSUME_ARG;
+  if (handlerArg !== undefined) {
+    index = handlerArg;
+    const withArg = sites.filter((s) => hasHandlerArg(s, index));
+    site = withArg.length === 1 ? withArg[0] : undefined;
+  } else {
+    site = sites.find((s) => calleeProp(s.callee) === "consume");
+  }
+  const name = site?.refArgs?.find((a) => a.index === index)?.name;
+  const resolved = name !== undefined ? resolver.resolveName(q.at.file, name) : null;
+  if (resolved) return { ref: resolved, confidence: "exact" };
+  const member = site?.thisArgs?.find((a) => a.index === index);
+  if (member) return { ref: { repo: repoId, file: q.at.file, symbol: `${member.cls}.${member.member}` }, confidence: "exact" };
+  if (site?.inlineArgs?.includes(index)) return { ref: fallback, confidence: "exact" };
+  return { ref: fallback, confidence: "guess" };
+}
+
+export const HANDLER_NOT_FOUND = "could not find the handler this consume hands over: walked from the enclosing function";
+
+/** Every `consume` op -> its handler -> walkCalls -> store hits (and, `services` given, service calls); each
+ * consumer starts its own chain. A handler that could not be found is a guess, with an unresolved entry. */
+export function linkConsumers(input: LinkInput, services: Map<string, ServiceCall[]> = new Map()): ConsumerLink[] {
   const out: ConsumerLink[] = [];
   for (const repo of input.ws.repos) {
     const resolver = input.resolvers.get(repo.ref.id);
@@ -738,9 +1304,17 @@ export function linkConsumers(input: LinkInput): ConsumerLink[] {
     const knownAt = knownAtKeys(repo.endpoints.dbAccess, repo.endpoints.queues);
     for (const q of repo.endpoints.queues) {
       if (q.op !== "consume") continue;
-      const scope: HandlerScope = { ref: consumeHandlerRef(resolver, repo.ref.id, q), confidence: "exact" };
-      const { steps, hits } = storeHits(resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues);
-      out.push({ repo: repo.ref.id, consume: q, handler: scope.ref, hits, unresolved: collectUnresolved(resolver, steps, scope, knownAt) });
+      const handler = consumeHandlerRef(resolver, repo.ref.id, q);
+      const scope: HandlerScope = { ref: handler.ref, confidence: handler.confidence };
+      const { steps, hits, calls, gaps } = storeHits(
+        resolver, repo.ref.id, scope, repo.endpoints.dbAccess, repo.endpoints.queues, services.get(repo.ref.id),
+      );
+      const unresolved = collectUnresolved(resolver, steps, scope, knownAt);
+      if (handler.confidence !== "exact") unresolved.push({ at: q.at, reason: HANDLER_NOT_FOUND });
+      out.push({
+        repo: repo.ref.id, consume: q, handler: scope.ref, handlerConfidence: handler.confidence, hits,
+        unresolved: sortUnresolved(unresolved), ...serviceFields(calls, gaps),
+      });
     }
   }
   out.sort((a, b) => compare(opKey(a.repo, a.consume), opKey(b.repo, b.consume)));
@@ -778,14 +1352,15 @@ function refExists(input: LinkInput, ref: LinkRef): boolean {
 /** Validate every workspace `links` entry against the repos/symbols/routes/queues that actually exist.
  * Kept in workspace-file order (the author's order). */
 export function resolveManualLinks(input: LinkInput): ManualLink[] {
-  return input.ws.links.map((l) => {
+  return input.ws.links.map((l): ManualLink => {
+    const src = l.source !== undefined ? { source: l.source } : {};
     const from = parseLinkRef(l.from);
     const to = parseLinkRef(l.to);
-    if (!from || !to) return { from: l.from, to: l.to, resolved: false, reason: "could not parse link reference" };
-    if (!refExists(input, from)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.from}" was not found` };
-    if (!refExists(input, to)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.to}" was not found` };
-    if (to.kind !== "symbol") return { from: l.from, to: l.to, resolved: true };
-    return { from: l.from, to: l.to, resolved: true, target: walkSymbol(input, { repo: to.repo, file: to.file, symbol: to.symbol }) };
+    if (!from || !to) return { from: l.from, to: l.to, resolved: false, reason: "could not parse link reference", ...src };
+    if (!refExists(input, from)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.from}" was not found`, ...src };
+    if (!refExists(input, to)) return { from: l.from, to: l.to, resolved: false, reason: `"${l.to}" was not found`, ...src };
+    if (to.kind !== "symbol") return { from: l.from, to: l.to, resolved: true, ...src };
+    return { from: l.from, to: l.to, resolved: true, target: walkSymbol(input, { repo: to.repo, file: to.file, symbol: to.symbol }), ...src };
   });
 }
 
@@ -859,16 +1434,65 @@ export interface LinkResult {
   ui: UiLink[]; backend: BackendLink[]; consumers: ConsumerLink[]; queuePairs: QueuePair[]; manual: ManualLink[];
   /** UI-side calls and whether a page reaches them (see uiReachFacts). */
   uiReach: UiReachFact[];
+  /** 0.6 §2: call bases that name no single repo (see unresolvedBases). Absent when there are none. */
+  unresolvedBases?: UnresolvedBase[];
 }
 
 export function linkAll(input: LinkInput): LinkResult {
-  const ui = linkUi(input);
-  const backend = linkBackend(input);
-  const consumers = linkConsumers(input);
+  const setup = linkSetup(input);
+  const ui = linkUiWith(input, setup);
+  const services = serviceCalls(input, setup);
+  const backend = linkBackend(input, services);
+  const consumers = linkConsumers(input, services);
+  const uiReach = uiReachFacts(input, ui, backend, consumers);
+  const bases = unresolvedBases(input, setup, ui, uiReach, [...backend, ...consumers].flatMap((l) => l.gaps ?? []));
   return {
     ui, backend, consumers,
     queuePairs: pairQueues(input.ws),
     manual: resolveManualLinks(input),
-    uiReach: uiReachFacts(input, ui, backend, consumers),
+    uiReach,
+    ...(bases.length > 0 ? { unresolvedBases: bases } : {}),
   };
+}
+
+/** 0.6 §2 (read by §5's gaps): every base that names no single repo, with the calls through it — a UI call
+ * whose base names two or more repos (it links nothing), or names none and matched no route; a backend call
+ * reached from a route or consumer handler whose base names two or more repos or none (it links nothing).
+ * One entry per base and reason, calls sorted and deduplicated; entries sorted by base, then kind, then reason. */
+function unresolvedBases(input: LinkInput, setup: LinkSetup, ui: UiLink[], uiReach: UiReachFact[], backendGaps: ServiceGap[]): UnresolvedBase[] {
+  const uiSide = new Set(uiReach.map(uiReachKey));
+  const gaps: ServiceGap[] = [...backendGaps];
+  for (const link of ui) {
+    const at = link.call.at;
+    // UI-side calls (uiReach leaves out third-party ones: a public host naming a repo is one, when a page reaches it).
+    const uiCall = uiSide.has(uiReachKey({ repo: link.repo, file: at.file, line: at.line, method: link.call.method, path: link.call.path }))
+      || (link.target.kind === "external" && link.pages.length > 0);
+    if (!uiCall) continue;
+    const clients = input.ws.repos.find((r) => r.ref.id === link.repo)?.endpoints.httpClients ?? [];
+    const hint = baseHint(link.call, clients, setup.hints);
+    if (!hint) continue;
+    if (hint.trusted === false) {
+      // A public-looking host that names a repo: never linked by name, so the question is asked.
+      if (hint.match.kind !== "unknown") gaps.push({ repo: link.repo, call: link.call, gap: hint });
+      continue;
+    }
+    if (hint.match.kind === "one") continue;
+    if (link.target.kind !== "unresolved" || (link.proxied?.length ?? 0) > 0) continue;
+    gaps.push({ repo: link.repo, call: link.call, gap: hint });
+  }
+  const byBase = new Map<string, UnresolvedBase>();
+  for (const g of gaps) {
+    const candidates = g.gap.match.kind === "ambiguous" ? g.gap.match.candidates : g.gap.match.kind === "one" ? [g.gap.match.repo] : [];
+    const reason = g.gap.trusted === false ? "unconfirmed" : g.gap.match.kind === "ambiguous" ? "ambiguous" : "unknown";
+    const key = [g.gap.base.text, g.gap.base.kind, reason, candidates.join(",")].join("\0");
+    const entry = byBase.get(key) ?? { base: g.gap.base.text, kind: g.gap.base.kind, reason, candidates, calls: [] };
+    entry.calls.push({ repo: g.repo, file: g.call.at.file, line: g.call.at.line, symbol: g.call.at.symbol, method: g.call.method, path: g.call.path });
+    byBase.set(key, entry);
+  }
+  const callOrder = (a: UnresolvedBase["calls"][number], b: UnresolvedBase["calls"][number]) => compare(a.repo, b.repo)
+    || compare(a.file, b.file) || a.line - b.line || compare(a.method, b.method) || compare(a.path, b.path) || compare(a.symbol, b.symbol);
+  return [...byBase.values()].map((e) => {
+    const calls = [...e.calls].sort(callOrder).filter((c, i, all) => i === 0 || callOrder(c, all[i - 1]!) !== 0);
+    return { ...e, calls };
+  }).sort((a, b) => compare(a.base, b.base) || compare(a.kind, b.kind) || compare(a.reason, b.reason) || compare(a.candidates.join(","), b.candidates.join(",")));
 }

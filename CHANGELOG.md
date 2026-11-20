@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.6.0
+
+Index each repo on its own; codeloom connects them into journeys across repos.
+
+- **Index each repo.** `cd <repo> && npx codeloom index` works in any git repo, with no setup. Each repo joins a
+  group in a registry on your machine (`~/.codeloom`, or `$CODELOOM_HOME`): repos with the same git host and
+  owner form one group (`ssh.github.com`, `ssh.bitbucket.org` and the like count as their site), else the parent
+  folder's name; `--group <name>` picks one. A repo is named by its remote's repo name, else its folder. After each index codeloom re-links the whole group from the other
+  repos' saved maps (it never parses them again) and prints what got connected. Older checkouts of the same
+  remote are ignored. `dashboard`, `serve`, `check` and `doctor` run inside any repo use its group. A
+  workspace folder (`codeloom.workspace.json`) works as before.
+- **A repo alone in its group** (another team's account, say) is pointed out, with the command to join the
+  group its calls match when one clearly does.
+- **Repos connect by themselves.** An env var, config key or host in a call's base that names one repo of the
+  group (`BILLING_API_URL` → billing) sends the call there. A Next.js catch-all route that forwards to such a
+  base works like a proxy rule, also when it forwards through a shared factory or helper in another file. Unclear
+  names are never guessed: they become questions.
+- **Service to service.** A backend's HTTP calls continue the chain into the other service's route, handler
+  and tables. Long chains stop after a few hops and say where they continue (the dashboard links it).
+- **AdonisJS v5 routes.** A string handler (`'CustomersController.index'`, `'Admin/CustomersController.index'`)
+  finds its controller by Adonis's namespace (`.adonisrc.json`, or a group's or route's `.namespace()`),
+  including `<Name>/index.ts` and a class named differently from its file. `Route.resource` (v5 and v6, with
+  `only`, `except`, `apiOnly`) and `Route.route` give their routes. Routes registered by a function that
+  another file calls inside `Route.group(...)` get that group's prefix and namespace. The chain continues into services called
+  as static methods, through `new Service()` or through an imported instance (`export default new Service()`).
+- **Queues across repos.** RabbitMQ publishers and consumers pair across repos, including calls through your
+  own wrapper functions and classes, exchanges with routing keys (by the exchange's type) and handlers passed
+  as `this.method`. Names that reach amqplib through base classes, subclass `super(...)` arguments and field
+  overrides, `getInstance()` singletons and message objects are followed too; a queue name that is a runtime
+  value becomes a question (`queue-unknown`), never a guess. `codeloom check` counts queue operations per repo.
+- **Claude fixes the map with you.** `codeloom gaps` (MCP `map_gaps`) lists only what codeloom could not
+  settle, as short questions with the evidence: a repo alone or not connected, call bases no repo is known for
+  (also a backend's relative URLs and calls through its wrappers), calls matching no route, routes nothing
+  calls, lonely queues, calls two repos could serve, proxy routes forwarding to a base no repo is known for,
+  unclear roles. `codeloom ask` (or the `map-interview`
+  prompt) goes through them with Claude, one question at a time; `save_map_answers` checks every name, saves
+  the answer and re-links without parsing. `codeloom link` re-links after you edit answers by hand.
+- **One command on a PR.** `codeloom pr` on a PR branch: indexes, builds the PR block (base `origin/main`, else
+  `main`, else `master`), lets Claude check it under the same rules as `codeloom review --check` (asks first on a
+  terminal, `--check` to skip the question, never without one of them; a review already saved for this head is
+  reused, `--recheck` checks again), writes a local snapshot (in the workspace folder's or the group's `.codeloom/pr/`, never in the repo; the 5
+  newest are kept), serves it on 127.0.0.1
+  and opens the This PR page. It also prints the block for the PR description. In a group, the page shows the
+  journeys across repos: the other repos' pages that reach the change and the services it calls. `--no-open`,
+  `--port`, `--out`; `--repo` in a workspace folder.
+- The This PR page opens on the summary: Checked by Claude (or Draft), what it does, where it matters, what it
+  writes, before deploying, code to check (click a function for its diff) and notes. Snapshots carry it as
+  `data/pr-summary.json`; a hosted snapshot rebuilds it from `review.json` and never trusts the PR's own copy.
+- `codeloom snapshot --repo <id>`: a snapshot of one repo in a folder of repos (or of the repo you run it in).
+
+Changes in behaviour:
+
+- A manual link (in the workspace file or an answer) now also settles a call that matched only as a guess.
+- `codeloom ask` asks before starting Claude, and the default answer is no.
+- A repo's map stays in `<repo>/.codeloom/`; a group's chains, journeys, tours, views and answers live in
+  `~/.codeloom/groups/` (or under `$CODELOOM_HOME`). `.codeloom/` is added to the repo's `.git/info/exclude`.
+- Your 0.5 data carries over: the first time a repo indexed on its own joins a group, its journeys, tours,
+  views, specs and your progress are copied into the group.
+- An exchange declared two different ways matches the same routing key only.
+- `codeloom check`: a route another service calls counts as having a caller. The text says "N/M routes have a
+  caller (X from UI, Y from services)" and lists "Routes with no caller"; in `--json`, a `route-no-caller` item's
+  detail is "… has no caller" (was "has no UI caller"), the summary gains `routesWithServiceCaller` (when > 0) and
+  the report gains `queues: [{ repo, publish, consume }]` (when some repo uses a queue).
+- `codeloom check` on a big map stays short: info-only items (calls that could not be resolved, calls to other
+  services) are counted per repo with 5 examples (`--verbose` lists them all); `--json` keeps at most 200 items of
+  each kind and counts the rest in `truncated` (`--all` keeps everything).
+- Test, e2e, load-test and mock files (`tests/`, `e2e/`, `cypress/`, `__mocks__/`, `*.spec.ts`, …) are never the
+  start of a journey and are not counted by `check` or the gaps.
+- No guessed link without a shared literal path segment, and none between two repos' equally specific routes:
+  those become questions.
+- The map's questions skip a call base whose name already places it, and propose a repo for a base only when it
+  serves at least 70% of the base's matched calls (otherwise they show the split).
+- A method called on something imported from a package (`Event.emit()`, `Mail.send()`), or on a field
+  of a library-typed value (`const { response } = ctx`), is no longer guessed onto a same-named repo method.
+  Your own workspace packages and bare imports of your folders still are, and so is a field the repo
+  exports under the same name (`const { customerService } = req` on a decorated Request).
+
 ## 0.5.0 — 2026-11-17 (GitHub release and npm)
 
 PR reviews you can read, set up in one step:

@@ -10,7 +10,7 @@ export function openerFor(platform: NodeJS.Platform, url: string): { cmd: string
 }
 
 /** Best effort: a missing or failing opener is ignored (the printed URL is enough). */
-function openBrowser(url: string): void {
+export function openBrowser(url: string): void {
   const { cmd, args } = openerFor(process.platform, url);
   try {
     const child = spawn(cmd, args, {

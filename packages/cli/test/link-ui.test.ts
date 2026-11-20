@@ -190,7 +190,7 @@ describe("linkUi", () => {
     expect(links[0]!.target).toEqual({ kind: "external", base: "api.stripe.com" });
   });
 
-  it("downgrades confidence to guess when several backends match and none is hinted", () => {
+  it("links nothing when two backends match equally and none is hinted (0.6: a tie across repos is a question)", () => {
     const dupRoute: EndpointsFile["routes"][number] = {
       method: "POST", path: "/dup", handler: "f", inline: false, framework: "express",
       at: { file: "src/server.ts", line: 1, symbol: "f" },
@@ -204,7 +204,7 @@ describe("linkUi", () => {
     const web = repo("web", { httpCalls: [call] });
     const resolvers = new Map([["web", resolverFor({}, "web")], ["a", resolverFor({}, "a")], ["b", resolverFor({}, "b")]]);
     const links = linkUi({ ws: ws([web, a, b]), resolvers });
-    expect(links[0]!.target).toMatchObject({ kind: "route", confidence: "guess" });
+    expect(links[0]!.target).toMatchObject({ kind: "unresolved" });
   });
   describe("react-router pages", () => {
     const spaFiles = {

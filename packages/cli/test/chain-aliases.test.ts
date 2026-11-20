@@ -73,13 +73,13 @@ describe("H11: chain aliases", () => {
     expect(route!.aliases).toBeUndefined();
   });
 
-  it("a call-entry chain aliases its route-only id; a page chain also aliases its call stops' call-entry ids", () => {
+  it("a call-entry chain aliases its route-only id; a page chain also aliases its call stops' call-entry ids and its unlinked id", () => {
     const [call] = chainsOf("call");
     expect(call!.id).toBe(CALL_ID);
     expect(call!.aliases).toEqual([ROUTE_ID]);
     const [page] = chainsOf("page");
     expect(page!.id).toBe(PAGE_ID);
-    expect(page!.aliases).toEqual([CALL_ID, ROUTE_ID].sort());
+    expect(page!.aliases).toEqual([CALL_ID, ROUTE_ID, chainId(page!.entry, "")].sort());
     expect(page!.aliases).not.toContain(page!.id);
   });
 

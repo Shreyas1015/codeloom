@@ -26,6 +26,10 @@ It listens on `127.0.0.1` only. The URL carries a one-time token; after the firs
 | **Progress** (`/progress`) | How many journeys you understand, per repo and per area, what needs a re-walk, your recent checks, what is left and spec coverage. See below. |
 | **Views** (`/views/<id>`) | Pages your agent made from codeloom's widgets. Listed under **Views** in the rail. See below. |
 
+When codeloom has open questions about the map (`codeloom gaps`), Home says how many, with the command to answer
+them in Claude Code (`/mcp__codeloom__map-interview`). Each saved answer re-links the map and Home updates by
+itself.
+
 Home also shows a spec badge beside each journey (and a **Spec** filter), your understood % in the header, a three-step progress strip on each journey row, and the Continue band takes you back to the next tour stop you have not walked. The Journey screen shows your level and a **Start tour** (or **Resume tour**) button.
 
 ## Tour mode

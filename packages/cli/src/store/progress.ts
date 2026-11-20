@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { dataError } from "../errors.js";
@@ -8,6 +7,8 @@ import { chainLookup, type MapState } from "../mcp/state.js";
 import { compare } from "../util.js";
 import { gitHead } from "../workspace/repos.js";
 import { DOCTOR_HINT, writeJsonAtomic } from "./json.js";
+import { codeloomHome } from "./home.js";
+import { GROUPS_DIR } from "../workspace/registry.js";
 import { keyIdentity, parseStopKey, type PlacedStop, stopKey } from "./stop-key.js";
 import { FileHasher, JOURNEY_ID_RE, listTours, readTour, sortKeysDeep, type StoreWorkspace } from "./tours.js";
 
@@ -68,17 +69,23 @@ type ProgressWorkspace = Pick<StoreWorkspace, "root" | "name" | "repos">;
 export type ProgressState = { ws: ProgressWorkspace } & Pick<MapState, "chains" | "journeys">;
 export interface Clock { now?: Date }
 
-/** sha256 of the workspace name + sorted repo ids, first 16 hex chars: the same for any clone at any path. */
-export function workspaceId(ws: Pick<StoreWorkspace, "name" | "repos">): string {
+/** sha256 of the workspace name + sorted repo ids, first 16 hex chars: the same for any clone at any path.
+ * A group (its root is a group data folder, 0.6 §1) gains repos one `codeloom index` at a time, so its id
+ * is made from the group name alone and stays the same as repos join. */
+export function workspaceId(ws: Pick<StoreWorkspace, "name" | "repos"> & { root?: string }): string {
+  if (ws.root !== undefined && isGroupRoot(ws.root)) {
+    return createHash("sha256").update(JSON.stringify(["group", ws.name])).digest("hex").slice(0, 16);
+  }
   const ids = ws.repos.map((r) => r.ref.id).sort(compare);
   return createHash("sha256").update(JSON.stringify([ws.name, ids])).digest("hex").slice(0, 16);
 }
 
-/** `$CODELOOM_HOME` when set (tests), else `~/.codeloom`. */
-export function codeloomHome(): string {
-  const env = process.env.CODELOOM_HOME;
-  return env !== undefined && env !== "" ? resolve(env) : join(homedir(), ".codeloom");
+/** Whether `root` is a group's data folder (`<home>/groups/<groupDirName>`). */
+function isGroupRoot(root: string): boolean {
+  return realish(dirname(resolve(root))) === realish(join(codeloomHome(), GROUPS_DIR));
 }
+
+export { codeloomHome };
 
 /** The real path of `p`: its deepest existing ancestor resolved through symlinks, plus the rest. */
 function realish(p: string): string {
@@ -146,6 +153,30 @@ export const PROGRESS_LOCK = { waitMs: 5_000, staleMs: 30_000 } as const;
 
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 const sleep = (ms: number) => Atomics.wait(sleeper, 0, 0, ms);
+
+/** A 0.5 lone repo's personal progress (kept under that one-repo workspace's id) joins its group's progress
+ * file (0.6 §1): every journey the group's file has no entry for is copied over; the group's own entries are
+ * kept. Returns how many journeys were carried (0 when there was nothing, or the old file is unreadable). */
+export function carryOverProgress(from: ProgressWorkspace, to: ProgressWorkspace): number {
+  let old: ProgressFile;
+  try {
+    if (!existsSync(join(codeloomHome(), PROGRESS_DIR, `${workspaceId(from)}.json`))) return 0;
+    old = readProgress(from);
+  } catch {
+    return 0;
+  }
+  const path = progressPath(to);
+  if (path === progressPath(from)) return 0;
+  return withProgressLock(path, () => {
+    const file = readProgress(to);
+    const add = Object.keys(old.journeys).filter((id) => file.journeys[id] === undefined).sort(compare);
+    if (add.length === 0) return 0;
+    for (const id of add) file.journeys[id] = old.journeys[id]!;
+    file.workspace = { name: to.name, repos: to.repos.map((r) => r.ref.id).sort(compare) };
+    writeJsonAtomic(path, sortKeysDeep(file));
+    return add.length;
+  });
+}
 
 /** Run `fn` holding `<progress>.lock` (created with "wx"), so the MCP server and the dashboard server never
  * lose each other's writes. Retries with a short backoff; gives up after PROGRESS_LOCK.waitMs (exit 2). */

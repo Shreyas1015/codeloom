@@ -60,9 +60,23 @@ export const HttpClientSchema = z.object({
 });
 export type HttpClient = z.infer<typeof HttpClientSchema>;
 
+/** 0.6 §2: where a Next.js catch-all API route forwards (adapters/proxy-forward.ts), read by following its handler
+ * through the functions it calls, across imports. */
+export const RouteForwardSchema = z.object({
+  /** The HTTP call that forwards (maybe in another file than the route). */
+  at: LocSchema,
+  /** Its URL as read: `${process.env.BILLING_API_URL}/${path}` (`${…}` for a part that cannot be read). */
+  raw: z.string(),
+  /** The base it forwards to (`process.env.BILLING_API_URL`, `env.BILLING_API_URL`); absent when it cannot be read. */
+  base: z.string().optional(),
+  /** The forwarded path, the catch-all as `:<name>*` (`/:path*`, `/v1/:path*`); absent when it cannot be read. */
+  path: z.string().optional(),
+});
+export type RouteForward = z.infer<typeof RouteForwardSchema>;
+
 export const RouteSchema = z.object({
   method: HttpMethodSchema,
-  /** As declared, including Adonis group prefixes (Plan 1 behaviour); mounts are NOT applied here. */
+  /** As declared, including Adonis group prefixes (also a calling group in another file); mounts are NOT applied here. */
   path: z.string(),
   handler: z.string(),
   inline: z.boolean(),
@@ -72,6 +86,15 @@ export const RouteSchema = z.object({
   handlerLines: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
   /** Receiver identifier the route was registered on (express/fastify): "router", "app", "fastify", ... */
   router: z.string().optional(),
+  /** next-api catch-all routes only: where the route forwards its requests, when codeloom can see it. */
+  forwards: RouteForwardSchema.optional(),
+  /** Adonis: the route sits in an exported function no visible call places, so a caller elsewhere may set
+   * another controller namespace: its handler is only a guess. */
+  handlerGuess: z.literal(true).optional(),
+  /** Adonis: the leading part of `path` that a group in another file gave it (`"/api"` from a caller's
+   * `Route.group(() => { adminRoutes() }).prefix("/api")`). A call through a base that ends in that prefix
+   * matches the rest. */
+  registeredPrefix: z.string().optional(),
 });
 export type Route = z.infer<typeof RouteSchema>;
 
@@ -157,8 +180,44 @@ export const QueueOpSchema = z.object({
   exchange: z.string().optional(),
   /** Present (possibly "") for exchange publishes and binds. */
   routingKey: z.string().optional(),
+  /** consume only (v0.6 Task B, review round 1): the argument index, at `at`'s own call site (after
+   * following any wrapper), that holds the message handler — works for a wrapper of any method name
+   * (`queueService.listen(queue, handler)`) or a bare function, not just a literal `.consume(...)`
+   * property. */
+  handlerArg: z.number().int().nonnegative().optional(),
+  /** consume only (v0.6 queues fix): the handler, when the adapter knows it exactly and it is not an argument at
+   * `at` — a subclass's `handle` method that a base class's consume loop calls, or the consume callback inside a
+   * wrapper that `at` calls. */
+  handler: z.object({ file: z.string(), symbol: z.string() }).optional(),
 });
 export type QueueOp = z.infer<typeof QueueOpSchema>;
+
+/** A publish or consume codeloom found but whose queue / exchange / routing key it cannot read (a runtime value):
+ * never guessed, asked about instead (0.6 §3, a `queue-unknown` gap). `at` is where the name is lost (where an
+ * answer's op goes); the parts it could read are kept, `missing` names the rest. */
+export const QueueUnknownSchema = z.object({
+  at: LocSchema,
+  op: z.enum(["publish", "consume"]),
+  queue: z.string().optional(),
+  exchange: z.string().optional(),
+  routingKey: z.string().optional(),
+  missing: z.array(z.enum(["queue", "exchange", "routingKey"])),
+  handler: z.object({ file: z.string(), symbol: z.string() }).optional(),
+});
+export type QueueUnknown = z.infer<typeof QueueUnknownSchema>;
+
+/** An amqplib exchange's declared kind (`channel.assertExchange(name, type)`): governs how a routing key
+ * is matched (fanout ignores it; direct requires an exact match; topic allows `*`/`#` wildcards; headers
+ * never uses one at all). */
+export const ExchangeTypeSchema = z.enum(["direct", "topic", "fanout", "headers"]);
+export type ExchangeType = z.infer<typeof ExchangeTypeSchema>;
+
+export const ExchangeDefSchema = z.object({
+  name: z.string(),
+  type: ExchangeTypeSchema,
+  at: LocSchema,
+});
+export type ExchangeDef = z.infer<typeof ExchangeDefSchema>;
 
 export const EndpointsFileSchema = z.object({
   version: z.literal(2),
@@ -174,6 +233,13 @@ export const EndpointsFileSchema = z.object({
   tables: z.array(TableDefSchema),
   models: z.array(ModelDefSchema),
   queues: z.array(QueueOpSchema),
+  /** `assertExchange` declarations (v0.6 Task B, review round 1). Optional (not defaulted) so every
+   * existing `EndpointsFile`-shaped object literal across the codebase — test fixtures especially — keeps
+   * typechecking without touching each one; an endpoints.json written before this field existed also
+   * still reads (as `undefined`, read the same as `[]` by every consumer). */
+  exchanges: z.array(ExchangeDefSchema).optional(),
+  /** Publishes / consumes whose names could not be read (v0.6 queues fix). Optional, like `exchanges`. */
+  queueUnknown: z.array(QueueUnknownSchema).optional(),
 });
 export type EndpointsFile = z.infer<typeof EndpointsFileSchema>;
 
@@ -356,6 +422,9 @@ export const FingerprintsSchema = z.object({
     z.string(),
     z.object({ hash: z.string(), structure: z.any(), calls: z.any(), endpoints: z.any(), codeIndex: z.any() }),
   ),
+  /** What re-linking this repo without re-parsing it needs (0.6 §1, a group re-linked after another repo was
+   * indexed): CACHE_FORMAT at write time, every file of the repo and its import aliases. Older caches lack it. */
+  link: z.object({ format: z.number(), files: z.array(z.string()), aliases: z.array(z.any()) }).optional(),
 });
 export type Fingerprints = z.infer<typeof FingerprintsSchema>;
 
@@ -387,6 +456,9 @@ export const ChainStopSchema = z.object({
    * first, always below the stop's own index. `hop` describes the edge from `stops[from]` to this stop.
    * Optional so chains.json files written before it existed still parse. */
   from: z.number().int().nonnegative().optional(),
+  /** 0.6 §3: on a route stop a service call reaches but this chain does not expand (too deep, already expanded
+   * in this chain, or past the chain's stop budget): the id of that route's own chain, where it continues. */
+  continues: z.string().optional(),
 });
 export type ChainStop = z.infer<typeof ChainStopSchema>;
 
@@ -429,6 +501,8 @@ export type UiReachFact = z.infer<typeof UiReachFactSchema>;
  * `reason` says which). Workspace-file order. Written only when the workspace has links. */
 export const ManualLinkStatusSchema = z.object({
   from: z.string(), to: z.string(), status: z.enum(["used", "unused", "broken"]), reason: z.string().optional(),
+  /** "answers": the link came from .codeloom/answers.json (0.6 §5), not the workspace file. */
+  source: z.literal("answers").optional(),
 });
 export type ManualLinkStatus = z.infer<typeof ManualLinkStatusSchema>;
 
@@ -448,12 +522,38 @@ export const ExternalCallFactSchema = z.object({
 });
 export type ExternalCallFact = z.infer<typeof ExternalCallFactSchema>;
 
+/** 0.6 §2: a call base that names no single repo of the group, with every call through it that this left
+ * unlinked. `kind`: env (an env var or config key), host, name (an identifier a base is read from), relative (a
+ * backend call with no base of its own: `base` is the client, e.g. "axios" — its base was set elsewhere), expr (a
+ * base expression whose name cannot be read). `reason`: "ambiguous" — its name matches two or more repos
+ * (`candidates`, sorted) and the call's route is not in exactly one of them; "unknown" — it settles no repo (a UI
+ * call that also matched no route by path, or a backend call reached from a route or consumer handler);
+ * "unconfirmed" — a public-looking host whose name matches `candidates`, which is never trusted on its own.
+ * Read by `gaps` (§5). */
+export const UnresolvedBaseSchema = z.object({
+  base: z.string(),
+  kind: z.enum(["env", "host", "name", "relative", "expr"]),
+  reason: z.enum(["ambiguous", "unknown", "unconfirmed"]),
+  candidates: z.array(z.string()),
+  calls: z.array(z.object({
+    repo: z.string(), file: z.string(), line: z.number().int().positive(), symbol: z.string(), method: HttpMethodSchema, path: z.string(),
+  })),
+});
+export type UnresolvedBase = z.infer<typeof UnresolvedBaseSchema>;
+
 /** `external` is written only when some UI call goes to another service (sorted by repo, file, line,
- * method, path, base). */
+ * method, path, base); `unresolvedBases` only when some call base names no single repo (sorted by base). */
 export const ChainsFileSchema = z.object({
   version: z.literal(1), chains: z.array(ChainSchema), uiReach: z.array(UiReachFactSchema).optional(),
   manualLinks: z.array(ManualLinkStatusSchema).optional(),
   external: z.array(ExternalCallFactSchema).optional(),
+  unresolvedBases: z.array(UnresolvedBaseSchema).optional(),
+  /** 0.6: the calls made through a repo's own HTTP wrapper functions, as the linker derived them at each caller
+   * (`wrapper`: the wrapper's "file#symbol", whose own inner call is a template, not a call). Written only when
+   * there are any. */
+  wrapperCalls: z.array(z.object({
+    repo: z.string(), wrapper: z.string(), call: HttpCallSchema.extend({ host: z.string().optional() }),
+  })).optional(),
 });
 export type ChainsFile = z.infer<typeof ChainsFileSchema>;
 
@@ -607,10 +707,11 @@ export const CheckReportSchema = z.object({
     brokenUiApi: z.number().int(),
     /** Chains with a UI stop: `--fail-under` compares complete / uiChains. */
     uiChains: z.number().int(),
-    /** Every route in the workspace, and those a page or UI call reaches (routes = routesWithUiCaller +
-     * uncalledRoutes). */
+    /** Every route in the workspace; those a page or UI call reaches; (0.6 §3) those only another service calls
+     * (routes = routesWithUiCaller + routesWithServiceCaller + uncalledRoutes). */
     routes: z.number().int(),
     routesWithUiCaller: z.number().int(),
+    routesWithServiceCaller: z.number().int().optional(),
     /** Calls whose URL codeloom could not read (`unresolved-url` items). Per call, not per chain: never
      * part of chains = complete + apiOnly + missingDb + brokenUiApi. */
     unresolvedCalls: z.number().int(),
@@ -620,7 +721,11 @@ export const CheckReportSchema = z.object({
     byConfidence: z.object({ exact: z.number().int(), param: z.number().int(), guess: z.number().int() }),
   }),
   items: z.array(CheckItemSchema),
+  /** 0.6 §3: RabbitMQ ops per repo that has any (publishes and consumes), sorted by repo. Absent when no repo has one. */
+  queues: z.array(z.object({ repo: z.string(), publish: z.number().int(), consume: z.number().int() })).optional(),
   traces: z.union([TracesReportSchema, TracesSkippedSchema]).optional(),
+  /** `codeloom check --json` without `--all`: per kind, the items left out (at most 200 of each kind are kept). */
+  truncated: z.record(z.string(), z.number().int()).optional(),
 });
 export type CheckReport = z.infer<typeof CheckReportSchema>;
 

@@ -1,10 +1,11 @@
 import { compare } from "../util.js";
 import { HEADING } from "./heading.js";
 import { renderChangedPath, renderMermaid } from "./mermaid.js";
-import { codeToCheckOrder, FILE_KINDS, fileKind } from "./paths.js";
+import { FILE_KINDS, fileKind } from "./paths.js";
 import { GITHUB_BODY_LIMIT } from "./pr-body.js";
 import type { SavedPrReview } from "./saved.js";
-import type { Review, ReviewEntry, ReviewFile, ReviewNodeChange, ReviewRisk } from "./types.js";
+import { buildPrSummary, type PrSummary, type SummaryCode, type SummaryWhere } from "./summary.js";
+import type { Review, ReviewEntry, ReviewFile, ReviewRisk } from "./types.js";
 
 /** PR description bodies and files this block is embedded in (spec §4) may show at most this many
  * entries before collapsing the rest into "+N more". */
@@ -240,35 +241,18 @@ export interface ReviewDraftOptions {
   checked?: SavedPrReview | null;
 }
 
-/** Where it matters ≤ 5, Code to check ≤ 8 (spec §2), then "+N more". */
-const MAX_ENTRIES = 5;
-const MAX_CODE = 8;
-
 export const DRAFT_STATUS = "_Draft by codeloom — not checked._";
 export const WHAT_IT_DOES_PLACEHOLDER = "_(Claude fills this in when it checks the PR.)_";
 
 const ENTRY_WORD: Record<ReviewEntry["kind"], string> = { page: "page", route: "route", consumer: "queue consumer" };
 const RISK_WORD: Record<ReviewRisk["kind"], string> = { migration: "Migration", schema: "Schema", env: "Env", docker: "Docker", ci: "CI" };
 
-function capped(lines: string[], max: number): string[] {
-  return lines.length > max ? [...lines.slice(0, max), `- +${lines.length - max} more`] : lines;
-}
+/** `lines`, then "- +N more" when `more` were left out. */
+const withMore = (lines: string[], more: number): string[] => (more > 0 ? [...lines, `- +${more} more`] : lines);
 
-function entryLine(e: ReviewEntry): string {
-  const word = Object.hasOwn(ENTRY_WORD, e.kind) ? ENTRY_WORD[e.kind] : "entry";
-  const journey = typeof e.journey === "string" ? `**${escapeMarkdownInline(e.journey)}** — ` : "";
-  return `- ${journey}${word} ${codeSpan(String(e.label))} (${escapeMarkdownInline(String(e.repo))})`;
-}
-
-function whereItMatters(review: Review): string[] {
-  if (review.entries.length === 0) return ["**Where it matters:** no entry point on the map reaches the changed code."];
-  return ["**Where it matters:**", ...capped(review.entries.map(entryLine), MAX_ENTRIES)];
-}
-
-function names(list: readonly string[]): string {
-  const shown = list.slice(0, MAX_LISTED).map((n) => codeSpan(String(n)));
-  const hidden = list.length - MAX_LISTED;
-  return hidden > 0 ? `${shown.join(", ")}, +${hidden} more` : shown.join(", ");
+function names(list: readonly string[], more: number): string {
+  const shown = list.map((n) => codeSpan(String(n)));
+  return more > 0 ? `${shown.join(", ")}, +${more} more` : shown.join(", ");
 }
 
 /** Claude's free text (save_pr_review notes, "What it does"): control characters dropped, then escaped like every
@@ -280,87 +264,66 @@ export function escapeClaudeText(s: string): string {
     .replace(/\bwww\./gi, (m) => `${m.slice(0, -1)}\\.`);
 }
 
-type Claude = SavedPrReview | undefined;
-
-/** name → Claude's notes on it (joined), for the entries that name it. */
-function notesBy<T>(items: readonly T[] | undefined, key: (t: T) => string | undefined, note: (t: T) => string | undefined): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const it of items ?? []) {
-    const k = key(it);
-    if (k === undefined) continue;
-    const list = out.get(k) ?? [];
-    const n = note(it);
-    if (typeof n === "string" && n !== "") list.push(n);
-    out.set(k, list);
-  }
-  return out;
-}
-
 const claudeSays = (notes: readonly string[] | undefined): string => (notes && notes.length > 0 ? `Claude: ${notes.map(escapeClaudeText).join("; ")}` : "Claude");
 
-/** What it writes: always codeloom's detected writes (Claude's note in brackets beside one), then any write Claude
- * added; "Reads only:" after, minus anything Claude says is written. */
-function whatItWrites(review: Review, c?: Claude): string[] {
-  const notes = notesBy(c?.writes, (w) => String(w.name), (w) => w.note);
-  const detected = new Set(review.writes);
-  const items = review.writes.map((n) => (notes.get(n)?.length ? `${codeSpan(String(n))} (${claudeSays(notes.get(n))})` : codeSpan(String(n))));
-  const added = [...notes.keys()].filter((n) => !detected.has(n));
-  items.push(...added.map((n) => `${codeSpan(n)} (${claudeSays(notes.get(n))})`));
-  const shown = items.slice(0, MAX_LISTED).join(", ") + (items.length > MAX_LISTED ? `, +${items.length - MAX_LISTED} more` : "");
-  const lines = [items.length > 0 ? `**What it writes:** ${shown}` : "**What it writes:** nothing on the map."];
-  const addedSet = new Set(added);
-  const reads = review.readsOnly.filter((r) => !addedSet.has(r));
-  if (reads.length > 0) lines.push("", `Reads only: ${names(reads)}`);
+const NO_ENTRY = "**Where it matters:** no entry point on the map reaches the changed code.";
+
+function whereLine(w: SummaryWhere): string {
+  if (w.kind === undefined) {
+    // Claude's ranking: the name and its reason.
+    const why = typeof w.why === "string" && w.why !== "" ? ` — ${escapeClaudeText(w.why)}` : "";
+    return `- ${codeSpan(String(w.name))}${why}`;
+  }
+  const word = Object.hasOwn(ENTRY_WORD, w.kind) ? ENTRY_WORD[w.kind] : "entry";
+  const journey = typeof w.journey === "string" ? `**${escapeMarkdownInline(w.journey)}** — ` : "";
+  return `- ${journey}${word} ${codeSpan(String(w.name))} (${escapeMarkdownInline(String(w.repo))})`;
+}
+
+function whereItMatters(s: PrSummary): string[] {
+  if (s.whereItMatters.length === 0) return [NO_ENTRY];
+  return ["**Where it matters:**", ...withMore(s.whereItMatters.map(whereLine), s.more.whereItMatters)];
+}
+
+/** What it writes: codeloom's detected writes in the PR's own repo (Claude's note in brackets beside one), then any
+ * write Claude added; then "Further along (other services):" for writes only other repos make further along the
+ * chains; "Reads only:" after, minus anything Claude says is written. */
+function whatItWrites(s: PrSummary): string[] {
+  const items = s.writes.map((w) => (w.detected && w.notes.length === 0 ? codeSpan(w.name) : `${codeSpan(w.name)} (${claudeSays(w.notes)})`));
+  const shown = items.join(", ") + (s.more.writes > 0 ? `, +${s.more.writes} more` : "");
+  const further = s.furtherAlong ?? [];
+  const none = further.length > 0 && s.repoId !== "" ? `nothing in ${s.repoId}.` : "nothing on the map.";
+  const lines = [items.length > 0 ? `**What it writes:** ${shown}` : `**What it writes:** ${none}`];
+  // 0.6: what the other services the changed code calls then write, on one line of its own.
+  if (further.length > 0) lines.push("", `Further along (other services): ${further.map((x) => `${x.repo}: ${names(x.names, 0)}`).join("; ")}`);
+  if (s.readsOnly.length > 0) lines.push("", `Reads only: ${names(s.readsOnly, s.more.readsOnly)}`);
   return lines;
 }
 
-/** ⚠ Before deploying: always every detected risk (Claude's note beside the one for its file), then the risks
- * Claude added. Omitted when there are none. */
-function beforeDeploying(review: Review, c?: Claude): string[] {
-  const notes = notesBy(c?.beforeDeploying, (r) => r.file, (r) => r.note);
-  const riskFiles = new Set(review.risks.map((r) => String(r.file)));
-  const lines = review.risks.map((r) => {
-    const word = Object.hasOwn(RISK_WORD, r.kind) ? RISK_WORD[r.kind] : "Check";
+/** ⚠ Before deploying: every detected risk (Claude's note beside the one for its file), then the risks Claude
+ * added. Omitted when there are none. */
+function beforeDeploying(s: PrSummary): string[] {
+  const detected = s.beforeDeploying.filter((r) => r.detected);
+  const added = s.beforeDeploying.filter((r) => !r.detected);
+  const lines = detected.map((r) => {
+    const word = r.kind !== undefined && Object.hasOwn(RISK_WORD, r.kind) ? RISK_WORD[r.kind] : "Check";
     const detail = typeof r.detail === "string" && r.detail !== "" ? ` — ${escapeMarkdownInline(r.detail)}` : "";
-    const note = notes.get(String(r.file));
-    return `- ${word}: ${codeSpan(String(r.file))}${detail}${note?.length ? ` — ${claudeSays(note)}` : ""}`;
+    return `- ${word}: ${codeSpan(String(r.file))}${detail}${r.notes.length > 0 ? ` — ${claudeSays(r.notes)}` : ""}`;
   });
-  const added = (c?.beforeDeploying ?? [])
-    .filter((r) => r.file === undefined || !riskFiles.has(r.file))
-    .map((r) => `- Claude: ${r.file !== undefined ? `${codeSpan(r.file)} — ` : ""}${escapeClaudeText(r.note)}`);
-  if (lines.length === 0 && added.length === 0) return [];
-  return ["**⚠ Before deploying:**", ...capped(lines, MAX_LISTED), ...capped(added, MAX_LISTED)];
+  const extra = added.map((r) => `- Claude: ${r.file !== undefined ? `${codeSpan(r.file)} — ` : ""}${r.notes.map(escapeClaudeText).join("; ")}`);
+  if (lines.length === 0 && extra.length === 0) return [];
+  return ["**⚠ Before deploying:**", ...withMore(lines, s.more.beforeDeploying), ...withMore(extra, s.more.beforeDeployingAdded)];
 }
 
-const changeWord = (n: ReviewNodeChange): string => (n.before === null ? "new" : n.after === null ? "deleted" : "changed");
-
-/** Code to check: always the changed functions (Claude's note beside one) — the ones Claude noted first, in its
- * order, then the rest as in the draft (codeToCheckOrder: changed on a chain, other changed, new, deleted; biggest
- * first) — then the functions Claude added. */
-function codeToCheck(review: Review, c?: Claude): string[] {
-  const notes = notesBy(c?.codeToCheck, (x) => String(x.name), (x) => x.note);
-  if (review.nodes.length === 0 && notes.size === 0) return ["**Code to check:** no changed function on the map."];
-  if (review.nodes.length === 0) {
-    const only = [...notes.keys()].map((n) => `- ${codeSpan(n)} — ${claudeSays(notes.get(n))}`);
-    return ["**Code to check:** no changed function on the map.", ...capped(only, MAX_CODE)];
-  }
-  const sorted = codeToCheckOrder(review);
-  const order = [...notes.keys()];
-  const rank = (n: ReviewNodeChange): number => {
-    const i = order.indexOf(String(n.symbol));
-    return i === -1 ? order.length : i;
-  };
-  const noted = sorted.filter((n) => rank(n) < order.length).sort((a, b) => rank(a) - rank(b));
-  const rest = sorted.filter((n) => rank(n) === order.length);
-  const line = (n: ReviewNodeChange): string => {
-    const note = notes.get(String(n.symbol));
-    return `- ${codeSpan(String(n.symbol))} — ${changeWord(n)}, +${safeCount(n.added)}/-${safeCount(n.removed)} (${codeSpan(`${n.repo}/${n.file}`)})${note?.length ? ` — ${claudeSays(note)}` : ""}`;
-  };
-  const symbols = new Set(review.nodes.map((n) => String(n.symbol)));
-  const added = order.filter((n) => !symbols.has(n)).map((n) => `- ${codeSpan(n)} — ${claudeSays(notes.get(n))}`);
-  // The detected changed functions come first and get the whole MAX_CODE; Claude's additions are capped on their
-  // own after them, so no number of additions can push a changed function out of sight.
-  return ["**Code to check:**", ...capped([...noted.map(line), ...rest.map(line)], MAX_CODE), ...capped(added, MAX_CODE)];
+/** Code to check: the changed functions (Claude's note beside one; the ones Claude noted first), then the
+ * functions Claude added — each list capped on its own. */
+function codeToCheck(s: PrSummary): string[] {
+  const detected = s.codeToCheck.filter((c) => c.detected);
+  const added = s.codeToCheck.filter((c) => !c.detected).map((c) => `- ${codeSpan(c.name)} — ${claudeSays(c.notes)}`);
+  const addedLines = withMore(added, s.more.codeToCheckAdded);
+  if (detected.length === 0) return ["**Code to check:** no changed function on the map.", ...addedLines];
+  const line = (c: SummaryCode): string =>
+    `- ${codeSpan(c.name)} — ${c.change}, +${safeCount(c.added)}/-${safeCount(c.removed)} (${codeSpan(String(c.file))})${c.notes.length > 0 ? ` — ${claudeSays(c.notes)}` : ""}`;
+  return ["**Code to check:**", ...withMore(detected.map(line), s.more.codeToCheck), ...addedLines];
 }
 
 function alsoChanged(review: Review): string[] {
@@ -376,52 +339,31 @@ function alsoChanged(review: Review): string[] {
 }
 
 /** "2026-11-16" from an ISO timestamp; "" when it is not one. */
-function checkedOn(savedAt: unknown): string {
+export function checkedOn(savedAt: unknown): string {
   return typeof savedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(savedAt) ? savedAt.slice(0, 10) : "";
 }
 
-/** Whether `checked` is Claude's review of exactly this review's diff. */
-function checksThis(review: Review, checked: SavedPrReview | null | undefined): checked is SavedPrReview {
-  return !!checked && checked.head === review.head && checked.base === review.base && checked.repoId === review.repoId;
-}
-
-/** Where it matters is a judgement ranking: Claude's list replaces the draft's when given. */
-function checkedWhere(review: Review, c: SavedPrReview): string[] {
-  if (c.whereItMatters === undefined) return whereItMatters(review);
-  if (c.whereItMatters.length === 0) return ["**Where it matters:** no entry point on the map reaches the changed code."];
-  const why = (t: string | undefined): string => (typeof t === "string" && t !== "" ? ` — ${escapeClaudeText(t)}` : "");
-  return ["**Where it matters:**", ...capped(c.whereItMatters.map((w) => `- ${codeSpan(String(w.name))}${why(w.why)}`), MAX_ENTRIES)];
-}
-
-/** The 0.5 PR block (spec §2), built from facts only (no AI): the status line, a "What it does" placeholder
- * for Claude to fill in when it checks the PR (spec §3), the entry points that reach the changed code (named
- * by journey), what the changed code writes (and, apart, only reads), the risks before deploying, the
- * changed functions, a small changed-path diagram, and one line for the files on no chain. With `opts.checked`
- * (Claude's saved review of this same head), the status is "Checked by Claude <date>", Claude's "What it does"
- * and "Where it matters" replace the draft's, and its notes sit beside the detected writes, risks and changed
- * functions — which always stay (Claude can add to them, never remove one). Every label is escaped as in renderReviewMarkdown
- * (markdown) and renderMermaid (Mermaid); the same GitHub-size backstop applies. Pure and deterministic. */
+/** The 0.5 PR block (spec §2): the PR summary (summary.ts buildPrSummary — the status line, What it does, the entry
+ * points that reach the changed code, what it writes and only reads, the risks before deploying, the changed
+ * functions, and, when checked, Claude's notes), then a small changed-path diagram and one line for the files on no
+ * chain. With `opts.checked` (Claude's saved review of this same head) the status is "Checked by Claude <date>";
+ * otherwise What it does is a placeholder for Claude. Every label is escaped as in renderReviewMarkdown (markdown)
+ * and renderMermaid (Mermaid); the same GitHub-size backstop applies. Pure and deterministic. */
 export function renderReviewDraft(review: Review, opts: ReviewDraftOptions = {}): string {
-  const checked = checksThis(review, opts.checked) ? opts.checked : undefined;
+  const s = buildPrSummary(review, opts.checked);
   const lines = [HEADING, ""];
-  if (checked) {
-    const on = checkedOn(checked.savedAt);
-    lines.push(`_Checked by Claude${on ? ` ${on}` : ""}._`, "", `**What it does:** ${escapeClaudeText(String(checked.whatItDoes))}`);
+  if (s.status === "checked") {
+    const on = checkedOn(s.checkedAt);
+    lines.push(`_Checked by Claude${on ? ` ${on}` : ""}._`, "", `**What it does:** ${escapeClaudeText(String(s.whatItDoes))}`);
   } else {
     lines.push(DRAFT_STATUS, "", `**What it does:** ${WHAT_IT_DOES_PLACEHOLDER}`);
   }
-  // Detected writes, risks and changed functions always come from the Review; Claude only annotates or adds.
-  const s = {
-    where: checked ? checkedWhere(review, checked) : whereItMatters(review),
-    writes: whatItWrites(review, checked),
-    risks: beforeDeploying(review, checked),
-    code: codeToCheck(review, checked),
-  };
-  lines.push("", ...s.where);
-  lines.push("", ...s.writes);
-  if (s.risks.length > 0) lines.push("", ...s.risks);
-  lines.push("", ...s.code);
-  if (checked?.notes && checked.notes.length > 0) lines.push("", `**Notes:** ${checked.notes.map((n) => escapeClaudeText(String(n))).join(" ")}`);
+  lines.push("", ...whereItMatters(s));
+  lines.push("", ...whatItWrites(s));
+  const risks = beforeDeploying(s);
+  if (risks.length > 0) lines.push("", ...risks);
+  lines.push("", ...codeToCheck(s));
+  if (s.notes && s.notes.length > 0) lines.push("", `**Notes:** ${s.notes.map((n) => escapeClaudeText(String(n))).join(" ")}`);
   const diagram = renderChangedPath(review);
   if (diagram !== "") lines.push("", diagram);
   const also = alsoChanged(review);

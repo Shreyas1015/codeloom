@@ -1,0 +1,9 @@
+{
+  "typescript": true,
+  "aliases": {
+    "App": "app",
+    "Config": "config"
+  },
+  "preloads": ["./start/routes"],
+  "providers": ["@adonisjs/core", "@adonisjs/lucid"]
+}

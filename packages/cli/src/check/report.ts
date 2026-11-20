@@ -1,7 +1,7 @@
 import { chainReach, hasUiStop, reachesStore } from "../linker/completeness.js";
 import { effectiveRoutes, type EffectiveRoute, routeKey } from "../linker/mounts.js";
 import type { RepoData, WorkspaceData } from "../store/read.js";
-import { WORKSPACE_FILE } from "../store/paths.js";
+import { CODELOOM_DIR, FILES, WORKSPACE_FILE } from "../store/paths.js";
 import type { Chain, ChainStop, CheckItem, CheckReport, ExternalCallFact, ManualLinkStatus, UiReachFact } from "../store/schemas.js";
 import { externalLabel } from "../linker/external.js";
 import { compare } from "../util.js";
@@ -107,29 +107,53 @@ function routeIdentity(r: EffectiveRoute): string {
 /** Computed from endpoints, not from route chains, so a route the linker silently dropped is still
  * caught. A route has a UI caller when a page or call-entry chain carries its plain routeKey, or —
  * because the linker suffixes colliding keys with `@<file>#<n>` — when such a chain's route stop is that
- * very route. (A call-entry chain's call is UI code that no page reaches; it is listed as ui-unreached.) */
-function routeNoCallerItems(repos: RepoData[], chains: Chain[]): CheckItem[] {
+ * very route. (A call-entry chain's call is UI code that no page reaches; it is listed as ui-unreached.)
+ * 0.6 §3: a route another service calls has a caller too — in any chain (a route's or a queue consumer's), a
+ * route stop reached from a call stop. One rule, shared by `check` and the map gaps (`uncalledRoutes`). */
+function routeCallers(repos: RepoData[], chains: Chain[]): { uncalled: EffectiveRoute[]; fromUi: number; fromServices: number } {
   const pageChains = chains.filter((c) => c.entry.startsWith("page:") || c.entry.startsWith("call:"));
   const pageRouteKeys = new Set(pageChains.map((c) => c.routeKey));
-  const pageRouteStops = new Set(
-    pageChains.flatMap((c) => c.stops.filter((s) => s.kind === "route")
-      .map((s) => stopIdentity(s.repo, s.file, s.line, s.op ?? "", s.label ?? ""))),
-  );
-  const items: CheckItem[] = [];
+  const identityOf = (s: ChainStop) => stopIdentity(s.repo, s.file, s.line, s.op ?? "", s.label ?? "");
+  const uiRouteStops = new Set<string>();
+  const serviceRouteStops = new Set<string>();
+  for (const c of chains) {
+    // Chains saved before stops carried `from` are straight lines: the stop before is the one it came from.
+    const legacy = !c.stops.some((s) => s.from !== undefined);
+    const isPage = c.entry.startsWith("page:") || c.entry.startsWith("call:");
+    c.stops.forEach((s, i) => {
+      if (s.kind !== "route") return;
+      const prev = i === 0 ? undefined : c.stops[legacy ? i - 1 : s.from ?? -1];
+      if (prev?.kind === "call") (prev.lane === "code" ? serviceRouteStops : uiRouteStops).add(identityOf(s));
+      else if (isPage) uiRouteStops.add(identityOf(s));
+    });
+  }
+  const uncalled: EffectiveRoute[] = [];
+  let fromUi = 0;
+  let fromServices = 0;
   for (const repo of repos) {
     for (const r of effectiveRoutes(repo.endpoints)) {
-      if (pageRouteKeys.has(routeKey(r)) || pageRouteStops.has(routeIdentity(r))) continue;
-      items.push({
-        kind: "route-no-caller",
-        repo: r.repo,
-        file: r.route.at.file,
-        line: r.route.at.line,
-        symbol: r.route.handler,
-        detail: `${r.route.method} ${r.effectivePath} has no UI caller`,
-      });
+      if (pageRouteKeys.has(routeKey(r)) || uiRouteStops.has(routeIdentity(r))) fromUi++;
+      else if (serviceRouteStops.has(routeIdentity(r))) fromServices++;
+      else uncalled.push(r);
     }
   }
-  return items;
+  return { uncalled, fromUi, fromServices };
+}
+
+/** The routes nothing in the map calls (check's `route-no-caller`; also the map gaps, 0.6 §5), in repo order. */
+export function uncalledRoutes(repos: RepoData[], chains: Chain[]): EffectiveRoute[] {
+  return routeCallers(repos, chains).uncalled;
+}
+
+function routeNoCallerItems(uncalled: EffectiveRoute[]): CheckItem[] {
+  return uncalled.map((r) => ({
+    kind: "route-no-caller" as const,
+    repo: r.repo,
+    file: r.route.at.file,
+    line: r.route.at.line,
+    symbol: r.route.handler,
+    detail: `${r.route.method} ${r.effectivePath} has no caller`,
+  }));
 }
 
 /** The one bucket a chain falls into. Every chain lands in exactly one, so
@@ -236,7 +260,7 @@ function manualLinkItems(links: ManualLinkStatus[]): CheckItem[] {
   return links.flatMap((l): CheckItem[] => {
     if (l.status === "used") return [];
     const repo = l.from.match(/^(?:route:|queue:)?([^:#]+):/)?.[1] ?? "";
-    const base = { repo, file: WORKSPACE_FILE, line: 1, symbol: l.from };
+    const base = { repo, file: l.source === "answers" ? `${CODELOOM_DIR}/${FILES.answers}` : WORKSPACE_FILE, line: 1, symbol: l.from };
     return l.status === "broken"
       ? [{ kind: "manual-link-broken", ...base, detail: `${l.from} -> ${l.to}: ${l.reason ?? "not resolved"}` }]
       : [{ kind: "manual-link-unused", ...base, detail: `${l.from} -> ${l.to}: its from matches no chain stop` }];
@@ -266,17 +290,27 @@ function sortItems(items: CheckItem[]): CheckItem[] {
   );
 }
 
+/** 0.6 §3: publish and consume ops per repo that has any, sorted by repo (binds are not counted). */
+export function queueCounts(repos: RepoData[]): NonNullable<CheckReport["queues"]> {
+  return repos.flatMap((r) => {
+    const publish = r.endpoints.queues.filter((q) => q.op === "publish").length;
+    const consume = r.endpoints.queues.filter((q) => q.op === "consume").length;
+    return publish + consume > 0 ? [{ repo: r.ref.id, publish, consume }] : [];
+  }).sort((a, b) => compare(a.repo, b.repo));
+}
+
 /** `uiReach`: the linker's reach facts from chains.json (absent in an older file: no ui-unreached items).
  * `manualLinks`: chains.json's manual link statuses (absent when the workspace has no links). */
 export function buildCheckReport(
   chains: Chain[], ws: WorkspaceData, uiReach: UiReachFact[] = [], manualLinks: ManualLinkStatus[] = [],
   external: ExternalCallFact[] = [],
 ): CheckReport {
+  const callers = routeCallers(ws.repos, chains);
   const items = sortItems([
     ...externalCallItems(external),
     ...manualLinkItems(manualLinks),
     ...unresolvedUrlItems(ws.repos, chains),
-    ...routeNoCallerItems(ws.repos, chains),
+    ...routeNoCallerItems(callers.uncalled),
     ...uiUnreachedItems(uiReach),
     ...uiNoRouteItems(chains),
     ...unmatchedCallItems(chains),
@@ -290,6 +324,7 @@ export function buildCheckReport(
   const buckets: Record<Bucket, number> = { complete: 0, apiOnly: 0, brokenUiApi: 0, missingDb: 0 };
   for (const chain of chains) buckets[bucketOf(chain)]++;
   const routes = ws.repos.reduce((n, repo) => n + effectiveRoutes(repo.endpoints).length, 0);
+  const queues = queueCounts(ws.repos);
 
   return {
     version: 1,
@@ -303,13 +338,15 @@ export function buildCheckReport(
       brokenUiApi: buckets.brokenUiApi,
       uiChains: chains.filter((c) => hasUiStop(c.stops)).length,
       routes,
-      routesWithUiCaller: routes - count("route-no-caller"),
+      routesWithUiCaller: callers.fromUi,
+      ...(callers.fromServices > 0 ? { routesWithServiceCaller: callers.fromServices } : {}),
       unresolvedCalls: count("unresolved-url"),
       uncalledRoutes: count("route-no-caller"),
       externalCalls: count("external-call"),
       byConfidence,
     },
     items,
+    ...(queues.length > 0 ? { queues } : {}),
   };
 }
 

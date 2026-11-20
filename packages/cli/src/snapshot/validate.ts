@@ -12,6 +12,9 @@ import { CodeloomError } from "../errors.js";
 import { manifestFieldsSchema, reviewSchema } from "../review/schema.js";
 import type { SnapshotManifest } from "./write.js";
 
+/** The artifact's own PR summary: listed and size-capped like every file, but never parsed (see below). */
+export const PR_SUMMARY_FILE = "pr-summary.json";
+
 /** Per-file cap (design spec §5): "a file over 5 MB" is refused outright, independent of `maxBytes`. */
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -42,7 +45,7 @@ function refuse(reason: string): never {
  * disk (every on-disk file listed, and every listed file on disk — never a listed-but-missing entry, C1);
  * `review.json` must be present and match review/schema.ts's shape (I1b — a malformed review.json is
  * refused here, before anything is ever written, rather than crashing after data/assets have already
- * been copied). Returns the parsed, now-trusted manifest on success; throws CodeloomError (never writes
+ * been copied). `pr-summary.json` is never parsed: the publish step rebuilds it (site.ts). Returns the parsed, now-trusted manifest on success; throws CodeloomError (never writes
  * anything) on the first problem found. */
 export function validateSnapshotData(dataDir: string, opts: ValidateOptions): SnapshotManifest {
   let dirStat;
@@ -84,6 +87,10 @@ export function validateSnapshotData(dataDir: string, opts: ValidateOptions): Sn
 
   const parsed = new Map<string, unknown>();
   for (const name of names) {
+    // Never read, never trusted (security review C1, codeloom pr): snapshot-site rebuilds the PR summary from the
+    // validated review.json and publishes that instead, so whatever the artifact put here is ignored — even bytes
+    // that are not JSON at all are no reason to refuse.
+    if (name === PR_SUMMARY_FILE) continue;
     const text = readFileSync(join(dataDir, name), "utf8");
     try {
       parsed.set(name, JSON.parse(text));

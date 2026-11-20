@@ -16,9 +16,13 @@ single codeloom comment instead):
 - A table of the affected journeys, their changed stops and spec state.
 - The changed files on no mapped chain.
 - "→ Open the full review map", linking to `https://<owner>.github.io/<repo>/pr-<n>/` — a static copy of
-  the codeloom dashboard at this PR's head, opened on a `/review` screen built for this. Click a changed
-  stop to see its diff (added/removed lines), its code now, or its code before. Nothing here is live:
-  search and your own progress are turned off.
+  the codeloom dashboard at this PR's head, opened on a `/review` screen built for this. It starts with the
+  PR summary — codeloom's draft, rebuilt by the publish step from the review data: where the change matters,
+  what it writes, ⚠ before deploying and the code to check (click a function for its diff) — then the journeys: click a changed stop to see its diff (added/removed lines), its
+  code now, or its code before. Nothing here is live: search and your own progress are turned off.
+
+To see the same page for your own branch, without GitHub, run `npx codeloom pr` (see the
+[reference](reference.md)).
 
 The block updates in place on every push, and `pr-<n>/` is removed when the PR closes. Only a marker pair
 whose content starts with codeloom's own heading is ever replaced, so quoting the markers in your own text is
